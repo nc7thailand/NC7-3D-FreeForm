@@ -1,0 +1,30 @@
+name: Vibe Coding Stack
+version: 1.0.0
+schema: v1
+
+models:
+  # 1. DeepSeek V3 (Chat & Agentic Coding หลัก)
+  - name: "DeepSeek V3"
+    provider: "deepseek"
+    model: "deepseek-chat"
+    apiKey: "sk-e819aa9f9fdf46afa48b23cb6ef701ef"
+    roles:
+      - chat
+      - edit
+      - apply
+
+  # 2. DeepSeek R1 (Reasoning Model สำหรับงานวิเคราะห์ซับซ้อน)
+  - name: "DeepSeek R1"
+    provider: "deepseek"
+    model: "deepseek-reasoner"
+    apiKey: "sk-e819aa9f9fdf46afa48b23cb6ef701ef"
+    roles:
+      - chat
+
+  # 3. Llama 3 Local (สำรองรันบน Mac mini)
+  - name: "Llama 3 Local"
+    provider: "ollama"
+    model: "llama3:latest"
+    roles:
+      - chat
+      - edit
