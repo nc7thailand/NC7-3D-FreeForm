@@ -9,7 +9,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
  * Mouse behavior (MS 3D Builder style):
  *  - Left-click drag on the object        : Move/translate the selected object
  *  - Left-click empty space               : Deselect
- *  - Right-click drag                     : Pan camera
+ *  - Right-click drag                     : Rotate viewpoint
  *  - Mouse wheel                          : Zoom
  *  - No left-drag camera rotation (replaced by object manipulation)
  */
@@ -62,13 +62,13 @@ export default function Viewer3D({ geometry, resetKey }) {
     grid.position.y = 0
     scene.add(grid)
 
-    // --- OrbitControls: right-drag pan, wheel zoom, LEFT disabled (no camera rotate) ---
+    // --- OrbitControls: right-drag rotate, wheel zoom, LEFT disabled (obj manipulation) ---
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
     controls.mouseButtons = {
       LEFT: null,                              // object manipulation instead
       MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.ROTATE,               // right-click rotates viewpoint
     }
     controls.touches = {
       ONE: THREE.TOUCH.PAN,
@@ -273,7 +273,7 @@ export default function Viewer3D({ geometry, resetKey }) {
           Rotate
         </button>
         <span className="toolbar-hint">
-          L-click select/move · R-click pan · Wheel zoom
+          L-click select/move · R-click rotate view · Wheel zoom
         </span>
       </div>
       <div className="viewport3d" ref={mountRef} />
