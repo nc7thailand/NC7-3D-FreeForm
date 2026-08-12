@@ -1,0 +1,151 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #0f1115;
+  color: #e6edf3;
+  height: 100vh;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.header {
+  padding: 14px 20px;
+  background: #1a1f27;
+  border-bottom: 1px solid #2a3340;
+}
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+  color: #59b7f9;
+}
+.header p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #8b98a8;
+}
+
+.content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.control-panel {
+  width: 280px;
+  background: #161a21;
+  border-right: 1px solid #2a3340;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.panel {
+  background: #1f2530;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #f0f5fa;
+  border-bottom: 1px solid #2a3340;
+  padding-bottom: 6px;
+}
+
+.panel input[type="file"] {
+  width: 100%;
+  font-size: 12px;
+  color: #c3cedb;
+}
+
+.unit-select {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+.unit-select label {
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.inputs label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: #9fb0c0;
+}
+.inputs input {
+  width: 90px;
+  background: #0f1115;
+  border: 1px solid #2a3340;
+  color: #e6edf3;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+button {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #2b6cb0;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+button:hover {
+  background: #1f5d9c;
+}
+.panel button + button {
+  margin-top: 6px;
+}
+
+.viewport-area {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+.viewport3d {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.viewport3d canvas {
+  display: block;
+}
+
+.status-bar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  background: rgba(20, 24, 30, 0.9);
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #9fd3a8;
+  max-width: 90%;
+}
+
+.stats {
+  display: flex;
+  gap: 24px;
+  padding: 10px 20px;
+  background: #1a1f27;
+  border-top: 1px solid #2a3340;
+  font-size: 12px;
+  color: #8b98a8;
+}
