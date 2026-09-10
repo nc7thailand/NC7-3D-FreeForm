@@ -58,7 +58,7 @@ Preview 2D = **WYSIWYG** (เส้นแดงซ้าย = ตัดซ้า
 | **Cut order** | จาก **บน → ล่าง** (top first) |
 | **End** | `M5`, `G30` |
 
-อ้างอิงรูปแบบจาก DevFoam `StackedCut.nc` แต่ NC7 export **Method 1 เท่านั้น** (ไม่มี pass ด้านขวา)
+อ้างอิงรูปแบบจาก DevFoam `Example/StackedCut.nc` แต่ NC7 export **Method 1 เท่านั้น** (ไม่มี pass ด้านขวา). ดู `docs/DevFoamLogic.md` สำหรับ logic ฉบับเต็มและตัวอย่าง Left-Right
 
 ## 3. Core Features
 
