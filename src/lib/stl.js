@@ -34,6 +34,34 @@ export function loadSTLFile(file) {
 }
 
 /**
+ * Load an STL file from a URL (useful for built-in demo files).
+ *
+ * @param {string} url
+ * @returns {Promise<THREE.BufferGeometry>}
+ */
+export async function loadSTLFromUrl(url) {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch STL: ${res.status} ${res.statusText}`)
+  }
+  const buffer = await res.arrayBuffer()
+  return loadSTLFromArrayBuffer(buffer)
+}
+
+/**
+ * Parse an STL from an ArrayBuffer (binary or ASCII).
+ *
+ * @param {ArrayBuffer} buffer
+ * @returns {THREE.BufferGeometry}
+ */
+export function loadSTLFromArrayBuffer(buffer) {
+  const loader = new STLLoader()
+  const geometry = loader.parse(buffer)
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+/**
  * Compute the bounding box of a BufferGeometry.
  *
  * @param {THREE.BufferGeometry} geometry

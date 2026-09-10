@@ -8,16 +8,57 @@ Source of Truth ฉบับสมบูรณ์สำหรับการพ�
 
 ## 2. Machine & Hardware Kinematics
 
-> * **Structure:** รองรับระบบ 2-Axis Sync (X, Y) ร่วมกับ Rotary Axis
-> * **Core Geometry:** กำหนดแกน Z (Rotary) โดยมีสเกล 1 mm = 1°
-> * **Coordinate System:** ใช้จุด Origin ที่ X=0, Y=0
+> * **Structure:** 2-Axis Sync (X1=X2, Y1=Y2 — towers always sync; no taper)
+> * **Core Geometry:** แกน Z (Rotary) สเกล **1 mm G-code = 1°**; หมุน **Z+ only (CW)**; ช่วง **0–360°**
+> * **Coordinate System:**
+>   * **X** = แนวนอน; Origin X = ศูนย์กลาง turntable
+>   * **Y** = แนวตั้ง; Origin Y v1 = **ฐานก้อนโฟม** (Y=0 ที่ด้านล่าง)
+>   * **Z** = หมุนโต๊ะ
 
 ### 2.1 นิยามค่าพารามิเตอร์
 
 | พารามิเตอร์ | ความหมาย |
 | :--- | :--- |
 | **LO** | Lower Offset / Line Clearance Offset (ระยะเผื่อความปลอดภัยของเส้นลวด) |
-| **BO** | Bottom Offset (ระยะเผื่อความปลอดภัยด้านล่างสุด) |
+| **BO** | Bottom Offset (ระยะเผื่อความปลอดภัยด้านล่างสุด; default **1 mm**, user editable) |
+| **Kerf** | ชดเชยเส้นผ่านศูนย์กลางลวด (default **2 mm**, user editable) |
+| **topOffset** | ระยะ top safe สูงกว่ายอดก้อน (default **20 mm**, user editable) |
+
+### 2.2 Cut Mode v1 — Method 1 (LOCKED)
+
+> **Method 1** — ตัด **ด้านซ้ายเท่านั้น** (Left single step per rotation); **X ติดลบตลอด** profile cut  
+> Method 2 (Left + Right full silhouette) = **v2 only**
+
+ลำดับตัดต่อ 1 rotation step:
+
+1. Lead-in → profile cut (X &lt; 0)
+2. Top safe — ดึงลวด **Y ↑** ออกเหนือก้อน
+3. Retract X ออกจาก silhouette
+4. Index — `G1 Z+={360/N} F160` (G93 inverse time)
+
+Preview 2D = **WYSIWYG** (เส้นแดงซ้าย = ตัดซ้ายจริง; ไม่ mirror แบบ DevFoam detect view)
+
+### 2.3 Safe Points v1 (LOCKED)
+
+| จุด | มุม Z | สูตร Y |
+| :--- | :--- | :--- |
+| **Top safe** | 90° (fixed v1) | **Y = H + topOffset** (relative จากฐานก้อน; ไม่ใช่ absolute machine mm) |
+| **Bottom safe (LB)** | 0° (fixed v1) | `LB(θ) = Block_Bottom_Extent(θ) + BO`; v2: auto default `hypot(W,T,H)/2 + 20` |
+
+**topOffset** คือระยะเหนือยอดก้อน (default 20 mm) — ใน DevFoam sample อาจเห็นค่า Y สูงกว่า เพราะมี block Y-offset แยก; NC7 ใช้ origin ที่ฐานก้อน ดังนั้น top safe = **H + topOffset** โดยตรง
+
+### 2.4 G-code Output v1 (LOCKED)
+
+| หัวข้อ | ค่า |
+| :--- | :--- |
+| **Units / mode** | `G90 G21` absolute mm |
+| **Feed mode** | **`G93` inverse time** (ไม่ใช้ G94 mm/min) |
+| **Axes** | X, Y, Z เท่านั้น (ไม่มี U/V) |
+| **Spindle** | `S1000` + `M3` start / `M5` stop |
+| **Cut order** | จาก **บน → ล่าง** (top first) |
+| **End** | `M5`, `G30` |
+
+อ้างอิงรูปแบบจาก DevFoam `StackedCut.nc` แต่ NC7 export **Method 1 เท่านั้น** (ไม่มี pass ด้านขวา)
 
 ## 3. Core Features
 
@@ -59,7 +100,8 @@ Source of Truth ฉบับสมบูรณ์สำหรับการพ�
 
 ### Communication / Serial Interface
 
-* (เติมรายละเอียดการเชื่อมต่อกับ CNC machine / G-code output เมื่อออกแบบเสร็จ)
+* G-code post-processor ตาม §2.4 (G93, Method 1, top safe = H + topOffset)
+* (Serial/USB ต่อเครื่องจริง — ภายหลัง)
 
 ## 5. Tech Stack & Tooling
 

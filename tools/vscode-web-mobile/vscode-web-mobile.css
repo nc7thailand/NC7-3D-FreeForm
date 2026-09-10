@@ -1,0 +1,100 @@
+/*
+ * vscode-web-mobile.css
+ * ---------------------------------------------------------------
+ * VS Code for the Web (vscode.dev — Remote Tunnels) tuned for a
+ * mobile phone (Samsung S26 Ultra / any touch phone) in a browser.
+ *
+ * HOW IT KNOWS YOU ARE ON THE PHONE
+ *   Every rule below is wrapped in a mobile media query:
+ *     - hover: none / pointer: coarse  -> touch screen, not a mouse
+ *     - max-width: 1100px              -> phone portrait + landscape
+ *   A desktop browser visiting vscode.dev is therefore NOT restyled.
+ *
+ * WHERE IT LIVES
+ *   This file is NOT loaded from your Mac. vscode.dev is hosted by
+ *   Microsoft, so the style must be injected by the *phone browser*.
+ *   Install it as a "site style" scoped to https://vscode.dev/*
+ *   (see README.md in this folder for Kiwi Browser + Stylus steps).
+ *
+ * TESTED AGAINST
+ *   VS Code Web 1.136.x workbench DOM, 412 x 915 CSS px viewport.
+ * ---------------------------------------------------------------
+ */
+
+@media (hover: none) and (pointer: coarse) and (max-width: 1100px) {
+
+  /* =============================================================
+   * 1) THINNER TITLE BAR  -> +3..5 px of vertical space for code.
+   * ============================================================= */
+  .monaco-workbench .part.titlebar {
+    height: 32px !important;
+  }
+
+  /* =============================================================
+   * 2) REMOVE MODERN-UI "FLOATING CARD" GUTTERS
+   *    The new UI pads/margins every panel. On a phone that gutter
+   *    is pure waste, so make panels flush with the screen edges.
+   * ============================================================= */
+  .monaco-workbench .part.titlebar,
+  .monaco-workbench .part.activitybar,
+  .monaco-workbench .part.sidebar,
+  .monaco-workbench .part.auxiliarybar,
+  .monaco-workbench .part.editor,
+  .monaco-workbench .part.panel,
+  .monaco-workbench .part.statusbar {
+    margin: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  /* =============================================================
+   * 3) BIGGER TOUCH TARGETS IN THE ACTIVITY BAR
+   *    VS Code sizes the bar through CSS variables. 46px action
+   *    cells are finger-friendly but still leave room for code.
+   * ============================================================= */
+  .monaco-workbench .part.activitybar {
+    --activity-bar-width: 46px !important;        /* content width    */
+    --activity-bar-action-height: 46px !important; /* per-button hit   */
+    --activity-bar-action-gap: 12px !important;    /* vertical spacing */
+    --activity-bar-icon-size: 25px !important;
+  }
+
+  /* JS writes the old 36px width onto .content inline; beat it. */
+  .monaco-workbench .part.activitybar .content {
+    width: 46px !important;
+  }
+
+  /* Let the buttons fill the wider bar instead of floating centred. */
+  .monaco-workbench .part.activitybar .action-item {
+    margin-inline: 0 !important;
+  }
+
+  /* =============================================================
+   * 4) DECLUTTER THE TITLE BAR
+   *    Keep the ☰ menu (left) and window actions (right), but
+   *    prevent the Command-Center search pill from hogging the
+   *    whole top row on a 412px screen. Still reachable from ☰.
+   * ============================================================= */
+  .monaco-workbench .part.titlebar .command-center {
+    min-width: 0 !important;
+    max-width: 42vw !important;
+    flex: 0 1 auto !important;
+  }
+
+  /* =============================================================
+   * 5) EDITOR AREA — SMALL POLISH
+   *    Extra horizontal padding in tab rows is waste on a phone.
+   * ============================================================= */
+  .monaco-workbench .part.editor .tabs-and-actions-container {
+    padding-inline: 2px !important;
+  }
+
+  .monaco-workbench .part.editor .editor-group-container .editor-container {
+    padding: 0 !important;
+  }
+
+  /* Slightly larger tap targets for common editor actions. */
+  .monaco-workbench .part.editor .editor-actions .action-item,
+  .monaco-workbench .part.editor .editor-group-container .actions-container .action-item {
+    min-width: 28px !important;
+  }
+}

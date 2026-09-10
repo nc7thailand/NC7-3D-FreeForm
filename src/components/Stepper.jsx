@@ -1,0 +1,63 @@
+import React from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { STEPS, ROUTES } from '../routes'
+import { useAppState } from '../context/AppState'
+
+export default function Stepper() {
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const { hasModel, hasToolpath, hasToolpathSaved, saveModelStage, saveToolpathStage } = useAppState()
+
+  const canVisit = (path) => {
+    if (path.endsWith('/model')) return true
+    if (path.endsWith('/toolpath')) return hasModel
+    if (path.endsWith('/gcode')) return hasModel && hasToolpathSaved
+    if (path.endsWith('/simulate')) return hasModel && hasToolpathSaved
+    return false
+  }
+
+  const goTo = (path, e) => {
+    if (pathname === ROUTES.model && path === ROUTES.toolpath) {
+      e.preventDefault()
+      if (saveModelStage()) navigate(path)
+      return
+    }
+    if (
+      pathname === ROUTES.toolpath
+      && (path === ROUTES.gcode || path === ROUTES.simulate)
+    ) {
+      e.preventDefault()
+      if (saveToolpathStage()) navigate(path)
+    }
+  }
+
+  return (
+    <nav className="stepper" aria-label="Workflow steps">
+      {STEPS.map((step, i) => {
+        const active = pathname === step.path
+        const unlocked = canVisit(step.path)
+        const dimmed = step.path === ROUTES.gcode && hasToolpath && !hasToolpathSaved
+        return (
+          <React.Fragment key={step.path}>
+            {i > 0 && <span className="stepper-sep" aria-hidden="true" />}
+            {unlocked ? (
+              <NavLink
+                to={step.path}
+                className={`stepper-item${active ? ' active' : ''}`}
+                onClick={(e) => goTo(step.path, e)}
+              >
+                <span className="stepper-num">{step.short}</span>
+                <span className="stepper-label">{step.label}</span>
+              </NavLink>
+            ) : (
+              <span className={`stepper-item locked${active ? ' active' : ''}${dimmed ? ' dimmed' : ''}`}>
+                <span className="stepper-num">{step.short}</span>
+                <span className="stepper-label">{step.label}</span>
+              </span>
+            )}
+          </React.Fragment>
+        )
+      })}
+    </nav>
+  )
+}

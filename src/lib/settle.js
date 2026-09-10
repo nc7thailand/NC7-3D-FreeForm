@@ -1,97 +1,53 @@
-// Auto-orient (settle) utilities: align the model's largest flat face
-// onto the flat cutting plane (bottom, Y=0).
+// Settle utilities — drop the model so its bounding-box bottom touches Y=0.
 
 import * as THREE from 'three'
 
 /**
- * Compute per-face area weights and face normals for a BufferGeometry.
+ * Drop geometry onto the floor plane (Y = 0).
+ * Optionally bakes a world matrix first so gizmo move/rotate is preserved.
  *
  * @param {THREE.BufferGeometry} geometry
- * @returns {{center: THREE.Vector3, avgNormal: THREE.Vector3, area: number}}
+ * @param {{ worldMatrix?: THREE.Matrix4 }} [options]
+ * @returns {THREE.BufferGeometry}
  */
-function calculateFaceProperties(geometry) {
-  const position = geometry.attributes.position
-  const center = new THREE.Vector3()
-  const avgNormal = new THREE.Vector3()
-  let area = 0
-  let totalNormalArea = 0
-
-  const vA = new THREE.Vector3()
-  const vB = new THREE.Vector3()
-  const vC = new THREE.Vector3()
-  const normal = new THREE.Vector3()
-
-  if (!position) {
-    return { center, avgNormal, area }
+export function settleGeometry(geometry, { worldMatrix = null } = {}) {
+  if (worldMatrix) {
+    geometry.applyMatrix4(worldMatrix)
   }
 
-  const triCount = position.count / 3
-  for (let i = 0; i < triCount; i++) {
-    vA.fromBufferAttribute(position, i * 3)
-    vB.fromBufferAttribute(position, i * 3 + 1)
-    vC.fromBufferAttribute(position, i * 3 + 2)
-
-    // Face area via cross product
-    const ab = vB.clone().sub(vA)
-    const ac = vC.clone().sub(vA)
-    normal.crossVectors(ab, ac)
-    const faceArea = normal.length() / 2
-    area += faceArea
-
-    // Weighted normal by area
-    normal.normalize()
-    avgNormal.addScaledVector(normal, faceArea)
-    totalNormalArea += faceArea
-
-    // Accumulate triangle centroid for center-of-mass
-    center.add(vA).add(vB).add(vC)
-  }
-
-  const vertexCount = position.count
-  if (vertexCount > 0) center.divideScalar(vertexCount)
-  if (totalNormalArea > 0) avgNormal.divideScalar(totalNormalArea)
-
-  return { center, avgNormal, area }
-}
-
-/**
- * Auto-orient the geometry so its largest flat face (dominant face)
- * is aligned to the +Y (up) direction, effectively "settling" the model
- * onto a flat sectioning plane.
- *
- * @param {THREE.BufferGeometry} geometry
- * @param {{}} options
- * @returns {THREE.BufferGeometry} the same (mutated) geometry
- */
-export function settleGeometry(geometry, options = {}) {
-  const { center, avgNormal } = calculateFaceProperties(geometry)
-
-  if (avgNormal.lengthSq() < 1e-12) {
-    // Degenerate / no valid normal — no-op
-    console.warn('Settle: no valid dominant surface found, skipping auto-orient.')
-    return geometry
-  }
-
-  // Target: align dominant face normal with +Y (up)
-  const targetUp = new THREE.Vector3(0, 1, 0)
-  const quaternion = new THREE.Quaternion().setFromUnitVectors(
-    avgNormal.clone().normalize(),
-    targetUp
-  )
-
-  // Rotate geometry vertices
-  geometry.applyQuaternion(quaternion)
-
-  // Optionally center the model so it sits on the bottom (Y=0)
-  if (options.centerOnOrigin !== false) {
-    geometry.computeBoundingBox()
-    const box = geometry.boundingBox
-    const y = box.min.y
-    // Shift so bottom touches the Y=0 plane
-    geometry.translate(0, -y, 0)
-  }
-
+  geometry.computeBoundingBox()
+  geometry.translate(0, -geometry.boundingBox.min.y, 0)
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   return geometry
 }
+
+/**
+ * Bake gizmo move/rotate into vertex data without changing floor height.
+ *
+ * @param {THREE.BufferGeometry} geometry
+ * @param {THREE.Matrix4|null} worldMatrix
+ * @returns {THREE.BufferGeometry}
+ */
+function isIdentityMatrix(m) {
+  if (!m || !m.elements) return true
+  const e = m.elements
+  return (
+    e[0] === 1 && e[1] === 0 && e[2] === 0 && e[3] === 0 &&
+    e[4] === 0 && e[5] === 1 && e[6] === 0 && e[7] === 0 &&
+    e[8] === 0 && e[9] === 0 && e[10] === 1 && e[11] === 0 &&
+    e[12] === 0 && e[13] === 0 && e[14] === 0 && e[15] === 1
+  )
+}
+
+export function bakeMeshTransform(geometry, worldMatrix = null) {
+  if (worldMatrix && !isIdentityMatrix(worldMatrix)) {
+    geometry.applyMatrix4(worldMatrix)
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
+  }
+  return geometry
+}
+
+/** Alias kept for clarity in new call sites. */
+export const settleToFloor = settleGeometry

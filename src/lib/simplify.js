@@ -127,6 +127,7 @@ function gridDecimate(geometry, divisions) {
   }
   newGeometry.computeVertexNormals()
   newGeometry.computeBoundingBox()
+  newGeometry.userData = { ...geometry.userData }
   return newGeometry
 }
 
