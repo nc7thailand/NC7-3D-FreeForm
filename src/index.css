@@ -638,6 +638,11 @@ body {
   bottom: calc(58px + env(safe-area-inset-bottom) + 8px);
 }
 
+/* Toolpath page: sit above stats-inline row (θ / cuts / mm) */
+.page-main--toolpath .status-bar--above-nav {
+  bottom: calc(58px + env(safe-area-inset-bottom) + 36px);
+}
+
 .page-main .view-cube-widget {
   bottom: calc(58px + env(safe-area-inset-bottom) + 8px);
 }
@@ -823,6 +828,20 @@ body {
   border-radius: 4px;
   padding: 5px 8px;
   font-size: 13px;
+}
+.inputs input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+  width: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.inputs .range-readout {
+  min-width: 1.5em;
+  text-align: right;
+  color: #e6edf3;
+  font-variant-numeric: tabular-nums;
 }
 
 button {

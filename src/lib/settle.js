@@ -51,3 +51,20 @@ export function bakeMeshTransform(geometry, worldMatrix = null) {
 
 /** Alias kept for clarity in new call sites. */
 export const settleToFloor = settleGeometry
+
+/**
+ * Drop geometry onto Y=0 if its bbox bottom is below the floor. Returns true when translated.
+ *
+ * @param {THREE.BufferGeometry} geometry
+ * @returns {boolean}
+ */
+export function ensureGeometryOnFloor(geometry) {
+  if (!geometry) return false
+  geometry.computeBoundingBox()
+  const minY = geometry.boundingBox?.min.y ?? 0
+  if (minY >= -1e-6) return false
+  geometry.translate(0, -minY, 0)
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  return true
+}

@@ -3,9 +3,9 @@ import * as THREE from 'three'
 import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../lib/stl'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
-import { settleGeometry, bakeMeshTransform } from '../lib/settle'
+import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { simplifyGeometry } from '../lib/simplify'
-import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock } from '../lib/toolpath'
+import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { buildCutJob, cutJobHasProfile, effectiveCutCount } from '../lib/cutJob'
 import { wirePathFromProfile } from '../lib/wirePath'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
@@ -29,6 +29,7 @@ const DEFAULT_STOCK = {
   boAuto: true,
   boMargin: 20,
   showModelBBox: true,
+  profileAccuracy: 5,
 }
 const DEFAULT_ROTATION_N = 16
 
@@ -155,11 +156,18 @@ export function AppStateProvider({ children }) {
       setSilhouettePreview(null)
       return
     }
+    const settled = ensureGeometryOnFloor(geo)
+    if (settled) {
+      geo.userData.nc7CentroidApplied = true
+      setGeometry(geo)
+      updateStatsFrom(geo)
+    }
     planePoint.current.copy(planePointFromStock(stock))
     const worldMatrix = viewerRef.current?.getMeshWorldMatrix?.() ?? null
+    const silhouetteOpts = silhouetteOptsFromStock(stock)
     try {
-      const result = buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix)
-      const preview = buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix)
+      const result = buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
+      const preview = buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
       setProfile(result)
       setSilhouettePreview(preview)
     } catch (err) {
@@ -167,7 +175,7 @@ export function AppStateProvider({ children }) {
       setSilhouettePreview(null)
       setStatus(`Toolpath error: ${err.message}`)
     }
-  }, [thetaDeg, stock.t])
+  }, [thetaDeg, stock.t, stock.w, stock.h, stock.lo, stock.kerf, stock.profileAccuracy, updateStatsFrom])
 
   useEffect(() => {
     let cancelled = false
@@ -227,7 +235,7 @@ export function AppStateProvider({ children }) {
   useEffect(() => {
     if (hydrating) return
     setCutJob(null)
-  }, [stock.w, stock.t, stock.h, stock.lo, stock.bo, stock.kerf, stock.topOffset, stock.boAuto, stock.boMargin, hydrating])
+  }, [stock.w, stock.t, stock.h, stock.lo, stock.bo, stock.kerf, stock.topOffset, stock.boAuto, stock.boMargin, stock.profileAccuracy, hydrating])
 
   useEffect(() => {
     if (!sessionReady || hydrating || !geometry) return undefined
@@ -357,20 +365,28 @@ export function AppStateProvider({ children }) {
   /** Commit gizmo transform into geometry before leaving Page 1. */
   const saveModelStage = useCallback(() => {
     if (!bakeModelTransform()) return false
+    if (workingRef.current) {
+      settleGeometry(workingRef.current)
+      workingRef.current.userData.nc7CentroidApplied = true
+      setGeometry(workingRef.current)
+      updateStatsFrom(workingRef.current)
+    }
     setProfile(null)
     setSilhouettePreview(null)
     setCutJob(null)
     setCutIndex(0)
     setToolpathTick((t) => t + 1)
-    setStatus('Model saved — ready for toolpath.')
+    setStatus('Model saved — settled on floor, ready for toolpath.')
     return true
-  }, [bakeModelTransform])
+  }, [bakeModelTransform, updateStatsFrom])
 
   const computeCutJob = useCallback(() => {
     const geo = workingRef.current
     if (!geo) return null
     planePoint.current.copy(planePointFromStock(stock))
-    const job = buildCutJob(geo, rotationN, planePoint.current)
+    const job = buildCutJob(geo, rotationN, planePoint.current, {
+      silhouetteOpts: silhouetteOptsFromStock(stock),
+    })
     job.stock = { ...stock }
     for (const cut of job.cuts) {
       cut.wirePath = wirePathFromProfile(cut.profile, stock, cut.thetaDeg)

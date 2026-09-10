@@ -3,7 +3,14 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import ViewCube from './ViewCube'
-import { toRadians, unprojectFromSection } from '../lib/toolpath'
+import {
+  toRadians,
+  unprojectFromSection,
+  shiftSectionToMiddleAnchor,
+  cuttingPlane,
+  planePointMiddleFromStock,
+} from '../lib/toolpath'
+import { wirePathFromProfile } from '../lib/wirePath'
 
 /** Rear cutting plane overlay — set false to show middle plane only. */
 const SHOW_CUTTING_PLANE = false
@@ -503,7 +510,7 @@ export default forwardRef(function Viewer3D(
       state.scene.add(axes)
       state.floorAxes = axes
     }
-  }, [geometry, resetKey, readOnly, showModelBBox])
+  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
 
   useEffect(() => {
     const state = stateRef.current
@@ -613,29 +620,29 @@ export default forwardRef(function Viewer3D(
     state.scene.add(mpGroup)
     state.middlePlaneGroup = mpGroup
 
-    // Machine rotary axis (vertical through block centre — Three.js Y / machine Z)
-    const axisHalf = stock ? stock.h * 0.55 : extent * 0.5
-    const axisGeo = new THREE.BufferGeometry()
-    axisGeo.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute([0, -axisHalf, 0, 0, axisHalf, 0], 3),
-    )
-    const axisMat = new THREE.LineBasicMaterial({
-      color: 0x5cff9a,
-      transparent: true,
-      opacity: 0.65,
+    // World Y axis at origin — foam floor (Y=0) up to 2× model height
+    let modelHeight = stock?.h ?? extent
+    if (geometry) {
+      geometry.computeBoundingBox()
+      const boxH = geometry.boundingBox.max.y - geometry.boundingBox.min.y
+      if (boxH > 1e-6) modelHeight = boxH
+    }
+    const axisTop = modelHeight * 2
+    const axisRadius = Math.max(modelHeight * 0.006, 0.8)
+    const axisGeo = new THREE.CylinderGeometry(axisRadius, axisRadius, axisTop, 10)
+    const axisMat = new THREE.MeshBasicMaterial({
+      color: 0xff3030,
+      depthTest: false,
       depthWrite: false,
     })
-    const rotaryAxisLine = new THREE.Line(axisGeo, axisMat)
-    rotaryAxisLine.renderOrder = 1
+    const rotaryAxisLine = new THREE.Mesh(axisGeo, axisMat)
+    rotaryAxisLine.position.set(0, axisTop / 2, 0)
+    rotaryAxisLine.renderOrder = 3
     state.scene.add(rotaryAxisLine)
     state.rotaryAxisLine = rotaryAxisLine
 
-    const preview = silhouettePreview ?? profile
-    const previewFrame = preview?.frame ?? null
-
-    const addProfileLoop = (points, frame, targetKey) => {
-      if (!points || points.length < 3 || !frame) return
+    const addProfilePolyline = (points, frame, targetKey, { loop = false, color = 0xe84040, opacity = 1 } = {}) => {
+      if (!points || points.length < 2 || !frame) return
       const positions = []
       for (const p of points) {
         const w = unprojectFromSection(p, frame)
@@ -644,13 +651,15 @@ export default forwardRef(function Viewer3D(
       const lineGeo = new THREE.BufferGeometry()
       lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
       const lineMat = new THREE.LineBasicMaterial({
-        color: 0xe84040,
+        color,
+        transparent: opacity < 1,
+        opacity,
         linewidth: 2,
         depthTest: false,
         depthWrite: false,
       })
-      const lines = new THREE.LineLoop(lineGeo, lineMat)
-      lines.renderOrder = 2
+      const lines = loop ? new THREE.LineLoop(lineGeo, lineMat) : new THREE.Line(lineGeo, lineMat)
+      lines.renderOrder = loop ? 1 : 2
       state.scene.add(lines)
       state[targetKey] = lines
     }
@@ -667,10 +676,26 @@ export default forwardRef(function Viewer3D(
       boxGeo.dispose()
     }
 
-    // Full silhouette on MP (projected at rear, u-shifted to middle anchor)
-    if (preview?.polylines?.length && previewFrame) {
-      for (const poly of preview.polylines) {
-        addProfileLoop(poly, previewFrame, 'middleProfileLines')
+    // Method 1 left wire path (kerf + stock clamp) — open polyline on MP
+    if (profile?.polylines?.length && profile.frame && stock) {
+      const wirePath = wirePathFromProfile(profile, stock, thetaDeg)
+      if (wirePath.length >= 2) {
+        const middleFrame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
+        const shifted = shiftSectionToMiddleAnchor(wirePath, profile.frame)
+        addProfilePolyline(shifted, middleFrame, 'profileLines', { loop: false, color: 0xff9900 })
+      }
+    }
+
+    // Raw left silhouette — faint reference (before kerf)
+    if (profile?.polylines?.length && profile.frame) {
+      const middleFrame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
+      for (const poly of profile.polylines) {
+        const shifted = shiftSectionToMiddleAnchor(poly, profile.frame)
+        addProfilePolyline(shifted, middleFrame, 'middleProfileLines', {
+          loop: false,
+          color: 0x8899aa,
+          opacity: 0.35,
+        })
         break
       }
     }

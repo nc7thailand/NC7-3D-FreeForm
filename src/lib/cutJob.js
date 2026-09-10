@@ -51,11 +51,12 @@ export function cutAnglesForN(n, options = {}) {
 export function buildCutJob(geometry, rotationN, planePoint, options = {}) {
   const userN = clampRotationN(rotationN)
   const halfSpan = options.halfSpan ?? FULL_SILHOUETTE_HALF_SPAN
+  const silhouetteOpts = options.silhouetteOpts ?? {}
   const angles = cutAnglesForN(userN, { halfSpan })
   const cuts = angles.map((thetaDeg, index) => ({
     index,
     thetaDeg,
-    profile: buildSectionProfile(geometry, thetaDeg, planePoint, null),
+    profile: buildSectionProfile(geometry, thetaDeg, planePoint, null, silhouetteOpts),
   }))
   return {
     rotationN: userN,

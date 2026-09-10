@@ -1,10 +1,11 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import Viewer3D from '../components/Viewer3D'
 import PathPreviewCanvas from '../components/PathPreviewCanvas'
 import PageNav from '../components/PageNav'
 import ProjectPanel from '../components/ProjectPanel'
 import ToolpathParametersForm from '../components/ToolpathParametersForm'
 import { useAppState } from '../context/AppState'
+import { wirePathFromProfile } from '../lib/wirePath'
 
 /** Set true to restore 2D toolpath preview panel on Page 2 */
 const SHOW_2D_TOOLPATH_PREVIEW = false
@@ -23,6 +24,11 @@ function ToolpathPanel() {
     profile,
     cutJob,
   } = useAppState()
+
+  const wirePointCount = useMemo(() => {
+    if (!profile?.polylines?.length) return null
+    return wirePathFromProfile(profile, stock, thetaDeg).length
+  }, [profile, stock, thetaDeg])
 
   const stepDeg = rotationN >= 1 ? 360 / rotationN : 0
   const clampN = (n) => Math.min(64, Math.max(3, n))
@@ -85,7 +91,8 @@ function ToolpathPanel() {
           </div>
           {profile && (
             <p className="profile-stats">
-              {profile.polylines.length} contour{profile.polylines.length !== 1 ? 's' : ''}, {profile.pointCount} points
+              silhouette {profile.pointCount} pts
+              {wirePointCount != null && <> · wire {wirePointCount} pts</>}
             </p>
           )}
         </section>
@@ -115,6 +122,11 @@ export default function ToolpathPage() {
     rotationN,
     cutCount,
   } = useAppState()
+
+  const wirePointCount = useMemo(() => {
+    if (!profile?.polylines?.length) return null
+    return wirePathFromProfile(profile, stock, thetaDeg).length
+  }, [profile, stock, thetaDeg])
 
   return (
     <>
@@ -148,6 +160,9 @@ export default function ToolpathPage() {
           {stats && (
             <div className="stats-inline">
               <span>θ = {thetaDeg.toFixed(1)}° · {cutCount}/{rotationN} cuts</span>
+              {wirePointCount != null && (
+                <span>wire {wirePointCount} pts</span>
+              )}
               <span>{stats.sizeMM.x.toFixed(0)}×{stats.sizeMM.y.toFixed(0)}×{stats.sizeMM.z.toFixed(0)} mm</span>
             </div>
           )}

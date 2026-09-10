@@ -31,6 +31,12 @@ cp src/lib/checkpoints/silhouette-envelope-v2.js src/lib/silhouette.js
 
 Or checkout git tag: `git checkout savepoint-2026-03-10`
 
+## DevFoam reference (added after save point)
+
+- `Example/StackedCut.nc` — left+right with safe lift between passes
+- `Example/StackedCut2_CutLeft-Right.nc` — left+right continuous
+- `docs/DevFoamLogic.md` — DevFoam pipeline + NC7 mapping
+
 ## Known limitations (next work)
 
 - Envelope bins cannot represent **concave** pockets at the same height (e.g. under chin).

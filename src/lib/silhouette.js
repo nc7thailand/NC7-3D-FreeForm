@@ -3,10 +3,23 @@
 // Type A — front-to-rear orthographic projection (rays along −n through the
 // mesh). Anchor is the rear cutting plane (Z = −T/2 at θ = 0).
 //
-// Full silhouette uses per-v min/max envelope bins (stable on mobile meshes).
-// Silhouette-edge attempt saved at: src/lib/checkpoints/silhouette-edges-v1.js
+// Collimated shadow: filled UV occupancy raster → per-v min/max u (DevFoam-style).
+// Envelope bins kept as fallback when the grid is empty.
+// Silhouette-edge attempt: src/lib/checkpoints/silhouette-edges-v1.js
+// Envelope-only backup: src/lib/checkpoints/silhouette-envelope-v2.js
 
 import * as THREE from 'three'
+
+const BBOX_CORNERS = [
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+]
 
 function projectToSection(p, frame) {
   const dx = p.x - frame.point.x
@@ -27,6 +40,145 @@ function dedupePoints(pts, tol = 0.05) {
     if (Math.hypot(p.u - prev.u, p.v - prev.v) >= tol) out.push(p)
   }
   return out
+}
+
+export function clampProfileAccuracy(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 5
+  return Math.min(10, Math.max(1, Math.round(n)))
+}
+
+/** Grid resolution from DevFoam-style Profile accuracy (1–10). */
+export function shadowGridSpec(bounds, profileAccuracy) {
+  const acc = clampProfileAccuracy(profileAccuracy)
+  const vBins = Math.round(50 + acc * 16)
+  const uBins = Math.round(vBins * 1.25)
+  const vSpan = Math.max(bounds.vMax - bounds.vMin, 1e-6)
+  const uSpan = Math.max(bounds.uMax - bounds.uMin, 1e-6)
+  return {
+    ...bounds,
+    vBins,
+    uBins,
+    vStep: vSpan / vBins,
+    uStep: uSpan / uBins,
+  }
+}
+
+function sectionBounds(bbox, frame) {
+  const { min, max } = bbox
+  const xs = [min.x, max.x]
+  const ys = [min.y, max.y]
+  const zs = [min.z, max.z]
+  let i = 0
+  for (const x of xs) {
+    for (const y of ys) {
+      for (const z of zs) {
+        BBOX_CORNERS[i].set(x, y, z)
+        i += 1
+      }
+    }
+  }
+
+  let uMin = Infinity
+  let uMax = -Infinity
+  let vMin = Infinity
+  let vMax = -Infinity
+  for (const c of BBOX_CORNERS) {
+    const p = projectToSection(c, frame)
+    uMin = Math.min(uMin, p.u)
+    uMax = Math.max(uMax, p.u)
+    vMin = Math.min(vMin, p.v)
+    vMax = Math.max(vMax, p.v)
+  }
+
+  const padU = Math.max((uMax - uMin) * 0.02, 0.05)
+  const padV = Math.max((vMax - vMin) * 0.01, 0.05)
+  return {
+    uMin: uMin - padU,
+    uMax: uMax + padU,
+    vMin: vMin - padV,
+    vMax: vMax + padV,
+  }
+}
+
+function pointInTriUV(u, v, a, b, c) {
+  const denom = (b.v - c.v) * (a.u - c.u) + (c.u - b.u) * (a.v - c.v)
+  if (Math.abs(denom) < 1e-14) return false
+  const w0 = ((b.v - c.v) * (u - c.u) + (c.u - b.u) * (v - c.v)) / denom
+  const w1 = ((c.v - a.v) * (u - c.u) + (a.u - c.u) * (v - c.v)) / denom
+  const w2 = 1 - w0 - w1
+  return w0 >= -1e-9 && w1 >= -1e-9 && w2 >= -1e-9
+}
+
+function fillProjectedTriangle(grid, width, spec, a, b, c) {
+  const { uMin, vMin, uStep, vStep, uBins, vBins } = spec
+  const iu0 = Math.max(0, Math.floor((Math.min(a.u, b.u, c.u) - uMin) / uStep))
+  const iu1 = Math.min(uBins - 1, Math.ceil((Math.max(a.u, b.u, c.u) - uMin) / uStep))
+  const iv0 = Math.max(0, Math.floor((Math.min(a.v, b.v, c.v) - vMin) / vStep))
+  const iv1 = Math.min(vBins - 1, Math.ceil((Math.max(a.v, b.v, c.v) - vMin) / vStep))
+
+  for (let iv = iv0; iv <= iv1; iv++) {
+    const v = vMin + (iv + 0.5) * vStep
+    const row = iv * width
+    for (let iu = iu0; iu <= iu1; iu++) {
+      const u = uMin + (iu + 0.5) * uStep
+      if (pointInTriUV(u, v, a, b, c)) grid[row + iu] = 1
+    }
+  }
+}
+
+function extentsFromShadowGrid(grid, spec) {
+  const { uMin, vMin, uStep, vStep, uBins, vBins } = spec
+  const left = []
+  const right = []
+  let occupied = 0
+
+  for (let iv = 0; iv < vBins; iv++) {
+    let minU = Infinity
+    let maxU = -Infinity
+    const row = iv * uBins
+    for (let iu = 0; iu < uBins; iu++) {
+      if (!grid[row + iu]) continue
+      occupied += 1
+      const u = uMin + (iu + 0.5) * uStep
+      if (u < minU) minU = u
+      if (u > maxU) maxU = u
+    }
+    const v = vMin + (iv + 0.5) * vStep
+    if (minU < Infinity) left.push({ u: minU, v })
+    if (maxU > -Infinity) right.push({ u: maxU, v })
+  }
+
+  return { left, right, occupied }
+}
+
+function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy) {
+  const bounds = sectionBounds(bbox, frame)
+  if (bounds.vMax <= bounds.vMin + 1e-6) return { left: [], right: [], occupied: 0 }
+
+  const spec = shadowGridSpec(bounds, profileAccuracy)
+  const grid = new Uint8Array(spec.uBins * spec.vBins)
+
+  const pos = geometry.attributes.position?.array
+  if (!pos || pos.length < 9) return { left: [], right: [], occupied: 0 }
+
+  const index = geometry.index?.array
+  const triCount = index ? index.length / 3 : pos.length / 9
+  const v0 = new THREE.Vector3()
+  const v1 = new THREE.Vector3()
+  const v2 = new THREE.Vector3()
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = index ? index[t * 3] : t * 3
+    const i1 = index ? index[t * 3 + 1] : t * 3 + 1
+    const i2 = index ? index[t * 3 + 2] : t * 3 + 2
+    v0.fromArray(pos, i0 * 3)
+    v1.fromArray(pos, i1 * 3)
+    v2.fromArray(pos, i2 * 3)
+    fillProjectedTriangle(grid, spec.uBins, spec, projectToSection(v0, frame), projectToSection(v1, frame), projectToSection(v2, frame))
+  }
+
+  return extentsFromShadowGrid(grid, spec)
 }
 
 function stampBinMin(minU, vMin, vStep, u, v) {
@@ -73,7 +225,8 @@ function stampProjectedEdgeMax(maxU, vMin, vStep, a, b) {
   }
 }
 
-function projectFrontToRearExtents(geometry, frame, bbox, vTol = 0.06) {
+/** Envelope fallback — per-v min/max from projected edges (checkpoint v2). */
+function projectFrontToRearEnvelope(geometry, frame, bbox, vTol = 0.06) {
   const vMin = bbox.min.y
   const vMax = bbox.max.y
   if (vMax <= vMin + 1e-6) return { left: [], right: [] }
@@ -128,7 +281,16 @@ function projectFrontToRearExtents(geometry, frame, bbox, vTol = 0.06) {
   return { left, right }
 }
 
-function mergeFullOutlineEnvelope({ left, right }) {
+function projectFrontToRearExtents(geometry, frame, bbox, opts = {}) {
+  const shadow = projectFrontToRearShadow(geometry, frame, bbox, opts.profileAccuracy ?? 5)
+  if (shadow.occupied > 0) {
+    return { left: shadow.left, right: shadow.right, source: 'shadow' }
+  }
+  const envelope = projectFrontToRearEnvelope(geometry, frame, bbox, opts.vTol ?? 0.06)
+  return { left: envelope.left, right: envelope.right, source: 'envelope-fallback' }
+}
+
+function mergeFullOutline({ left, right }) {
   if (left.length < 2 && right.length < 2) return []
   const leftSorted = [...left].sort((a, b) => a.v - b.v || a.u - b.u)
   const rightSorted = [...right].sort((a, b) => b.v - a.v || a.u - b.u)
@@ -138,12 +300,8 @@ function mergeFullOutlineEnvelope({ left, right }) {
   return dedupePoints(leftSorted.length >= 2 ? leftSorted : rightSorted)
 }
 
-function projectFrontToRearLeft(geometry, frame, bbox, vTol = 0.06) {
-  return projectFrontToRearExtents(geometry, frame, bbox, vTol).left
-}
-
 /**
- * Method 1 left-side cut silhouette (u ≤ 0), rear-anchored projection.
+ * Method 1 left-side cut silhouette (u ≤ 0), rear-anchored collimated shadow.
  */
 export function extractLeftSilhouette(geometry, frame, opts = {}) {
   const pos = geometry.attributes.position
@@ -153,14 +311,13 @@ export function extractLeftSilhouette(geometry, frame, opts = {}) {
   const bbox = geometry.boundingBox
   if (!bbox || bbox.isEmpty()) return []
 
-  const projected = projectFrontToRearLeft(geometry, frame, bbox, opts.vTol ?? 0.06)
+  const { left } = projectFrontToRearExtents(geometry, frame, bbox, opts)
   const uMax = opts.uMax ?? 1e-3
-  const left = projected.filter((p) => p.u <= uMax)
-  return dedupePoints(left)
+  return dedupePoints(left.filter((p) => p.u <= uMax))
 }
 
 /**
- * Full front-to-rear silhouette — min/max envelope (left + right outline).
+ * Full front-to-rear silhouette — collimated shadow (left + right outline).
  */
 export function extractFullSilhouette(geometry, frame, opts = {}) {
   const pos = geometry.attributes.position
@@ -170,6 +327,11 @@ export function extractFullSilhouette(geometry, frame, opts = {}) {
   const bbox = geometry.boundingBox
   if (!bbox || bbox.isEmpty()) return []
 
-  const extents = projectFrontToRearExtents(geometry, frame, bbox, opts.vTol ?? 0.06)
-  return mergeFullOutlineEnvelope(extents)
+  const extents = projectFrontToRearExtents(geometry, frame, bbox, opts)
+  return mergeFullOutline(extents)
+}
+
+/** Stock → silhouette options for toolpath builders. */
+export function silhouetteOptsFromStock(stock) {
+  return { profileAccuracy: clampProfileAccuracy(stock?.profileAccuracy ?? 5) }
 }

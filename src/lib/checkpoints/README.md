@@ -1,7 +1,16 @@
 # Silhouette checkpoints
 
-| File | Description |
-| :--- | :--- |
-| `silhouette-edges-v1.js` | View-dependent silhouette edges + vertex weld (2026-03-10). Reverted from main — quality regressed on mobile knight STL. |
+| File | Date | Description |
+| :--- | :--- | :--- |
+| `silhouette-envelope-v2.js` | 2026-03-10 | **Current save point.** Per-v min/max envelope — stable on mobile knight STL. Active in `silhouette.js`. |
+| `silhouette-edges-v1.js` | 2026-03-10 | View-dependent silhouette edges + vertex weld. Reverted — quality regressed (open loops / wrong loop). |
 
-To retry the edge approach, copy into `src/lib/silhouette.js` and wire `extractFullSilhouette` to call `extractSilhouetteEdgesUV` first.
+Full project save point: `docs/SAVEPOINT-2026-03-10.md` · git tag `savepoint-2026-03-10`
+
+## Restore
+
+```bash
+cp src/lib/checkpoints/silhouette-envelope-v2.js src/lib/silhouette.js
+```
+
+To retry edges: copy `silhouette-edges-v1.js` into `silhouette.js` and wire `extractFullSilhouette` to prefer edge extraction.

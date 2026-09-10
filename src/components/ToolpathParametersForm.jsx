@@ -50,6 +50,17 @@ export default function ToolpathParametersForm({ compact = false }) {
           />
         </label>
       )}
+      <label>Profile accuracy (1–10)
+        <input
+          type="range"
+          min="1"
+          max="10"
+          step="1"
+          value={stock.profileAccuracy ?? 5}
+          onChange={(e) => handleStockChange('profileAccuracy', +e.target.value)}
+        />
+        <span className="range-readout">{stock.profileAccuracy ?? 5}</span>
+      </label>
       <label>Kerf (wire Ø comp.)
         <input type="number" min="0" step="0.1" value={stock.kerf ?? 2} onChange={(e) => handleStockChange('kerf', +e.target.value)} />
       </label>

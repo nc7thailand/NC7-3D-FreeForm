@@ -12,7 +12,9 @@
 //   LB(θ)                  = Block_Bottom_Extent(θ) + BO
 
 import * as THREE from 'three'
-import { extractLeftSilhouette, extractFullSilhouette } from './silhouette.js'
+import { extractLeftSilhouette, extractFullSilhouette, silhouetteOptsFromStock } from './silhouette.js'
+
+export { silhouetteOptsFromStock }
 
 export const DEG = Math.PI / 180
 
@@ -154,6 +156,33 @@ export function geometryForSlicing(geometry, worldMatrix = null) {
 }
 
 /**
+ * Clone for CAM slicing — optional virtual floor settle (Y_min → 0) without mutating source mesh.
+ *
+ * @param {THREE.BufferGeometry} geometry
+ * @param {THREE.Matrix4|null} [worldMatrix]
+ * @param {{ floorSettle?: boolean }} [options]
+ */
+export function geometryForToolpathSlicing(geometry, worldMatrix = null, { floorSettle = true } = {}) {
+  const g = geometryForSlicing(geometry, worldMatrix)
+  if (!floorSettle) return g
+  g.computeBoundingBox()
+  const minY = g.boundingBox?.min.y ?? 0
+  if (minY < -1e-6) {
+    g.translate(0, -minY, 0)
+    g.computeBoundingBox()
+  }
+  return g
+}
+
+/** Y offset to place a centroid-centered mesh on the foam floor (Y = 0). */
+export function floorOffsetY(geometry) {
+  if (!geometry) return 0
+  geometry.computeBoundingBox()
+  const minY = geometry.boundingBox?.min.y ?? 0
+  return minY < -1e-6 ? -minY : 0
+}
+
+/**
  * Map 2D section coordinates back to a world point on the cutting plane.
  *
  * @param {{ u: number, v: number }} p
@@ -181,17 +210,17 @@ export function unprojectFromSection(p, frame) {
  * @param {THREE.Matrix4|null} [worldMatrix] - optional gizmo/world transform
  * @returns {{ polylines: Array<{u: number, v: number}[]>, pointCount: number, frame: object, source: string }}
  */
-export function buildSectionProfile(geometry, thetaDeg, planePoint, worldMatrix = null) {
-  const sliceGeo = geometryForSlicing(geometry, worldMatrix)
+export function buildSectionProfile(geometry, thetaDeg, planePoint, worldMatrix = null, opts = {}) {
+  const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
   const frame = cuttingPlane(thetaDeg, planePoint)
-  const silhouette = extractLeftSilhouette(sliceGeo, frame)
+  const silhouette = extractLeftSilhouette(sliceGeo, frame, opts)
   sliceGeo.dispose()
   const polylines = silhouette.length >= 2 ? [silhouette] : []
   return {
     polylines,
     pointCount: silhouette.length,
     frame,
-    source: 'front-rear-silhouette',
+    source: 'front-rear-shadow',
   }
 }
 
@@ -221,10 +250,10 @@ export function shiftSectionToMiddleAnchor(points, rearFrame) {
  * @param {THREE.Vector3} rearPlanePoint - rear anchor (0, 0, −T/2)
  * @param {THREE.Matrix4|null} [worldMatrix]
  */
-export function buildFullSilhouettePreview(geometry, thetaDeg, rearPlanePoint, worldMatrix = null) {
-  const sliceGeo = geometryForSlicing(geometry, worldMatrix)
+export function buildFullSilhouettePreview(geometry, thetaDeg, rearPlanePoint, worldMatrix = null, opts = {}) {
+  const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
   const rearFrame = cuttingPlane(thetaDeg, rearPlanePoint)
-  const outline = extractFullSilhouette(sliceGeo, rearFrame)
+  const outline = extractFullSilhouette(sliceGeo, rearFrame, opts)
   sliceGeo.dispose()
   const middleFrame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
   const displayPoly = shiftSectionToMiddleAnchor(outline, rearFrame)
