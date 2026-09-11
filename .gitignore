@@ -16,6 +16,9 @@ npm-debug.log*
 !.vscode/extensions.json
 .idea/
 
+# Agent workspace (local session state)
+.qwen/
+
 # Env
 .env
 .env.local

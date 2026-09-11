@@ -88,6 +88,8 @@ export default function ModelPage() {
     status,
     viewerRef,
     stock,
+    handleSettle,
+    handleReset,
   } = useAppState()
 
   return (
@@ -103,6 +105,8 @@ export default function ModelPage() {
               geometry={geometry}
               resetKey={resetKey}
               showModelBBox={stock.showModelBBox !== false}
+              onSettle={handleSettle}
+              onReset={handleReset}
             />
           </div>
           {status && <div className="status-bar status-bar--above-nav">{status}</div>}

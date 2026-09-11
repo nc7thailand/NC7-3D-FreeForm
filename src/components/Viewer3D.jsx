@@ -34,6 +34,8 @@ export default forwardRef(function Viewer3D(
     profile,
     silhouettePreview,
     onMeshTransformChange,
+    onSettle,
+    onReset,
     readOnly = false,
     showToolpathOverlay = false,
     showModelBBox = true,
@@ -77,13 +79,18 @@ export default forwardRef(function Viewer3D(
       return mesh.matrixWorld.clone()
     },
     resetMeshTransform() {
-      const mesh = stateRef.current?.mesh
-      if (!mesh) return
-      mesh.position.set(0, 0, 0)
-      mesh.rotation.set(0, 0, 0)
-      mesh.scale.set(1, 1, 1)
-      mesh.updateMatrixWorld(true)
-      if (stateRef.current.transform) stateRef.current.transform.detach()
+      const state = stateRef.current
+      const gizmo = state?.objGizmo
+      if (!gizmo) return
+      // OBJ_Gizmo is created at the model's centre of mass with the mesh
+      // offset by -com, so "origin" for the gizmo is that rest position —
+      // not the world origin. Resetting to (0,0,0) would shift the model.
+      const rest = state.gizmoRest ?? { x: 0, y: 0, z: 0 }
+      gizmo.position.set(rest.x, rest.y, rest.z)
+      gizmo.rotation.set(0, 0, 0)
+      gizmo.scale.set(1, 1, 1)
+      gizmo.updateMatrixWorld(true)
+      if (state.transform) state.transform.detach()
     },
   }))
 
@@ -101,7 +108,7 @@ export default forwardRef(function Viewer3D(
       0.1,
       100000
     )
-    camera.position.set(5, 5, 5)
+    camera.position.set(10, 5, 0)
     camera.lookAt(0, 0, 0)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -150,9 +157,9 @@ export default forwardRef(function Viewer3D(
     // Live rotation readout (degrees) while dragging in rotate mode
     const updateRotationReadout = () => {
       const el = rotationRef.current
-      const mesh = stateRef.current.mesh
-      if (!el || !mesh) return
-      const r = mesh.rotation
+      const gizmo = stateRef.current.objGizmo
+      if (!el || !gizmo) return
+      const r = gizmo.rotation
       const rad2deg = 180 / Math.PI
       el.textContent =
         `X ${r.x * rad2deg}°  Y ${r.y * rad2deg}°  Z ${r.z * rad2deg}°`
@@ -219,13 +226,14 @@ export default forwardRef(function Viewer3D(
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
       raycaster.setFromCamera(pointer, camera)
+      const gizmo = state.objGizmo
       const mesh = state.mesh
-      if (!mesh) return
-      const intersects = raycaster.intersectObject(mesh, false)
+      if (!gizmo || !mesh) return
+      const intersects = raycaster.intersectObject(gizmo, true)
 
       if (intersects.length > 0) {
-        transform.attach(mesh)
-        state.selected = mesh
+        transform.attach(gizmo)
+        state.selected = gizmo
         if (state.mode === 'rotate' && state.applyGizmoAxis && state.activeAxis) {
           state.applyGizmoAxis(state.activeAxis)
         }
@@ -266,10 +274,10 @@ export default forwardRef(function Viewer3D(
       if (panel) panel.classList.toggle('visible', mode === 'rotate')
 
       if (mode === 'rotate') {
-        const mesh = state.mesh
-        if (mesh) {
-          transform.attach(mesh)
-          state.selected = mesh
+        const gizmo = state.objGizmo
+        if (gizmo) {
+          transform.attach(gizmo)
+          state.selected = gizmo
         }
         if (!state.activeAxis) state.activeAxis = 'Y'
         applyGizmoAxis(state.activeAxis)
@@ -296,14 +304,13 @@ export default forwardRef(function Viewer3D(
 
     // Rotate the attached mesh around a world axis by `deg` degrees
     const rotateByAxis = (axis, deg) => {
-      const mesh = state.mesh
-      if (!mesh) return
+      const gizmo = state.objGizmo
+      if (!gizmo) return
       const axisVec = axis === 'X' ? new THREE.Vector3(1, 0, 0)
         : axis === 'Y' ? new THREE.Vector3(0, 1, 0)
         : new THREE.Vector3(0, 0, 1)
-      mesh.rotateOnWorldAxis(axisVec, deg * Math.PI / 180)
-      // Refresh the live rotation readout
-      const r = mesh.rotation
+      gizmo.rotateOnWorldAxis(axisVec, deg * Math.PI / 180)
+      const r = gizmo.rotation
       const rad2deg = 180 / Math.PI
       const el = rotationRef.current
       if (el) el.textContent =
@@ -403,6 +410,7 @@ export default forwardRef(function Viewer3D(
       controls.dispose()
       transform.dispose()
       renderer.dispose()
+      renderer.forceContextLoss()
       mount.removeChild(renderer.domElement)
     }
   }, [])
@@ -424,8 +432,14 @@ export default forwardRef(function Viewer3D(
       state.selectionBox = null
     }
 
+    // Clean up previous OBJ_Gizmo and mesh
+    if (state.objGizmo) {
+      if (state.transform) state.transform.detach()
+      if (state.mesh) state.objGizmo.remove(state.mesh)
+      state.scene.remove(state.objGizmo)
+      state.objGizmo = null
+    }
     if (state.mesh) {
-      state.scene.remove(state.mesh)
       state.mesh.geometry.dispose()
       state.mesh.material.dispose()
       state.mesh = null
@@ -434,7 +448,6 @@ export default forwardRef(function Viewer3D(
     if (!geometry) return
 
     // Center once for newly loaded raw geometry (Page 1 edit mode only).
-    // Never translate when readOnly is true (Toolpath / G-code / Simulate).
     if (!readOnly && !geometry.userData.nc7CentroidApplied) {
       geometry.computeBoundingBox()
       const centroid = geometry.boundingBox.getCenter(new THREE.Vector3())
@@ -442,6 +455,10 @@ export default forwardRef(function Viewer3D(
       geometry.userData.nc7CentroidApplied = true
       geometry.computeBoundingBox()
     }
+
+    // Compute center of mass from geometry bounding box
+    geometry.computeBoundingBox()
+    const com = geometry.boundingBox.getCenter(new THREE.Vector3())
 
     const material = new THREE.MeshStandardMaterial({
       color: 0x7fb2d9,
@@ -451,74 +468,86 @@ export default forwardRef(function Viewer3D(
       roughness: 0.6,
     })
     const mesh = new THREE.Mesh(geometry, material)
+    // Offset mesh so model stays on floor while OBJ_Gizmo is at center of mass
+    mesh.position.copy(com).negate()
     state.mesh = mesh
-    state.scene.add(mesh)
+
+    // Create pivot at center of mass for move/rotate
+    const objGizmo = new THREE.Object3D()
+    objGizmo.name = 'OBJ_Gizmo'
+    objGizmo.position.copy(com)
+    // Remember the rest pose: the gizmo lives at the centre of mass, never at
+    // the world origin. resetMeshTransform() restores this exact position.
+    state.gizmoRest = { x: com.x, y: com.y, z: com.z }
+    objGizmo.add(mesh)
+    state.objGizmo = objGizmo
+    state.scene.add(objGizmo)
 
     if (showModelBBox) {
-      const selectionBox = new THREE.BoxHelper(mesh, 0xffcc33)
+      const selectionBox = new THREE.BoxHelper(objGizmo, 0xffcc33)
       state.scene.add(selectionBox)
       state.selectionBox = selectionBox
     }
 
-    // Attach gizmo only on the Model page (edit mode).
-    if (!readOnly && state.mode === 'rotate' && state.transform) {
-      state.transform.attach(mesh)
-      state.selected = mesh
-      if (!state.activeAxis) state.activeAxis = 'Y'
-      if (state.applyGizmoAxis) state.applyGizmoAxis(state.activeAxis)
-      if (state.updateActiveAxisUI) state.updateActiveAxisUI()
+    // Attach trans_gizmo to OBJ_Gizmo on Model page (edit mode).
+    if (!readOnly && state.transform) {
+      state.transform.attach(objGizmo)
+      state.selected = objGizmo
+      state.transform.setMode(state.mode === 'rotate' ? 'rotate' : 'translate')
+      if (state.mode === 'rotate') {
+        if (!state.activeAxis) state.activeAxis = 'Y'
+        if (state.applyGizmoAxis) state.applyGizmoAxis(state.activeAxis)
+        if (state.updateActiveAxisUI) state.updateActiveAxisUI()
+      }
     } else if (readOnly && state.transform) {
       state.transform.detach()
       state.selected = null
     }
 
     // Frame the object with the camera
-    geometry.computeBoundingBox()
-    const box = geometry.boundingBox
-    if (box) {
-      const center = box.getCenter(new THREE.Vector3())
-      const size = box.getSize(new THREE.Vector3())
-      const maxDim = Math.max(size.x, size.y, size.z) || 1
-      const dist = maxDim * 2.5
-      state.camera.position.copy(center).add(new THREE.Vector3(dist * 0.7, dist * 0.6, dist * 0.9))
-      state.camera.lookAt(center)
-      state.controls.target.copy(center)
-      state.controls.update()
+    const worldBox = new THREE.Box3().setFromObject(objGizmo)
+    const center = worldBox.getCenter(new THREE.Vector3())
+    const size = worldBox.getSize(new THREE.Vector3())
+    const maxDim = Math.max(size.x, size.y, size.z) || 1
+    const dist = maxDim * 2.5
+    state.camera.position.copy(center).add(new THREE.Vector3(dist * 1.2, dist * 0.3, 0))
+    state.camera.lookAt(center)
+    state.controls.target.copy(center)
+    state.controls.update()
 
-      // Remember framing info for the camera view presets
-      state.frameInfo = { center: center.clone(), dist }
+    // Remember framing info for the camera view presets
+    state.frameInfo = { center: center.clone(), dist }
 
-      // Resize the floor plan / world origin markers to match the model scale
-      if (state.floorGrid) {
-        state.scene.remove(state.floorGrid)
-        state.floorGrid.dispose()
-      }
-      if (state.floorAxes) {
-        state.scene.remove(state.floorAxes)
-        state.floorAxes.dispose()
-      }
-
-      const floorSize = Math.max(maxDim * 3, 50)
-      const divisions = Math.max(Math.floor(floorSize / 100), 2)
-
-      const grid = new THREE.GridHelper(floorSize, divisions, 0x3a5a80, 0x2a3a50)
-      grid.position.y = 0
-      state.scene.add(grid)
-      state.floorGrid = grid
-
-      const axes = new THREE.AxesHelper(maxDim * 0.5)
-      state.scene.add(axes)
-      state.floorAxes = axes
+    // Resize the floor plan / world origin markers to match the model scale
+    if (state.floorGrid) {
+      state.scene.remove(state.floorGrid)
+      state.floorGrid.dispose()
     }
+    if (state.floorAxes) {
+      state.scene.remove(state.floorAxes)
+      state.floorAxes.dispose()
+    }
+
+    const floorSize = Math.max(maxDim * 3, 50)
+    const divisions = Math.max(Math.floor(floorSize / 100), 2)
+
+    const grid = new THREE.GridHelper(floorSize, divisions, 0x3a5a80, 0x2a3a50)
+    grid.position.y = 0
+    state.scene.add(grid)
+    state.floorGrid = grid
+
+    const axes = new THREE.AxesHelper(maxDim * 0.5)
+    state.scene.add(axes)
+    state.floorAxes = axes
   }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
 
   useEffect(() => {
     const state = stateRef.current
-    if (!state?.scene || !state.mesh) return
+    if (!state?.scene || !state.objGizmo) return
 
     if (showModelBBox) {
       if (!state.selectionBox) {
-        const selectionBox = new THREE.BoxHelper(state.mesh, 0xffcc33)
+        const selectionBox = new THREE.BoxHelper(state.objGizmo, 0xffcc33)
         state.scene.add(selectionBox)
         state.selectionBox = selectionBox
       }
@@ -761,8 +790,8 @@ export default forwardRef(function Viewer3D(
     state.activeAxis = axis
     if (state.applyGizmoAxis) state.applyGizmoAxis(axis)
     if (state.updateActiveAxisUI) state.updateActiveAxisUI()
-    if (!readOnly && state.mode === 'rotate' && state.mesh && state.transform) {
-      state.transform.attach(state.mesh)
+    if (!readOnly && state.mode === 'rotate' && state.objGizmo && state.transform) {
+      state.transform.attach(state.objGizmo)
     }
   }
 
@@ -813,6 +842,20 @@ export default forwardRef(function Viewer3D(
             onClick={() => setMode('rotate')}
           >
             Rotate
+          </button>
+          <button
+            className="toolbar-action danger"
+            title="Reset model"
+            onClick={() => onReset?.()}
+          >
+            Reset
+          </button>
+          <button
+            className="toolbar-action"
+            title="Settle (F)"
+            onClick={() => onSettle?.()}
+          >
+            Settle
           </button>
           <span className="toolbar-hint">
             L-click select/move · R-click rotate view · Wheel zoom

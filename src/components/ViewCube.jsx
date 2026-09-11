@@ -72,7 +72,7 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
 
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 50)
-    camera.position.set(2.4, 2.4, 2.4)
+    camera.position.set(2.4, 0.6, 0)
     camera.lookAt(0, 0, 0)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
@@ -155,6 +155,7 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
       edges.geometry.dispose()
       edges.material.dispose()
       renderer.dispose()
+      renderer.forceContextLoss()
       mount.removeChild(renderer.domElement)
       cubeRef.current = null
     }

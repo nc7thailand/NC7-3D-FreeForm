@@ -144,6 +144,7 @@ export default function SimulateViewer({
       window.removeEventListener('resize', onResize)
       controls.dispose()
       renderer.dispose()
+      renderer.forceContextLoss()
       mount.removeChild(renderer.domElement)
     }
   }, [])

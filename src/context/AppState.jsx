@@ -163,7 +163,10 @@ export function AppStateProvider({ children }) {
       updateStatsFrom(geo)
     }
     planePoint.current.copy(planePointFromStock(stock))
-    const worldMatrix = viewerRef.current?.getMeshWorldMatrix?.() ?? null
+    // Gizmo transform is baked into the geometry on leaving the Model page, so
+    // the toolpath must be computed from vertex data alone — never re-apply a
+    // stale viewer world matrix here.
+    const worldMatrix = null
     const silhouetteOpts = silhouetteOptsFromStock(stock)
     try {
       const result = buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
@@ -298,6 +301,9 @@ export function AppStateProvider({ children }) {
 
   const handleSettle = () => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
+    // Bake the current gizmo pose into the vertices, drop the model so its
+    // bounding box bottom touches Y=0, then restore the gizmo rest pose.
+    // Resetting first would leave the baked pose applied twice.
     const worldMatrix = viewerRef.current?.getMeshWorldMatrix?.() ?? null
     settleGeometry(workingRef.current, { worldMatrix })
     viewerRef.current?.resetMeshTransform?.()
@@ -327,6 +333,7 @@ export function AppStateProvider({ children }) {
 
   const handleReset = async () => {
     await clearBrowserSession().catch(() => {})
+    viewerRef.current?.resetMeshTransform?.()
     workingRef.current = null
     setGeometry(null)
     setStats(null)
