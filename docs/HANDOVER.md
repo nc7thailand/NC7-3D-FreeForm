@@ -4,6 +4,12 @@
 **Author:** P Bank (NC7) with AI Agent (Gemma)
 **Next environment:** Google Antigravity (Vibe Coding / Agent)
 
+> ⚠️ **Historical document** — reflects the state on 2026-08-12. Some tasks below
+> were later dropped from scope (Serial/USB machine control, STL slicing,
+> Grid/Tapered/Wedge cuts) and "slicing" is really ray-cast silhouette
+> projection. For the current scope and pipeline, read
+> **`docs/CONCEPT.md` §6–8** and **`docs/ARCHITECTURE.md`** instead.
+
 ---
 
 ## 1. Project Summary

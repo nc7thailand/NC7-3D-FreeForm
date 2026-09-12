@@ -98,10 +98,10 @@ Preview 2D = **WYSIWYG** (เส้นแดงซ้าย = ตัดซ้า
 * ใช้ Web Workers เพื่อจัดการคำนวณหนักใน Background
 * ใช้ GPU ผ่าน Three.js/WebGL สำหรับการเรนเดอร์ 3D ให้ UI ลื่นไหลที่ 60 FPS
 
-### Communication / Serial Interface
+### Communication / Output
 
 * G-code post-processor ตาม §2.4 (G93, Method 1, top safe = H + topOffset)
-* (Serial/USB ต่อเครื่องจริง — ภายหลัง)
+* Output = ไฟล์ `.nc` ที่ผู้ใช้ดาวน์โหลดไปโหลดเข้าเครื่องเอง — แอปนี้ **ไม่คุยกับเครื่องโดยตรง**
 
 ## 5. Tech Stack & Tooling
 
@@ -110,9 +110,37 @@ Preview 2D = **WYSIWYG** (เส้นแดงซ้าย = ตัดซ้า
 > * **Background Processing:** Web Workers
 > * **Desktop Packaging:** Electron (ในภายหลัง)
 
-## 6. Future Roadmap
+## 6. ขอบเขตของแอป (LOCKED)
 
-* การเชื่อมต่อกับ CNC Machine โดยตรง (Serial/USB)
-* รองรับ STL Slicing หลายชั้น (คล้าย DevFoam 3D Cut Sliced STL)
-* ฟีเจอร์ Grid Cut, Tapered Cut, และ Wedges (อ้างอิงจาก DevFoam 3)
-* AI-assisted toolpath optimization
+NC7 Studio3D เป็น **CAM software** — ไม่ใช่ machine controller
+
+| | |
+| :--- | :--- |
+| **คือ** | เครื่องมือสร้าง G-code จากโมเดล STL สำหรับเครื่องลวดร้อน NC7 |
+| **ไม่ใช่** | โปรแกรมควบคุมเครื่อง, ไม่มี jog / homing / feed override |
+| **ห้ามมี** | Serial/USB ต่อเครื่องจริง, machine control ใดๆ |
+| **แกนที่รองรับ** | 2-axis (X, Y) + 1 rotary axis (Z) เท่านั้น |
+| **ห้ามมี** | Grid Cut, Tapered Cut, Wedges — เครื่อง NC7 ทำไม่ได้ |
+| **ไม่ใช่** | 3D-printer slicer — ไม่ได้ slice เป็นชั้นๆ แบบ FDM<br>แต่ใช้ **ray casting** ฉายเงา (silhouette) ลงระนาบตัด เพื่อหาเส้นตัด |
+| **Output** | ไฟล์ `.nc` ให้ผู้ใช้ดาวน์โหลดไปโหลดเข้าเครื่องเอง |
+
+## 7. กติกาการคำนวณ (NON-NEGOTIABLE)
+
+> **ทุกขั้นตอนการคำนวณใน `src/` ต้องเป็น mathematical function ล้วน**
+
+| ข้อ | กติกา |
+| :--- | :--- |
+| 1 | **ห้ามเรียก AI API / model inference** ในตัวแอปที่ส่งมอบ |
+| 2 | **ห้ามพึ่ง network** — ต้องทำงานได้ตอนไม่มีเน็ต |
+| 3 | **Deterministic** — input เดิม ต้องได้ G-code เดิมเสมอ |
+| 4 | **Reproducible** — เปิดโปรเจกต์เก่า ต้องได้ toolpath เดิม |
+| 5 | **Explainable** — ช่างต้องอธิบายได้ว่าค่านี้มาจากสูตรไหน |
+
+AI ใช้ได้เฉพาะ **ตอนพัฒนา** (ช่วยเขียนสูตรคณิตศาสตร์) — ผลผลิตที่ส่งมอบต้องเป็น
+คณิตศาสตร์บริสุทธิ์ที่รันได้เอง รายละเอียด pipeline ดู `docs/ARCHITECTURE.md`
+
+## 8. Future Roadmap
+
+* **Toolpath optimization แบบ deterministic** — ลด air-cut distance
+  * เริ่มจากงานง่าย → ยาก (step by step)
+  * ต้องเป็นคณิตศาสตร์ล้วน ไม่พึ่ง AI/machine learning
