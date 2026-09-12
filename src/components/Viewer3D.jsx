@@ -16,6 +16,25 @@ import { wirePathFromProfile } from '../lib/wirePath'
 const SHOW_CUTTING_PLANE = false
 
 /**
+ * Park the OBJ_Gizmo pivot (and its opposite mesh offset) on the geometry's
+ * CURRENT centre of mass. The centre moves whenever the geometry is mutated in
+ * place — settling, baking a pose — so it must be recomputed, never cached.
+ * Leaves the pivot's rotation alone; callers decide whether to clear it.
+ */
+function placePivotAtGeometryCentre(state) {
+  const mesh = state?.mesh
+  const objGizmo = state?.objGizmo
+  if (!mesh || !objGizmo) return
+  const geo = mesh.geometry
+  if (!geo) return
+  geo.computeBoundingBox()
+  const com = geo.boundingBox.getCenter(new THREE.Vector3())
+  mesh.position.copy(com).negate()
+  objGizmo.position.copy(com)
+  objGizmo.updateMatrixWorld(true)
+}
+
+/**
  * 3D viewport (Section 3).
  *
  * Mouse behavior (MS 3D Builder style):
@@ -36,6 +55,7 @@ export default forwardRef(function Viewer3D(
     onMeshTransformChange,
     onSettle,
     onReset,
+    onCenter,
     readOnly = false,
     showToolpathOverlay = false,
     showModelBBox = true,
@@ -78,18 +98,31 @@ export default forwardRef(function Viewer3D(
       mesh.updateMatrixWorld(true)
       return mesh.matrixWorld.clone()
     },
+    refreshMeshPivot() {
+      placePivotAtGeometryCentre(stateRef.current)
+    },
+    centerMesh() {
+      const state = stateRef.current
+      const gizmo = state?.objGizmo
+      if (!gizmo) return
+      // Bring the centre of mass onto the turntable axis: world X0/Z0, Y left
+      // alone. Rotation is deliberately kept so the user's orientation stands.
+      gizmo.position.x = 0
+      gizmo.position.z = 0
+      gizmo.updateMatrixWorld(true)
+      if (state.transform) state.transform.attach(gizmo)
+    },
     resetMeshTransform() {
       const state = stateRef.current
       const gizmo = state?.objGizmo
       if (!gizmo) return
-      // OBJ_Gizmo is created at the model's centre of mass with the mesh
-      // offset by -com, so "origin" for the gizmo is that rest position —
-      // not the world origin. Resetting to (0,0,0) would shift the model.
-      const rest = state.gizmoRest ?? { x: 0, y: 0, z: 0 }
-      gizmo.position.set(rest.x, rest.y, rest.z)
+      // Clear the user's pose, then re-park the pivot on the geometry's current
+      // centre of mass. The centre is recomputed live rather than read from a
+      // cached rest pose — settling or baking moves it, and a stale value used
+      // to leave the gizmo stranded on the floor.
       gizmo.rotation.set(0, 0, 0)
       gizmo.scale.set(1, 1, 1)
-      gizmo.updateMatrixWorld(true)
+      placePivotAtGeometryCentre(state)
       if (state.transform) state.transform.detach()
     },
   }))
@@ -452,6 +485,8 @@ export default forwardRef(function Viewer3D(
       geometry.computeBoundingBox()
       const centroid = geometry.boundingBox.getCenter(new THREE.Vector3())
       geometry.translate(-centroid.x, -centroid.y, -centroid.z)
+      geometry.computeBoundingBox()
+      geometry.translate(0, -geometry.boundingBox.min.y, 0)
       geometry.userData.nc7CentroidApplied = true
       geometry.computeBoundingBox()
     }
@@ -476,9 +511,6 @@ export default forwardRef(function Viewer3D(
     const objGizmo = new THREE.Object3D()
     objGizmo.name = 'OBJ_Gizmo'
     objGizmo.position.copy(com)
-    // Remember the rest pose: the gizmo lives at the centre of mass, never at
-    // the world origin. resetMeshTransform() restores this exact position.
-    state.gizmoRest = { x: com.x, y: com.y, z: com.z }
     objGizmo.add(mesh)
     state.objGizmo = objGizmo
     state.scene.add(objGizmo)
@@ -856,6 +888,13 @@ export default forwardRef(function Viewer3D(
             onClick={() => onSettle?.()}
           >
             Settle
+          </button>
+          <button
+            className="toolbar-action"
+            title="Center on turntable (X0, Z0)"
+            onClick={() => onCenter?.()}
+          >
+            Center
           </button>
           <span className="toolbar-hint">
             L-click select/move · R-click rotate view · Wheel zoom

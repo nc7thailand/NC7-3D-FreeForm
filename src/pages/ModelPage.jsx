@@ -90,6 +90,7 @@ export default function ModelPage() {
     stock,
     handleSettle,
     handleReset,
+    handleCenter,
   } = useAppState()
 
   return (
@@ -107,6 +108,7 @@ export default function ModelPage() {
               showModelBBox={stock.showModelBBox !== false}
               onSettle={handleSettle}
               onReset={handleReset}
+              onCenter={handleCenter}
             />
           </div>
           {status && <div className="status-bar status-bar--above-nav">{status}</div>}

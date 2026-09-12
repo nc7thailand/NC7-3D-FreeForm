@@ -39,6 +39,11 @@ function prepareRawGeometry(geo) {
     geo.computeBoundingBox()
     const centroid = geo.boundingBox.getCenter(new THREE.Vector3())
     geo.translate(-centroid.x, -centroid.y, -centroid.z)
+    // Drop onto the floor so the model stands on Y=0 from the moment it loads.
+    // Centring alone leaves the model straddling the floor, which parks the
+    // gizmo pivot at Y=0 instead of the model's real centre of mass.
+    geo.computeBoundingBox()
+    geo.translate(0, -geo.boundingBox.min.y, 0)
     geo.userData.nc7CentroidApplied = true
     geo.computeBoundingBox()
   }
@@ -161,6 +166,9 @@ export function AppStateProvider({ children }) {
       geo.userData.nc7CentroidApplied = true
       setGeometry(geo)
       updateStatsFrom(geo)
+      // The geometry moved under the viewer's feet; re-park the gizmo pivot on
+      // the new centre of mass or it stays behind on the floor.
+      viewerRef.current?.refreshMeshPivot?.()
     }
     planePoint.current.copy(planePointFromStock(stock))
     // Gizmo transform is baked into the geometry on leaving the Model page, so
@@ -311,6 +319,12 @@ export function AppStateProvider({ children }) {
     setGeometry(workingRef.current)
     updateStatsFrom(workingRef.current)
     setStatus('Settled: lowest point of bounding box placed on floor (Y=0).')
+  }
+
+  const handleCenter = () => {
+    if (!workingRef.current) { setStatus('Load an STL first.'); return }
+    viewerRef.current?.centerMesh?.()
+    setStatus('Centred on turntable: centre of mass moved to X0, Z0 (Y unchanged).')
   }
 
   const handleSimplify = (ratio) => {
@@ -534,6 +548,7 @@ export function AppStateProvider({ children }) {
     handleSimplify,
     handleExport,
     handleReset,
+    handleCenter,
     handleStockChange,
     handleMeshTransformChange,
     saveModelStage,
