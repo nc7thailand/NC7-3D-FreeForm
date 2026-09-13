@@ -8,17 +8,29 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
  * Supports both binary and ASCII STL via Three.js STLLoader.
  *
  * @param {File} file - The .stl File object from the file input
+ * @param {{ onReadProgress?: (loaded: number, total: number) => void, onStage?: (stage: string) => void }} [hooks]
  * @returns {Promise<THREE.BufferGeometry>}
  */
-export function loadSTLFile(file) {
+export function loadSTLFile(file, hooks = {}) {
+  const { onReadProgress, onStage } = hooks
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
 
+    // Byte progress is only observable while reading; STLLoader.parse and
+    // computeVertexNormals below are opaque synchronous loops with no hooks.
+    reader.onprogress = (event) => {
+      if (event.lengthComputable && onReadProgress) {
+        onReadProgress(event.loaded, event.total)
+      }
+    }
+
     reader.onload = (event) => {
       try {
+        onStage?.('Parsing mesh…')
         const loader = new STLLoader()
         // STLLoader.parse accepts ArrayBuffer (binary) or String (ASCII)
         const geometry = loader.parse(event.target.result)
+        onStage?.('Computing normals…')
         geometry.computeVertexNormals()
         resolve(geometry)
       } catch (err) {

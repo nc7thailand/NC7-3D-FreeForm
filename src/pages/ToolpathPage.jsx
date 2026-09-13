@@ -23,6 +23,7 @@ function ToolpathPanel() {
     thetaDeg,
     profile,
     cutJob,
+    applyToolpathSettings,
   } = useAppState()
 
   const wirePointCount = useMemo(() => {
@@ -61,6 +62,13 @@ function ToolpathPanel() {
           </div>
           <p className="panel-hint">Range 3–64 · default 16 · starts at 0°</p>
           <p className="panel-hint">Step: {stepDeg.toFixed(2)}° · {cutCount} cuts (half-span, 0–180°)</p>
+          <button
+            type="button"
+            className="apply-toolpath"
+            onClick={() => applyToolpathSettings()}
+          >
+            Apply
+          </button>
           {cutJob && (
             <p className="profile-stats">Saved job: {cutJob.rotationN} cuts in memory</p>
           )}

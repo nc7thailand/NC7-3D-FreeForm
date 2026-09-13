@@ -106,9 +106,9 @@ export default function PageNav({ page }) {
 
   if (!config) return null
 
-  const goNext = () => {
-    if (page === 'model' && !saveModelStage()) return
-    if (page === 'toolpath' && !saveToolpathStage()) return
+  const goNext = async () => {
+    if (page === 'model' && !(await saveModelStage())) return
+    if (page === 'toolpath' && !(await saveToolpathStage())) return
     if (config.next) navigate(config.next)
   }
 

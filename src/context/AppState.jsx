@@ -33,6 +33,13 @@ const DEFAULT_STOCK = {
 }
 const DEFAULT_ROTATION_N = 16
 
+/**
+ * Busy-overlay timing. A job that finishes faster than BUSY_MIN_MS still shows
+ * the overlay for that long, so it reads as deliberate feedback rather than a
+ * flash. Jobs slower than that are unaffected.
+ */
+const BUSY_MIN_MS = 600
+
 function prepareRawGeometry(geo) {
   if (!geo) return geo
   if (!geo.userData.nc7CentroidApplied) {
@@ -61,6 +68,10 @@ export function AppStateProvider({ children }) {
   const [resetKey, setResetKey] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
 
+  // Blocking busy state for long synchronous jobs: { active, message, progress }
+  // progress is null when the job cannot report a step count.
+  const [busy, setBusy] = useState({ active: false, message: '', progress: null })
+
   const [stock, setStock] = useState(DEFAULT_STOCK)
   const [rotationN, setRotationN] = useState(DEFAULT_ROTATION_N)
   const [cutIndex, setCutIndex] = useState(0)
@@ -79,6 +90,37 @@ export function AppStateProvider({ children }) {
 
   const cutCount = effectiveCutCount(rotationN)
   const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / rotationN : 0
+
+  /**
+   * Busy helpers. Long jobs are synchronous in JS, so the overlay has to be
+   * painted before the work starts — callers must await a paint tick after
+   * beginBusy() and before running the job (see yieldToPaint below).
+   */
+  const busyShownAtRef = useRef(0)
+
+  const beginBusy = useCallback((message, progress = null) => {
+    busyShownAtRef.current = performance.now()
+    setBusy({ active: true, message, progress })
+  }, [])
+
+  const setBusyProgress = useCallback((done, total) => {
+    setBusy((prev) => (prev.active ? { ...prev, progress: { done, total } } : prev))
+  }, [])
+
+  const endBusy = useCallback(async () => {
+    // Keep the overlay up for a minimum time so a fast job does not flash a
+    // barely-visible overlay — a blink reads as a glitch, not as feedback.
+    const elapsed = performance.now() - busyShownAtRef.current
+    const remaining = BUSY_MIN_MS - elapsed
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
+    setBusy({ active: false, message: '', progress: null })
+  }, [])
+
+  /** Resolve after the browser has had a chance to paint. */
+  const yieldToPaint = useCallback(
+    () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))),
+    []
+  )
 
   const updateStatsOnly = useCallback((geo) => {
     const box = computeBoundingBox(geo)
@@ -154,40 +196,6 @@ export function AppStateProvider({ children }) {
     setToolpathTick((t) => t + 1)
   }, [updateStatsOnly])
 
-  const recomputeToolpath = useCallback(() => {
-    const geo = workingRef.current
-    if (!geo) {
-      setProfile(null)
-      setSilhouettePreview(null)
-      return
-    }
-    const settled = ensureGeometryOnFloor(geo)
-    if (settled) {
-      geo.userData.nc7CentroidApplied = true
-      setGeometry(geo)
-      updateStatsFrom(geo)
-      // The geometry moved under the viewer's feet; re-park the gizmo pivot on
-      // the new centre of mass or it stays behind on the floor.
-      viewerRef.current?.refreshMeshPivot?.()
-    }
-    planePoint.current.copy(planePointFromStock(stock))
-    // Gizmo transform is baked into the geometry on leaving the Model page, so
-    // the toolpath must be computed from vertex data alone — never re-apply a
-    // stale viewer world matrix here.
-    const worldMatrix = null
-    const silhouetteOpts = silhouetteOptsFromStock(stock)
-    try {
-      const result = buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
-      const preview = buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
-      setProfile(result)
-      setSilhouettePreview(preview)
-    } catch (err) {
-      setProfile(null)
-      setSilhouettePreview(null)
-      setStatus(`Toolpath error: ${err.message}`)
-    }
-  }, [thetaDeg, stock.t, stock.w, stock.h, stock.lo, stock.kerf, stock.profileAccuracy, updateStatsFrom])
-
   useEffect(() => {
     let cancelled = false
 
@@ -233,20 +241,53 @@ export function AppStateProvider({ children }) {
     return () => { cancelled = true }
   }, [applyRestoredSession, updateStatsFrom])
 
+  // Preview the buffered cut for the current index. Everything is computed in
+  // one batch on Apply, so stepping through cuts never re-runs a silhouette.
   useEffect(() => {
-    recomputeToolpath()
-  }, [geometry, thetaDeg, toolpathTick, recomputeToolpath])
+    if (cutJob?.cuts?.length) {
+      const cut = cutJob.cuts[Math.min(cutIndex, cutJob.cuts.length - 1)]
+      setProfile(cut?.profile ?? null)
+      return
+    }
+    // No batch yet (first visit, or settings changed but not applied): show a
+    // single preview so the page is not empty.
+    const geo = workingRef.current
+    if (!geo) {
+      setProfile(null)
+      setSilhouettePreview(null)
+      return
+    }
+    const settled = ensureGeometryOnFloor(geo)
+    if (settled) {
+      geo.userData.nc7CentroidApplied = true
+      setGeometry(geo)
+      updateStatsFrom(geo)
+      viewerRef.current?.refreshMeshPivot?.()
+    }
+    planePoint.current.copy(planePointFromStock(stock))
+    const worldMatrix = null
+    const silhouetteOpts = silhouetteOptsFromStock(stock)
+    try {
+      setProfile(buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts))
+      setSilhouettePreview(
+        buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
+      )
+    } catch (err) {
+      setProfile(null)
+      setSilhouettePreview(null)
+      setStatus(`Toolpath error: ${err.message}`)
+    }
+  }, [cutIndex, cutJob, thetaDeg, stock.t, stock.w, stock.h, stock.lo, stock.kerf, stock.profileAccuracy, geometry, toolpathTick, updateStatsFrom])
 
+  // Changing settings only clamps which cut is previewed. The buffered job is
+  // kept until the user presses Apply, so ◀ ▶ stays instant in the meantime.
   useEffect(() => {
     if (hydrating) return
     setCutIndex((i) => Math.min(i, Math.max(effectiveCutCount(rotationN) - 1, 0)))
-    setCutJob(null)
   }, [rotationN, hydrating])
 
-  useEffect(() => {
-    if (hydrating) return
-    setCutJob(null)
-  }, [stock.w, stock.t, stock.h, stock.lo, stock.bo, stock.kerf, stock.topOffset, stock.boAuto, stock.boMargin, stock.profileAccuracy, hydrating])
+  // Settings changes do NOT invalidate the buffered job — it is replaced on
+  // Apply. Keeping it lets the user keep browsing cuts while editing values.
 
   useEffect(() => {
     if (!sessionReady || hydrating || !geometry) return undefined
@@ -279,8 +320,21 @@ export function AppStateProvider({ children }) {
 
   const handleFile = async (file) => {
     setStatus('Loading STL...')
+    beginBusy(`Loading ${file.name}…`, { done: 0, total: 100 })
+    await yieldToPaint()
     try {
-      const rawGeo = await loadSTLFile(file)
+      const rawGeo = await loadSTLFile(file, {
+        onReadProgress: (loaded, total) => {
+          // Reading is typically fast; cap it below 100 so the bar does not sit
+          // full while parse + normals still run.
+          setBusyProgress(Math.round((loaded / total) * 70), 100)
+        },
+        onStage: (stage) => {
+          // Parse and normals have no byte progress — show the stage with an
+          // indeterminate-looking bar so we are not implying a known fraction.
+          setBusy(() => ({ active: true, message: stage, progress: null }))
+        },
+      })
       const geo = prepareRawGeometry(rawGeo)
       workingRef.current = geo
       setGeometry(geo)
@@ -288,9 +342,12 @@ export function AppStateProvider({ children }) {
       setModelName(file.name)
       setCutJob(null)
       setCutIndex(0)
+      setMenuOpen(false)
       setStatus(`Loaded ${file.name} (${geo.attributes.position.count / 3} triangles)`)
     } catch (err) {
       setStatus(`Error: ${err.message}`)
+    } finally {
+      await endBusy()
     }
   }
 
@@ -401,12 +458,13 @@ export function AppStateProvider({ children }) {
     return true
   }, [bakeModelTransform, updateStatsFrom])
 
-  const computeCutJob = useCallback(() => {
+  const computeCutJob = useCallback(async (onProgress) => {
     const geo = workingRef.current
     if (!geo) return null
     planePoint.current.copy(planePointFromStock(stock))
-    const job = buildCutJob(geo, rotationN, planePoint.current, {
+    const job = await buildCutJob(geo, rotationN, planePoint.current, {
       silhouetteOpts: silhouetteOptsFromStock(stock),
+      onProgress,
     })
     job.stock = { ...stock }
     for (const cut of job.cuts) {
@@ -415,12 +473,18 @@ export function AppStateProvider({ children }) {
     return job
   }, [rotationN, stock])
 
-  const saveToolpathStage = useCallback(() => {
+  const saveToolpathStage = useCallback(async () => {
     const geo = workingRef.current
     if (!geo) return false
-    setStatus(`Computing ${effectiveCutCount(rotationN)} cuts (N=${rotationN}, half-span)…`)
+    const total = effectiveCutCount(rotationN)
+    setStatus(`Computing ${total} cuts (N=${rotationN}, half-span)…`)
+    beginBusy('Computing toolpath…', { done: 0, total })
+    await yieldToPaint()
     try {
-      const job = computeCutJob()
+      const job = await computeCutJob(async (done, count) => {
+        setBusyProgress(done, count)
+        await yieldToPaint()
+      })
       if (!cutJobHasProfile(job)) {
         setStatus('No cross-section found — check model or rotation count.')
         return false
@@ -432,8 +496,20 @@ export function AppStateProvider({ children }) {
     } catch (err) {
       setStatus(`Toolpath error: ${err.message}`)
       return false
+    } finally {
+      await endBusy()
     }
-  }, [computeCutJob, rotationN])
+  }, [computeCutJob, rotationN, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+
+  /**
+   * Toolpath page Apply button. Recomputes every cut for the current settings
+   * and resets the preview to the first cut.
+   */
+  const applyToolpathSettings = useCallback(async () => {
+    const ok = await saveToolpathStage()
+    if (ok) setCutIndex(0)
+    return ok
+  }, [saveToolpathStage])
 
   const handleSaveProject = useCallback(async () => {
     if (!workingRef.current) {
@@ -442,13 +518,15 @@ export function AppStateProvider({ children }) {
     }
 
     setStatus('Saving project…')
+    beginBusy('Saving project…')
+    await yieldToPaint()
     try {
       bakeModelTransform()
       let job = cutJob
       if (!cutJobHasProfile(job)) {
-        job = computeCutJob()
+        job = await computeCutJob()
       } else if (job.rotationN !== rotationN) {
-        job = computeCutJob()
+        job = await computeCutJob()
       }
 
       const blob = await packProject({
@@ -473,8 +551,10 @@ export function AppStateProvider({ children }) {
       setStatus(`Saved ${defaultProjectFilename(modelName)}`)
     } catch (err) {
       setStatus(`Save failed: ${err.message}`)
+    } finally {
+      await endBusy()
     }
-  }, [bakeModelTransform, computeCutJob, cutJob, cutIndex, gcodeSettings, modelName, rotationN, stock])
+  }, [bakeModelTransform, computeCutJob, cutJob, cutIndex, gcodeSettings, modelName, rotationN, stock, beginBusy, endBusy, yieldToPaint])
 
   const handleOpenProject = useCallback(async (file) => {
     setStatus('Opening project…')
@@ -522,6 +602,11 @@ export function AppStateProvider({ children }) {
     resetKey,
     menuOpen,
     setMenuOpen,
+    busy,
+    beginBusy,
+    setBusyProgress,
+    endBusy,
+    yieldToPaint,
     stock,
     rotationN,
     setRotationN,
@@ -553,6 +638,7 @@ export function AppStateProvider({ children }) {
     handleMeshTransformChange,
     saveModelStage,
     saveToolpathStage,
+    applyToolpathSettings,
     handleSaveProject,
     handleOpenProject,
   }

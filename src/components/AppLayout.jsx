@@ -1,10 +1,11 @@
 import React from 'react'
 import { Outlet } from 'react-router-dom'
 import Stepper from './Stepper'
+import LoadingOverlay from './LoadingOverlay'
 import { useAppState } from '../context/AppState'
 
 export default function AppLayout() {
-  const { menuOpen, setMenuOpen } = useAppState()
+  const { menuOpen, setMenuOpen, busy } = useAppState()
 
   return (
     <div className="app">
@@ -31,6 +32,12 @@ export default function AppLayout() {
       <div className="content">
         <Outlet />
       </div>
+
+      <LoadingOverlay
+        active={busy.active}
+        message={busy.message}
+        progress={busy.progress}
+      />
     </div>
   )
 }

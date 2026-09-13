@@ -5,15 +5,15 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import ViewCube from './ViewCube'
 import {
   toRadians,
-  unprojectFromSection,
-  shiftSectionToMiddleAnchor,
   cuttingPlane,
   planePointMiddleFromStock,
 } from '../lib/toolpath'
-import { wirePathFromProfile } from '../lib/wirePath'
+import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 
 /** Rear cutting plane overlay — set false to show middle plane only. */
 const SHOW_CUTTING_PLANE = false
+/** Shadow plane + collimated ray-cast silhouette (toolpath page). */
+const SHOW_SHADOW_PLANE = true
 
 /**
  * Park the OBJ_Gizmo pivot (and its opposite mesh offset) on the geometry's
@@ -88,11 +88,17 @@ export default forwardRef(function Viewer3D(
     rotaryAxisLine: null,
     stockBox: null,
     profileLines: null,
-    middleProfileLines: null,
+    shadowPlane: null,
+    shadowPoints: null,
   })
 
   useImperativeHandle(ref, () => ({
     getMeshWorldMatrix() {
+      // On read-only pages (toolpath/gcode) the viewer turns the mesh to
+      // preview θ. That pose is presentation only — reporting it as a
+      // transform would let a caller bake the preview angle into the vertices,
+      // which made the model appear to keep rotating on its own.
+      if (readOnlyRef.current) return null
       const mesh = stateRef.current?.mesh
       if (!mesh) return null
       mesh.updateMatrixWorld(true)
@@ -113,6 +119,9 @@ export default forwardRef(function Viewer3D(
       if (state.transform) state.transform.attach(gizmo)
     },
     resetMeshTransform() {
+      // Read-only pages preview θ by turning the mesh; clearing the pose there
+      // would fight the preview effect and make the model drift every save tick.
+      if (readOnlyRef.current) return
       const state = stateRef.current
       const gizmo = state?.objGizmo
       if (!gizmo) return
@@ -631,14 +640,16 @@ export default forwardRef(function Viewer3D(
     disposeObj(state.rotaryAxisLine)
     disposeObj(state.stockBox)
     disposeObj(state.profileLines)
-    disposeObj(state.middleProfileLines)
+    disposeObj(state.shadowPlane)
+    disposeObj(state.shadowPoints)
     state.cutPlane = null
     state.cutPlaneEdges = null
     state.middlePlaneGroup = null
     state.rotaryAxisLine = null
     state.stockBox = null
     state.profileLines = null
-    state.middleProfileLines = null
+    state.shadowPlane = null
+    state.shadowPoints = null
 
     if (!showToolpathOverlay) {
       return
@@ -712,29 +723,6 @@ export default forwardRef(function Viewer3D(
     state.scene.add(rotaryAxisLine)
     state.rotaryAxisLine = rotaryAxisLine
 
-    const addProfilePolyline = (points, frame, targetKey, { loop = false, color = 0xe84040, opacity = 1 } = {}) => {
-      if (!points || points.length < 2 || !frame) return
-      const positions = []
-      for (const p of points) {
-        const w = unprojectFromSection(p, frame)
-        positions.push(w.x, w.y, w.z)
-      }
-      const lineGeo = new THREE.BufferGeometry()
-      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-      const lineMat = new THREE.LineBasicMaterial({
-        color,
-        transparent: opacity < 1,
-        opacity,
-        linewidth: 2,
-        depthTest: false,
-        depthWrite: false,
-      })
-      const lines = loop ? new THREE.LineLoop(lineGeo, lineMat) : new THREE.Line(lineGeo, lineMat)
-      lines.renderOrder = loop ? 1 : 2
-      state.scene.add(lines)
-      state[targetKey] = lines
-    }
-
     // Foam stock block wireframe (W × H × T, axis-aligned)
     if (stock) {
       const { w, t, h } = stock
@@ -747,28 +735,89 @@ export default forwardRef(function Viewer3D(
       boxGeo.dispose()
     }
 
-    // Method 1 left wire path (kerf + stock clamp) — open polyline on MP
-    if (profile?.polylines?.length && profile.frame && stock) {
-      const wirePath = wirePathFromProfile(profile, stock, thetaDeg)
-      if (wirePath.length >= 2) {
-        const middleFrame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
-        const shifted = shiftSectionToMiddleAnchor(wirePath, profile.frame)
-        addProfilePolyline(shifted, middleFrame, 'profileLines', { loop: false, color: 0xff9900 })
+    // --- Shadow plane + collimated-light silhouette (edge projection) ---
+    if (SHOW_SHADOW_PLANE && geometry) {
+      geometry.computeBoundingBox()
+      const bb = geometry.boundingBox
+      const modelSize = {
+        x: bb.max.x - bb.min.x,
+        y: bb.max.y - bb.min.y,
+        z: bb.max.z - bb.min.z,
+      }
+      const plane = shadowPlaneFor(geometry, thetaDeg, 160)
+      const w = plane.uMax - plane.uMin
+      const h = plane.vMax - plane.vMin
+      const planeGeo2 = new THREE.PlaneGeometry(w, h)
+      const planeMat2 = new THREE.MeshBasicMaterial({
+        color: 0x888888,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+      const shadowPlaneMesh = new THREE.Mesh(planeGeo2, planeMat2)
+      shadowPlaneMesh.position.set(0, plane.centreY, plane.z)
+      state.scene.add(shadowPlaneMesh)
+      state.shadowPlane = shadowPlaneMesh
+
+      const t0 = performance.now()
+      const result = projectShadowOutline(geometry, plane)
+      const elapsedMs = performance.now() - t0
+      const outline = result.outline
+
+      let outlineY = null
+      let outlineX = null
+      if (outline.length >= 2) {
+        let minY = Infinity, maxY = -Infinity, minX = Infinity, maxX = -Infinity
+        for (let k = 0; k < outline.length; k += 2) {
+          const ox = outline[k]
+          const oy = outline[k + 1]
+          if (ox < minX) minX = ox
+          if (ox > maxX) maxX = ox
+          if (oy < minY) minY = oy
+          if (oy > maxY) maxY = oy
+        }
+        outlineX = [Math.round(minX), Math.round(maxX)]
+        outlineY = [Math.round(minY), Math.round(maxY)]
+      }
+      // Debug snapshot — read window.__nc7shadow in the console.
+      window.__nc7shadow = {
+        method: 'edge-projection',
+        elapsedMs: Math.round(elapsedMs * 10) / 10,
+        modelSize: {
+          x: Math.round(modelSize.x),
+          y: Math.round(modelSize.y),
+          z: Math.round(modelSize.z),
+        },
+        scanlines: plane.scanlines,
+        occupiedRows: result.occupied,
+        outlinePts: outline.length / 2,
+        outlineX,
+        outlineY,
+        projectedWidth: Math.round(plane.projectedWidth),
+        centreY: Math.round(plane.centreY),
+        vMin: Math.round(plane.vMin),
+        vMax: Math.round(plane.vMax),
+        thetaDeg,
+        z: Math.round(plane.z),
+      }
+      if (outline.length >= 6) {
+        const positions = []
+        for (let k = 0; k < outline.length; k += 2) {
+          positions.push(outline[k], outline[k + 1], plane.z)
+        }
+        const lineGeo = new THREE.BufferGeometry()
+        lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x000000, depthTest: false })
+        const shadowLine = new THREE.LineLoop(lineGeo, lineMat)
+        state.scene.add(shadowLine)
+        state.shadowPoints = shadowLine
       }
     }
 
-    // Raw left silhouette — faint reference (before kerf)
-    if (profile?.polylines?.length && profile.frame) {
-      const middleFrame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
-      for (const poly of profile.polylines) {
-        const shifted = shiftSectionToMiddleAnchor(poly, profile.frame)
-        addProfilePolyline(shifted, middleFrame, 'middleProfileLines', {
-          loop: false,
-          color: 0x8899aa,
-          opacity: 0.35,
-        })
-        break
-      }
+    // Rotate the mesh itself to match the current θ (toolpath page preview).
+    if (state.objGizmo) {
+      state.objGizmo.rotation.y = toRadians(thetaDeg)
     }
 
     return () => {
@@ -788,7 +837,8 @@ export default forwardRef(function Viewer3D(
       disposeObj(state.rotaryAxisLine)
       disposeObj(state.stockBox)
       disposeObj(state.profileLines)
-      disposeObj(state.middleProfileLines)
+      disposeObj(state.shadowPlane)
+      disposeObj(state.shadowPoints)
     }
   }, [thetaDeg, stock, profile, silhouettePreview, geometry, resetKey, showToolpathOverlay])
 

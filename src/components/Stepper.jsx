@@ -16,10 +16,10 @@ export default function Stepper() {
     return false
   }
 
-  const goTo = (path, e) => {
+  const goTo = async (path, e) => {
     if (pathname === ROUTES.model && path === ROUTES.toolpath) {
       e.preventDefault()
-      if (saveModelStage()) navigate(path)
+      if (await saveModelStage()) navigate(path)
       return
     }
     if (
@@ -27,7 +27,7 @@ export default function Stepper() {
       && (path === ROUTES.gcode || path === ROUTES.simulate)
     ) {
       e.preventDefault()
-      if (saveToolpathStage()) navigate(path)
+      if (await saveToolpathStage()) navigate(path)
     }
   }
 

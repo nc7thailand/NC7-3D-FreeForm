@@ -42,22 +42,28 @@ export function cutAnglesForN(n, options = {}) {
 /**
  * Compute cross-section profiles for every cut angle.
  *
+ * Async so a caller can paint progress between cuts: each silhouette pass is a
+ * synchronous sweep over every triangle and can stall the frame on dense meshes.
+ *
  * @param {THREE.BufferGeometry} geometry
  * @param {number} rotationN - user-facing N
  * @param {THREE.Vector3} planePoint
- * @param {{ halfSpan?: boolean }} [options]
- * @returns {{ rotationN: number, cutCount: number, halfSpan: boolean, cuts: Array }}
+ * @param {{ halfSpan?: boolean, onProgress?: (done: number, total: number) => void|Promise<void> }} [options]
+ * @returns {Promise<{ rotationN: number, cutCount: number, halfSpan: boolean, cuts: Array }>}
  */
-export function buildCutJob(geometry, rotationN, planePoint, options = {}) {
+export async function buildCutJob(geometry, rotationN, planePoint, options = {}) {
   const userN = clampRotationN(rotationN)
   const halfSpan = options.halfSpan ?? FULL_SILHOUETTE_HALF_SPAN
   const silhouetteOpts = options.silhouetteOpts ?? {}
   const angles = cutAnglesForN(userN, { halfSpan })
-  const cuts = angles.map((thetaDeg, index) => ({
-    index,
-    thetaDeg,
-    profile: buildSectionProfile(geometry, thetaDeg, planePoint, null, silhouetteOpts),
-  }))
+  const onProgress = options.onProgress
+  const cuts = []
+  for (let index = 0; index < angles.length; index++) {
+    const thetaDeg = angles[index]
+    const profile = buildSectionProfile(geometry, thetaDeg, planePoint, null, silhouetteOpts)
+    cuts.push({ index, thetaDeg, profile })
+    if (onProgress) await onProgress(index + 1, angles.length)
+  }
   return {
     rotationN: userN,
     cutCount: cuts.length,
