@@ -358,6 +358,8 @@ export default forwardRef(function Viewer3D(
       const { center, dist } = info
       let offset
       switch (view) {
+        // Matches the framing applied when a model is first loaded.
+        case 'home':   offset = new THREE.Vector3(dist * 1.2, dist * 0.3, 0); break
         case 'front':  offset = new THREE.Vector3(0, 0, dist); break
         case 'back':   offset = new THREE.Vector3(0, 0, -dist); break
         case 'right':  offset = new THREE.Vector3(dist, 0, 0); break
@@ -923,7 +925,7 @@ export default forwardRef(function Viewer3D(
         onSetView={setView}
         onOrbit={orbitView}
         onFlip={flipView}
-        onHome={() => setView('iso')}
+        onHome={() => setView('home')}
       />
     </div>
   )
