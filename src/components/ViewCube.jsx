@@ -160,7 +160,9 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
       edges.geometry.dispose()
       edges.material.dispose()
       renderer.dispose()
-      renderer.forceContextLoss()
+      // No forceContextLoss() here: this widget remounts whenever its callback
+      // props change, and forcing a context loss each time destroys a context
+      // the main viewport is still drawing with.
       mount.removeChild(renderer.domElement)
       cubeRef.current = null
     }

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
+import React, { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -408,8 +408,14 @@ export default forwardRef(function Viewer3D(
     window.addEventListener('keydown', onKeyDown)
 
     // --- Animation loop ---
+    // `running` guards against a stale loop outliving its cleanup: React
+    // StrictMode mounts twice in development, and a loop still rendering into a
+    // disposed (context-lost) renderer floods the console with shader errors.
+    let running = true
+    let animId = 0
     const animate = () => {
-      requestAnimationFrame(animate)
+      if (!running) return
+      animId = requestAnimationFrame(animate)
       controls.update()
 
       // Keep the yellow bounding box always bound to the model.
@@ -439,6 +445,8 @@ export default forwardRef(function Viewer3D(
     window.addEventListener('resize', onResize)
 
     return () => {
+      running = false
+      cancelAnimationFrame(animId)
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKeyDown)
       renderer.domElement.removeEventListener('pointerdown', onMouseDown)
@@ -836,14 +844,17 @@ export default forwardRef(function Viewer3D(
     state.rotateByAxis(state.activeAxis, deg)
   }
 
-  // Reposition the camera to a named world view
-  const setView = (view) => {
+  // Reposition the camera to a named world view.
+  // useCallback keeps this stable: ViewCube rebuilds its WebGL context when its
+  // callback props change, so a new function per render would remount it on
+  // every frame-affecting state update.
+  const setView = useCallback((view) => {
     const state = stateRef.current
     if (state && state.frameCamera) state.frameCamera(view)
-  }
+  }, [])
 
   // Orbit the camera 90° in a direction (up/down/left/right)
-  const flipView = (dir) => {
+  const flipView = useCallback((dir) => {
     const state = stateRef.current
     if (!state || !state.orbitCamera) return
     const q = Math.PI / 2
@@ -851,12 +862,14 @@ export default forwardRef(function Viewer3D(
     else if (dir === 'down') state.orbitCamera(0, q)
     else if (dir === 'left') state.orbitCamera(-q, 0)
     else if (dir === 'right') state.orbitCamera(q, 0)
-  }
+  }, [])
 
-  const orbitView = (dAzimuth, dPolar) => {
+  const orbitView = useCallback((dAzimuth, dPolar) => {
     const state = stateRef.current
     if (state && state.orbitCamera) state.orbitCamera(dAzimuth, dPolar)
-  }
+  }, [])
+
+  const goHome = useCallback(() => setView('home'), [setView])
 
   return (
     <div className={`viewport-wrapper${readOnly ? ' viewport-readonly' : ''}`}>
@@ -925,7 +938,7 @@ export default forwardRef(function Viewer3D(
         onSetView={setView}
         onOrbit={orbitView}
         onFlip={flipView}
-        onHome={() => setView('home')}
+        onHome={goHome}
       />
     </div>
   )
