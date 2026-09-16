@@ -11,7 +11,7 @@
 
 ## 2. Stage 2 Plan — Vector Boolean Split
 
-- Current: splitLoopAtAxis exists in src/lib/silhouetteWire.js
+- The previous Stage 2-4 implementation was removed during the Stage 1-only refocus. It exists only as uncommitted scaffolding in scripts/gen-stage3-4-5.mjs. Treat Stage 2 as a fresh implementation on top of the locked Stage 1 pipeline. Reference gen-stage3-4-5.mjs for the original logic, but expect to rebuild cleanly.
 - Goal: split silhouette at rotation axis into left/right halves
 - Verify against DevFoam's left/right behavior
 - Left only mode: one half per rotation (16 cuts)
