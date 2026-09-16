@@ -9,11 +9,59 @@ import {
   planePointMiddleFromStock,
 } from '../lib/toolpath'
 import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
+import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 
 /** Rear cutting plane overlay — set false to show middle plane only. */
 const SHOW_CUTTING_PLANE = false
-/** Shadow plane + collimated ray-cast silhouette (toolpath page). */
-const SHOW_SHADOW_PLANE = true
+/** Shadow plane + collimated ray-cast silhouette (toolpath page). Disabled —
+ *  no use at this stage; keep only model, bounding box, and centre wire guide. */
+const SHOW_SHADOW_PLANE = false
+
+/**
+ * Dashed bounding box drawn in the MODEL's LOCAL space, added as a CHILD of the
+ * model group so it rotates with the model. Its dimensions are computed once
+ * from the geometry's local bounding box and never recalculated, so the box
+ * never expands when the model turns (an AABB would swing its corners out along
+ * world axes and grow at non-orthogonal angles).
+ *
+ * Returns a THREE.LineSegments positioned at the model's local bbox centre with
+ * its own local size equal to the bbox size. Because it is parented to
+ * `object`, any rotation/translation of `object` carries the box along rigidly.
+ */
+function createDashedBBox(geometry, color = 0xffcc33) {
+  geometry.computeBoundingBox()
+  const bb = geometry.boundingBox
+  if (!bb || bb.isEmpty()) {
+    // Empty geometry — return a minimal inert box so callers don't null-check.
+    return new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({ color, dashSize: 1.2, gapSize: 0.8 })
+    )
+  }
+
+  const size = bb.getSize(new THREE.Vector3())
+  const center = bb.getCenter(new THREE.Vector3())
+
+  const boxGeo = new THREE.BoxGeometry(size.x, size.y, size.z)
+  const edgesGeo = new THREE.EdgesGeometry(boxGeo)
+  const mat = new THREE.LineDashedMaterial({
+    color,
+    dashSize: 1.2,
+    gapSize: 0.8,
+    linewidth: 1,
+  })
+  const lines = new THREE.LineSegments(edgesGeo, mat)
+  lines.position.copy(center)
+  lines.computeLineDistances()
+
+  // Remind callers this object is static: no per-frame update is needed.
+  lines.userData.isStaticBBox = true
+
+  // Dispose the BoxGeometry we only used to derive edges.
+  boxGeo.dispose()
+
+  return lines
+}
 
 /**
  * Park the OBJ_Gizmo pivot (and its opposite mesh offset) on the geometry's
@@ -52,6 +100,7 @@ export default forwardRef(function Viewer3D(
     stock,
     profile,
     silhouettePreview,
+    cutMode = CUT_MODE_LEFT_TO_RIGHT,
     onMeshTransformChange,
     onSettle,
     onReset,
@@ -427,11 +476,8 @@ export default forwardRef(function Viewer3D(
       animId = requestAnimationFrame(animate)
       controls.update()
 
-      // Keep the yellow bounding box always bound to the model.
-      // BoxHelper.update() recomputes from the attached object's world AABB.
-      if (state.selectionBox) {
-        state.selectionBox.update()
-      }
+      // The bounding box is a static child of the model group and rotates with
+      // it; no per-frame recalculation is needed.
 
       // Sync the Three.js view cube with the main camera
       if (viewCubeRef.current && state.frameInfo) {
@@ -476,9 +522,9 @@ export default forwardRef(function Viewer3D(
     if (state.transform) state.transform.detach()
     state.selected = null
 
-    // Dispose previous selection box helper
+    // Dispose previous selection box helper (now a child of the mesh).
     if (state.selectionBox) {
-      state.scene.remove(state.selectionBox)
+      if (state.selectionBox.parent) state.selectionBox.parent.remove(state.selectionBox)
       state.selectionBox.geometry.dispose()
       state.selectionBox.material.dispose()
       state.selectionBox = null
@@ -522,21 +568,41 @@ export default forwardRef(function Viewer3D(
       roughness: 0.6,
     })
     const mesh = new THREE.Mesh(geometry, material)
-    // Offset mesh so model stays on floor while OBJ_Gizmo is at center of mass
-    mesh.position.copy(com).negate()
     state.mesh = mesh
-
-    // Create pivot at center of mass for move/rotate
+    // Position the mesh relative to the OBJ_Gizmo pivot.
+    //
+    // Read-only (toolpath preview): the pivot sits at the world origin (0,0,0)
+    // = the rotary axis, and the mesh is offset so its bounding box is
+    // bottom-centred on that axis — bottom at Y=0, centre X=0, centre Z=0.
+    // This is the physically correct reference for the rotary hot-wire cut.
+    //
+    // Edit (Model page): the pivot sits at the centre of mass so the move/rotate
+    // gizmo is centred on the model; the mesh is offset back so the model stays
+    // on the floor.
     const objGizmo = new THREE.Object3D()
     objGizmo.name = 'OBJ_Gizmo'
-    objGizmo.position.copy(com)
+    if (readOnly) {
+      geometry.computeBoundingBox()
+      const bb = geometry.boundingBox
+      const translateX = -(bb.min.x + bb.max.x) / 2
+      const translateY = -bb.min.y
+      const translateZ = -(bb.min.z + bb.max.z) / 2
+      objGizmo.position.set(0, 0, 0)
+      mesh.position.set(translateX, translateY, translateZ)
+    } else {
+      objGizmo.position.copy(com)
+      mesh.position.copy(com).negate()
+    }
     objGizmo.add(mesh)
     state.objGizmo = objGizmo
     state.scene.add(objGizmo)
 
     if (showModelBBox) {
-      const selectionBox = new THREE.BoxHelper(objGizmo, 0xffcc33)
-      state.scene.add(selectionBox)
+      // Parent the dashed box to the mesh (the model itself) so it rotates
+      // rigidly with the model and keeps constant dimensions at every angle.
+      // Positioned at the geometry's local bbox centre, computed once.
+      const selectionBox = createDashedBBox(geometry, 0xffcc33)
+      mesh.add(selectionBox)
       state.selectionBox = selectionBox
     }
 
@@ -561,13 +627,12 @@ export default forwardRef(function Viewer3D(
     const size = worldBox.getSize(new THREE.Vector3())
     const maxDim = Math.max(size.x, size.y, size.z) || 1
     const dist = maxDim * 2.5
-    state.camera.position.copy(center).add(new THREE.Vector3(dist * 1.2, dist * 0.3, 0))
-    state.camera.lookAt(center)
-    state.controls.target.copy(center)
-    state.controls.update()
 
     // Remember framing info for the camera view presets
     state.frameInfo = { center: center.clone(), dist }
+
+    // Default camera view = "right" (button "RIGHT" in the view cube).
+    state.frameCamera('right')
 
     // Resize the floor plan / world origin markers to match the model scale
     if (state.floorGrid) {
@@ -597,13 +662,13 @@ export default forwardRef(function Viewer3D(
     if (!state?.scene || !state.objGizmo) return
 
     if (showModelBBox) {
-      if (!state.selectionBox) {
-        const selectionBox = new THREE.BoxHelper(state.objGizmo, 0xffcc33)
-        state.scene.add(selectionBox)
+      if (!state.selectionBox && state.mesh) {
+        const selectionBox = createDashedBBox(state.mesh.geometry, 0xffcc33)
+        state.mesh.add(selectionBox)
         state.selectionBox = selectionBox
       }
     } else if (state.selectionBox) {
-      state.scene.remove(state.selectionBox)
+      if (state.selectionBox.parent) state.selectionBox.parent.remove(state.selectionBox)
       state.selectionBox.geometry.dispose()
       state.selectionBox.material.dispose()
       state.selectionBox = null
@@ -617,7 +682,8 @@ export default forwardRef(function Viewer3D(
 
     const disposeObj = (obj) => {
       if (!obj) return
-      state.scene.remove(obj)
+      if (obj.parent) obj.parent.remove(obj)
+      else state.scene.remove(obj)
       if (obj.geometry) obj.geometry.dispose()
       if (obj.material) {
         if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
@@ -687,18 +753,34 @@ export default forwardRef(function Viewer3D(
       state.cutPlaneEdges = cutPlaneEdges
     }
 
-    // Middle plane (MP) at block centre — pivots on vertical axis through (0, 0, 0)
+    // Middle plane (MP) — the fixed wire-position indicator. In the real
+    // machine the wire is fixed in space and the foam (stock) rotates on the
+    // turntable, so the cutting plane where the wire sits is FIXED in world
+    // space (an X–Y plane, normal +Z). Only the model rotates through it.
+    // Its visible width depends on the cut mode:
+    //   - left → right: full plane (both sides of the rotation axis)
+    //   - left only:    only the u ≤ 0 half (the side being cut)
     const mpGroup = new THREE.Group()
     mpGroup.position.set(0, 0, 0)
-    mpGroup.rotation.y = toRadians(thetaDeg)
 
-    const middleEdgeGeo = new THREE.EdgesGeometry(planeGeo)
-    const middleEdgeMat = new THREE.LineBasicMaterial({
-      color: 0x8899aa,
+    const fullWidth = Math.max(stock?.w ?? extent, stock?.h ?? extent) * 1.08
+    const isLeftOnly = cutMode === CUT_MODE_LEFT_ONLY
+    const mpWidth = isLeftOnly ? fullWidth / 2 : fullWidth
+    const mpHeight = stock?.h ?? extent
+    const mpGeo = new THREE.PlaneGeometry(mpWidth, mpHeight)
+    const mpMat = new THREE.MeshBasicMaterial({
+      color: 0xff3030,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     })
-    mpGroup.add(new THREE.LineSegments(middleEdgeGeo, middleEdgeMat))
+    const mpPlane = new THREE.Mesh(mpGeo, mpMat)
+    // Center the plane so it spans Y=0 … Y=stock.h (full foam height).
+    mpPlane.position.y = mpHeight / 2
+    // In left-only mode, shift the half-plane so it covers u ∈ [-full/2, 0].
+    if (isLeftOnly) mpPlane.position.x = -fullWidth / 4
+    mpGroup.add(mpPlane)
     state.scene.add(mpGroup)
     state.middlePlaneGroup = mpGroup
 
@@ -723,14 +805,15 @@ export default forwardRef(function Viewer3D(
     state.scene.add(rotaryAxisLine)
     state.rotaryAxisLine = rotaryAxisLine
 
-    // Foam stock block wireframe (W × H × T, axis-aligned)
-    if (stock) {
+    // Foam stock block wireframe (W × H × T). Parented to the rotating group
+    // so it turns rigidly with the model; its dimensions are fixed once here.
+    if (stock && state.objGizmo) {
       const { w, t, h } = stock
       const boxGeo = new THREE.BoxGeometry(w, h, t)
       const boxMat = new THREE.LineBasicMaterial({ color: 0x6ea8ff, transparent: true, opacity: 0.55 })
       const stockBox = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo), boxMat)
       stockBox.position.set(0, h / 2, 0)
-      state.scene.add(stockBox)
+      state.objGizmo.add(stockBox)
       state.stockBox = stockBox
       boxGeo.dispose()
     }
@@ -840,7 +923,7 @@ export default forwardRef(function Viewer3D(
       disposeObj(state.shadowPlane)
       disposeObj(state.shadowPoints)
     }
-  }, [thetaDeg, stock, profile, silhouettePreview, geometry, resetKey, showToolpathOverlay])
+  }, [thetaDeg, stock, profile, silhouettePreview, cutMode, geometry, resetKey, showToolpathOverlay])
 
   // View-only mode (Page 2): orbit with left-drag, hide gizmo toolbar
   useEffect(() => {

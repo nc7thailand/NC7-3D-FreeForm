@@ -2,7 +2,6 @@ import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppStateProvider } from './context/AppState'
 import AppLayout from './components/AppLayout'
-import WIPBanner from './components/WIPBanner'
 import { RequireModel, RequireToolpath } from './components/RouteGuards'
 import { ROUTES } from './routes'
 import ModelPage from './pages/ModelPage'
@@ -14,7 +13,6 @@ import './index.css'
 export default function App() {
   return (
     <AppStateProvider>
-      <WIPBanner />
       <BrowserRouter>
         <Routes>
           <Route element={<AppLayout />}>

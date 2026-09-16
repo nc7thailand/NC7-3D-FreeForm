@@ -1,59 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { extractFullSilhouette } from '../lib/silhouette'
 import { cuttingPlane, planePointMiddleFromStock } from '../lib/toolpath'
 import { CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 
-// Quality presets -> explicit marching-squares grid bins (v bins). The u grid
-// is derived from these (uBins = vBins * 1.25) inside shadowGridSpec.
-const QUALITY_BINS = { low: 150, medium: 300, high: 600 }
-const DEFAULT_QUALITY = 'medium'
-
-/**
- * Ramer–Douglas–Peucker polyline simplification (pure math; ON/OFF toggle).
- */
-function rdpSimplify(points, epsilon) {
-  if (points.length < 3) return points
-  const closed = Math.hypot(
-    points[0].u - points[points.length - 1].u,
-    points[0].v - points[points.length - 1].v,
-  ) < 1e-9
-  const ring = closed ? points.slice(0, -1) : points.slice()
-  if (ring.length < 3) return points
-
-  const keep = new Uint8Array(ring.length)
-  const stack = [[0, ring.length - 1]]
-  const segDist = (i, a, b) => {
-    const p = ring[i]
-    const abx = b.u - a.u
-    const aby = b.v - a.v
-    const len2 = abx * abx + aby * aby
-    if (len2 < 1e-12) return Math.hypot(p.u - a.u, p.v - a.v)
-    const t = Math.max(0, Math.min(1, ((p.u - a.u) * abx + (p.v - a.v) * aby) / len2))
-    return Math.hypot(p.u - (a.u + t * abx), p.v - (a.v + t * aby))
-  }
-  keep[0] = 1
-  keep[ring.length - 1] = 1
-  while (stack.length) {
-    const [s, e] = stack.pop()
-    if (e <= s + 1) continue
-    let maxD = -1
-    let maxI = -1
-    for (let i = s + 1; i < e; i++) {
-      const d = segDist(i, ring[s], ring[e])
-      if (d > maxD) { maxD = d; maxI = i }
-    }
-    if (maxD > epsilon) {
-      keep[maxI] = 1
-      stack.push([s, maxI], [maxI, e])
-    }
-  }
-
-  const out = []
-  for (let i = 0; i < ring.length; i++) if (keep[i]) out.push(ring[i])
-  if (closed && out.length > 0) out.push(out[0])
-  return out
-}
+// Quality is fixed at High (600 grid bins) for the Stage 1 preview.
+const GRID_BINS = 600
 
 /**
  * Stage 1 two-dimensional silhouette preview — DevFoam-style, synced to the
@@ -63,42 +15,29 @@ function rdpSimplify(points, epsilon) {
  * as a black polyline on a light background. Coordinate system: Y up, origin
  * bottom-left. No block boundary, no frame, no clamp, no safe points.
  *
- * The panel is driven by the same cutIndex/cutCount/thetaDeg as the 3D view,
- * so the < / > rotation controls keep both views in lock-step.
+ * The panel is driven by the same thetaDeg as the 3D view (via the shared
+ * cutIndex/cutCount in the bottom navigation bar), so stepping rotations keeps
+ * both views in lock-step.
  */
 export default function SilhouettePreviewPanel({
   geometry,
-  stock,
   thetaDeg,
-  cutIndex,
-  cutCount,
-  rotationN,
   cutMode,
   setCutMode,
-  setCutIndex,
 }) {
-  const [quality, setQuality] = useState(DEFAULT_QUALITY)
-  const [rdp, setRdp] = useState(false)
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
-
-  const gridBins = QUALITY_BINS[quality] ?? QUALITY_BINS.medium
 
   const contour = useMemo(() => {
     if (!geometry) return []
     try {
       const frame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
-      return extractFullSilhouette(geometry, frame, { profileAccuracy: 5, gridBins })
+      return extractFullSilhouette(geometry, frame, { profileAccuracy: 5, gridBins: GRID_BINS })
     } catch (err) {
       console.warn('silhouette preview failed:', err)
       return []
     }
-  }, [geometry, thetaDeg, gridBins])
-
-  const display = useMemo(() => {
-    if (!contour.length) return []
-    return rdp ? rdpSimplify(contour, 0.05) : contour
-  }, [contour, rdp])
+  }, [geometry, thetaDeg])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -121,7 +60,7 @@ export default function SilhouettePreviewPanel({
       ctx.fillStyle = '#f4f6f8'
       ctx.fillRect(0, 0, w, h)
 
-      if (!display.length) {
+      if (!contour.length) {
         ctx.fillStyle = '#8892a0'
         ctx.font = '13px system-ui'
         ctx.textAlign = 'center'
@@ -130,7 +69,7 @@ export default function SilhouettePreviewPanel({
       }
 
       let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity
-      for (const p of display) {
+      for (const p of contour) {
         if (p.u < minU) minU = p.u
         if (p.u > maxU) maxU = p.u
         if (p.v < minV) minV = p.v
@@ -148,8 +87,8 @@ export default function SilhouettePreviewPanel({
       ctx.lineJoin = 'round'
       ctx.lineCap = 'round'
       ctx.beginPath()
-      ctx.moveTo(X(display[0].u), Y(display[0].v))
-      for (let i = 1; i < display.length; i++) ctx.lineTo(X(display[i].u), Y(display[i].v))
+      ctx.moveTo(X(contour[0].u), Y(contour[0].v))
+      for (let i = 1; i < contour.length; i++) ctx.lineTo(X(contour[i].u), Y(contour[i].v))
       ctx.closePath()
       ctx.stroke()
     }
@@ -158,7 +97,7 @@ export default function SilhouettePreviewPanel({
     const ro = new ResizeObserver(draw)
     ro.observe(wrap)
     return () => ro.disconnect()
-  }, [display])
+  }, [contour])
 
   return (
     <section className="silhouette-preview-section">
@@ -181,63 +120,6 @@ export default function SilhouettePreviewPanel({
             Left only
           </button>
         </div>
-
-        <div className="silhouette-step-nav">
-          <button
-            type="button"
-            className="cut-nav-btn"
-            disabled={cutIndex <= 0}
-            onClick={() => setCutIndex((i) => Math.max(0, i - 1))}
-            aria-label="Previous step"
-          >
-            ◀
-          </button>
-          <span className="silhouette-step-readout">
-            {cutIndex + 1} / {cutCount}
-          </span>
-          <button
-            type="button"
-            className="cut-nav-btn"
-            disabled={cutIndex >= cutCount - 1}
-            onClick={() => setCutIndex((i) => Math.min(cutCount - 1, i + 1))}
-            aria-label="Next step"
-          >
-            ▶
-          </button>
-          <span className="silhouette-step-deg">{thetaDeg.toFixed(1)}°</span>
-        </div>
-
-        <p className="silhouette-step-hint">
-          {rotationN} rotations → {cutCount} cuts
-          {cutMode === CUT_MODE_LEFT_TO_RIGHT ? ' (left + right paired)' : ' (left only)'}
-        </p>
-
-        <div className="silhouette-quality">
-          <span className="silhouette-quality-label">
-            Quality: {quality.charAt(0).toUpperCase() + quality.slice(1)}
-          </span>
-          <input
-            type="range"
-            min="0"
-            max="2"
-            step="1"
-            value={quality === 'low' ? 0 : quality === 'medium' ? 1 : 2}
-            onChange={(e) => {
-              const idx = Number(e.target.value)
-              setQuality(idx === 0 ? 'low' : idx === 1 ? 'medium' : 'high')
-            }}
-          />
-          <span className="silhouette-quality-marks">Low · Med · High</span>
-        </div>
-
-        <label className="silhouette-rdp-toggle">
-          <input
-            type="checkbox"
-            checked={rdp}
-            onChange={(e) => setRdp(e.target.checked)}
-          />
-          <span>RDP simplify</span>
-        </label>
       </div>
 
       <div className="preview-wrap silhouette-preview-canvas-wrap" ref={wrapRef}>
@@ -245,7 +127,7 @@ export default function SilhouettePreviewPanel({
       </div>
 
       <div className="silhouette-preview-footer">
-        {display.length > 0 ? `${display.length} pts · bins ${gridBins}` : '—'}
+        {contour.length > 0 ? `${contour.length} pts · bins ${GRID_BINS}` : '—'}
       </div>
     </section>
   )

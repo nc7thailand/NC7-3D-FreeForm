@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import Viewer3D from '../components/Viewer3D'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import PageNav from '../components/PageNav'
@@ -126,11 +126,12 @@ export default function ToolpathPage() {
     stats,
     rotationN,
     cutCount,
-    cutIndex,
-    setCutIndex,
     cutMode,
     setCutMode,
   } = useAppState()
+
+  // Mobile view: only one of {2D, 3D} is shown at a time (default 3D).
+  const [mobileView, setMobileView] = useState('3d')
 
   const wirePointCount = useMemo(() => {
     if (!profile?.polylines?.length) return null
@@ -143,17 +144,32 @@ export default function ToolpathPage() {
 
       <main className="page-main page-main--toolpath">
         <div className="page-body">
-          <div className="cam-split">
+          <div className={`cam-split${mobileView === '2d' ? ' cam-split--mobile-2d' : ' cam-split--mobile-3d'}`}>
+            <div className="mobile-view-toggle" role="tablist" aria-label="View toggle">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mobileView === '2d'}
+                className={`mobile-view-toggle-btn${mobileView === '2d' ? ' is-active' : ''}`}
+                onClick={() => setMobileView('2d')}
+              >
+                2D
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mobileView === '3d'}
+                className={`mobile-view-toggle-btn${mobileView === '3d' ? ' is-active' : ''}`}
+                onClick={() => setMobileView('3d')}
+              >
+                3D
+              </button>
+            </div>
             <SilhouettePreviewPanel
               geometry={geometry}
-              stock={stock}
               thetaDeg={thetaDeg}
-              cutIndex={cutIndex}
-              cutCount={cutCount}
-              rotationN={rotationN}
               cutMode={cutMode}
               setCutMode={setCutMode}
-              setCutIndex={setCutIndex}
             />
             <section className="model-viewport-section">
               <Viewer3D
@@ -164,13 +180,16 @@ export default function ToolpathPage() {
                 stock={stock}
                 profile={profile}
                 silhouettePreview={silhouettePreview}
+                cutMode={cutMode}
                 readOnly
                 showToolpathOverlay
                 showModelBBox={stock.showModelBBox !== false}
               />
             </section>
           </div>
-          {status && <div className="status-bar status-bar--above-nav">{status}</div>}
+          {status && !status.startsWith('Session restored') && (
+            <div className="status-bar status-bar--above-nav">{status}</div>
+          )}
           {stats && (
             <div className="stats-inline">
               <span>θ = {thetaDeg.toFixed(1)}° · {cutCount}/{rotationN} cuts</span>

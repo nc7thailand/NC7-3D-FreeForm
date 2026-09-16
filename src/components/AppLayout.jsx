@@ -22,7 +22,7 @@ export default function AppLayout() {
             <span className="menu-bar" />
           </button>
           <div className="header-text">
-            <h1>NC7 Studio3D CAM</h1>
+            <h1>NC7 3dFreeFoam</h1>
             <p>Hot wire foam cutter — Model · Toolpath · G-code</p>
           </div>
         </div>
