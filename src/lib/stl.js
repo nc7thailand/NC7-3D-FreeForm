@@ -4,6 +4,40 @@ import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 
 /**
+ * Orient a freshly-parsed STL so its height axis is +Y (app convention).
+ *
+ * Many STLs (modelled in a 3D app with the Z axis up) store the model standing
+ * on the X-Y plane with height along Z. The app consumes Y-up geometry (world
+ * Y = machine vertical, floor Y = 0, rotary axis along Y), so a Z-up mesh must
+ * be rotated `-90°` about X to stand up. We auto-detect the up axis from the
+ * bounding-box proportions rather than assuming, so Y-up files are left alone.
+ *
+ * Heuristic (robust vs symmetric/degenerate boxes):
+ *   - Z clearly dominant (Z > 1.5·Y) → assume Z-up → rotateX(-π/2)
+ *   - Y clearly dominant (Y > 1.5·Z) → assume Y-up → no change
+ *   - otherwise ambiguous → default to Z-up (the common 3D-print convention)
+ *
+ * @param {THREE.BufferGeometry} geometry
+ * @returns {THREE.BufferGeometry} the same geometry, oriented/mutated in place
+ */
+export function orientGeometryUp(geometry) {
+  geometry.computeBoundingBox()
+  const bb = geometry.boundingBox
+  if (!bb || bb.isEmpty()) return geometry
+
+  const size = bb.getSize(new THREE.Vector3())
+  const y = size.y
+  const z = size.z
+
+  const rotate = z > 1.5 * y
+  if (rotate) {
+    geometry.rotateX(-Math.PI / 2)
+    geometry.computeBoundingBox()
+  }
+  return geometry
+}
+
+/**
  * Load an STL file (File object) into a THREE.BufferGeometry.
  * Supports both binary and ASCII STL via Three.js STLLoader.
  *
@@ -32,6 +66,7 @@ export function loadSTLFile(file, hooks = {}) {
         const geometry = loader.parse(event.target.result)
         onStage?.('Computing normals…')
         geometry.computeVertexNormals()
+        orientGeometryUp(geometry)
         resolve(geometry)
       } catch (err) {
         reject(new Error(`Failed to parse STL: ${err.message}`))
@@ -70,6 +105,7 @@ export function loadSTLFromArrayBuffer(buffer) {
   const loader = new STLLoader()
   const geometry = loader.parse(buffer)
   geometry.computeVertexNormals()
+  orientGeometryUp(geometry)
   return geometry
 }
 

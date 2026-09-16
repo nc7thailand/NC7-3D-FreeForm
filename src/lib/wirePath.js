@@ -82,7 +82,9 @@ function dedupePoints(pts, tol = 0.05) {
  */
 export function processWireProfile(rawPolyline, stock, thetaDeg) {
   if (!rawPolyline?.length || rawPolyline.length < 2) return []
-  let pts = orderTopDown(rawPolyline)
+  // Keep points in their natural contour (loop) order — do NOT sort by height,
+  // which breaks the closed loop into a zig-zag "comb" of horizontal strokes.
+  let pts = rawPolyline
   pts = applyKerf(pts, stock.kerf ?? 2)
   pts = clampProfileToStock(pts, stock, thetaDeg)
   return dedupePoints(pts)

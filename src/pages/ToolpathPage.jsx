@@ -1,14 +1,11 @@
 import React, { useMemo } from 'react'
 import Viewer3D from '../components/Viewer3D'
-import PathPreviewCanvas from '../components/PathPreviewCanvas'
+import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import PageNav from '../components/PageNav'
 import ProjectPanel from '../components/ProjectPanel'
 import ToolpathParametersForm from '../components/ToolpathParametersForm'
 import { useAppState } from '../context/AppState'
 import { wirePathFromProfile } from '../lib/wirePath'
-
-/** Set true to restore 2D toolpath preview panel on Page 2 */
-const SHOW_2D_TOOLPATH_PREVIEW = false
 
 function ToolpathPanel() {
   const {
@@ -129,6 +126,10 @@ export default function ToolpathPage() {
     stats,
     rotationN,
     cutCount,
+    cutIndex,
+    setCutIndex,
+    cutMode,
+    setCutMode,
   } = useAppState()
 
   const wirePointCount = useMemo(() => {
@@ -142,13 +143,18 @@ export default function ToolpathPage() {
 
       <main className="page-main page-main--toolpath">
         <div className="page-body">
-          <div className={`cam-split${SHOW_2D_TOOLPATH_PREVIEW ? '' : ' cam-split--3d-only'}`}>
-            {SHOW_2D_TOOLPATH_PREVIEW && (
-              <section className="path-preview-section">
-                <div className="section-label section-label-sub">2D Toolpath Preview</div>
-                <PathPreviewCanvas stock={stock} thetaDeg={thetaDeg} profile={profile} />
-              </section>
-            )}
+          <div className="cam-split">
+            <SilhouettePreviewPanel
+              geometry={geometry}
+              stock={stock}
+              thetaDeg={thetaDeg}
+              cutIndex={cutIndex}
+              cutCount={cutCount}
+              rotationN={rotationN}
+              cutMode={cutMode}
+              setCutMode={setCutMode}
+              setCutIndex={setCutIndex}
+            />
             <section className="model-viewport-section">
               <Viewer3D
                 ref={viewerRef}

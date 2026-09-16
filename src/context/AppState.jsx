@@ -6,7 +6,7 @@ import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
-import { buildCutJob, cutJobHasProfile, effectiveCutCount } from '../lib/cutJob'
+import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { wirePathFromProfile } from '../lib/wirePath'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
@@ -74,6 +74,7 @@ export function AppStateProvider({ children }) {
 
   const [stock, setStock] = useState(DEFAULT_STOCK)
   const [rotationN, setRotationN] = useState(DEFAULT_ROTATION_N)
+  const [cutMode, setCutMode] = useState(CUT_MODE_LEFT_TO_RIGHT)
   const [cutIndex, setCutIndex] = useState(0)
   const [profile, setProfile] = useState(null)
   const [silhouettePreview, setSilhouettePreview] = useState(null)
@@ -88,8 +89,8 @@ export function AppStateProvider({ children }) {
   const viewerRef = useRef(null)
   const planePoint = useRef(planePointFromStock(DEFAULT_STOCK))
 
-  const cutCount = effectiveCutCount(rotationN)
-  const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / rotationN : 0
+  const cutCount = effectiveCutCount(rotationN, { mode: cutMode })
+  const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / cutCount : 0
 
   /**
    * Busy helpers. Long jobs are synchronous in JS, so the overlay has to be
@@ -283,8 +284,8 @@ export function AppStateProvider({ children }) {
   // kept until the user presses Apply, so ◀ ▶ stays instant in the meantime.
   useEffect(() => {
     if (hydrating) return
-    setCutIndex((i) => Math.min(i, Math.max(effectiveCutCount(rotationN) - 1, 0)))
-  }, [rotationN, hydrating])
+    setCutIndex((i) => Math.min(i, Math.max(effectiveCutCount(rotationN, { mode: cutMode }) - 1, 0)))
+  }, [rotationN, cutMode, hydrating])
 
   // Settings changes do NOT invalidate the buffered job — it is replaced on
   // Apply. Keeping it lets the user keep browsing cuts while editing values.
@@ -464,6 +465,7 @@ export function AppStateProvider({ children }) {
     planePoint.current.copy(planePointFromStock(stock))
     const job = await buildCutJob(geo, rotationN, planePoint.current, {
       silhouetteOpts: silhouetteOptsFromStock(stock),
+      mode: cutMode,
       onProgress,
     })
     job.stock = { ...stock }
@@ -471,13 +473,13 @@ export function AppStateProvider({ children }) {
       cut.wirePath = wirePathFromProfile(cut.profile, stock, cut.thetaDeg)
     }
     return job
-  }, [rotationN, stock])
+  }, [rotationN, cutMode, stock])
 
   const saveToolpathStage = useCallback(async () => {
     const geo = workingRef.current
     if (!geo) return false
-    const total = effectiveCutCount(rotationN)
-    setStatus(`Computing ${total} cuts (N=${rotationN}, half-span)…`)
+    const total = effectiveCutCount(rotationN, { mode: cutMode })
+    setStatus(`Computing ${total} cuts (N=${rotationN}, ${cutMode})…`)
     beginBusy('Computing toolpath…', { done: 0, total })
     await yieldToPaint()
     try {
@@ -491,7 +493,7 @@ export function AppStateProvider({ children }) {
       }
       setCutJob(job)
       const withProfile = job.cuts.filter((c) => c.profile.polylines.length > 0).length
-      setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, half-span).`)
+      setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${cutMode}).`)
       return true
     } catch (err) {
       setStatus(`Toolpath error: ${err.message}`)
@@ -525,7 +527,7 @@ export function AppStateProvider({ children }) {
       let job = cutJob
       if (!cutJobHasProfile(job)) {
         job = await computeCutJob()
-      } else if (job.rotationN !== rotationN) {
+      } else if (job.rotationN !== rotationN || job.mode !== cutMode) {
         job = await computeCutJob()
       }
 
@@ -554,7 +556,7 @@ export function AppStateProvider({ children }) {
     } finally {
       await endBusy()
     }
-  }, [bakeModelTransform, computeCutJob, cutJob, cutIndex, gcodeSettings, modelName, rotationN, stock, beginBusy, endBusy, yieldToPaint])
+  }, [bakeModelTransform, computeCutJob, cutJob, cutIndex, cutMode, gcodeSettings, modelName, rotationN, stock, beginBusy, endBusy, yieldToPaint])
 
   const handleOpenProject = useCallback(async (file) => {
     setStatus('Opening project…')
@@ -610,6 +612,8 @@ export function AppStateProvider({ children }) {
     stock,
     rotationN,
     setRotationN,
+    cutMode,
+    setCutMode,
     cutCount,
     cutIndex,
     setCutIndex,

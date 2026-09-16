@@ -34,10 +34,10 @@ function fmt(n, digits = 4) {
 
 function fmtLine(prefix, move) {
   let line = prefix
-  if (move.x != null) line += `X${fmt(move.x)}`
-  if (move.y != null) line += `Y${fmt(move.y)}`
-  if (move.z != null) line += `Z${fmt(move.z)}`
-  if (move.f != null) line += `F${fmt(move.f)}`
+  if (move.x != null) line += ` X${fmt(move.x)}`
+  if (move.y != null) line += ` Y${fmt(move.y)}`
+  if (move.z != null) line += ` Z${fmt(move.z)}`
+  if (move.f != null) line += ` F${fmt(move.f)}`
   return line
 }
 

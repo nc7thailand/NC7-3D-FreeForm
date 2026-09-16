@@ -11,6 +11,7 @@
 //
 // Frame: light travels −Z. u = horizontal position on the plane, v = world Y.
 import * as THREE from 'three'
+import { traceGridBoundary } from './gridContour.js'
 
 const SHADOW_Z_EXTRA = 100
 
@@ -154,7 +155,8 @@ export function projectShadowOutline(geometry, plane) {
     }
   }
 
-  // Build the closed outline: walk down the left edge, then back up the right.
+  // Build a filled occupancy grid from the per-scanline extremes, then trace the
+  // true shadow contour (concavity-preserving) via the shared tracer.
   const left = []
   const right = []
   for (let row = 0; row < scanlines; row++) {
@@ -167,11 +169,24 @@ export function projectShadowOutline(geometry, plane) {
     return { outline: [], left, right, occupied: 0 }
   }
 
-  const outline = [...left]
-  // Mirror the right edge (bottom → top) to close the loop.
-  for (let k = right.length - 2; k >= 0; k -= 2) {
-    outline.push(right[k], right[k + 1])
+  // Synthesize a 2D grid spec for the tracer from the scanline/plane extents.
+  const uSpan = uMax - uMin
+  const uCells = Math.max(2, Math.round(uSpan / stepY)) // square-ish cells
+  const uStep = uSpan / uCells
+  const vBins = scanlines
+  const uBins = uCells
+  const grid = new Uint8Array(uBins * vBins)
+  for (let row = 0; row < scanlines; row++) {
+    if (minU[row] >= Infinity) continue
+    const uLo = Math.max(0, Math.floor((minU[row] - uMin) / uStep))
+    const uHi = Math.min(uBins - 1, Math.floor((maxU[row] - uMin) / uStep))
+    for (let c = uLo; c <= uHi; c++) grid[row * uBins + c] = 1
   }
+
+  const spec = { uMin, vMin, uStep, vStep: stepY, uBins, vBins }
+  const contour = traceGridBoundary(grid, spec)
+  const outline = []
+  for (const p of contour) { outline.push(p.u, p.v) }
 
   return { outline, left, right, occupied: left.length / 2 }
 }

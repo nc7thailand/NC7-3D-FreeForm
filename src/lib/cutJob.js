@@ -1,7 +1,14 @@
 import { buildSectionProfile } from './toolpath.js'
 
-/** Full silhouette covers 180° — use half the user N to avoid duplicate cuts. */
-export const FULL_SILHOUETTE_HALF_SPAN = true
+/**
+ * Cut modes:
+ *  - 'left-to-right': each of floor(N/2) cuts pairs the left silhouette at θ
+ *     with its mirror (right) at θ+180°; the rotations cover the full 360° so
+ *     the operator sees the whole model. Step = 360 / cutCount (45° at N=16).
+ *  - 'left-only': one independent left cut per rotation, N cuts total, step 22.5°.
+ */
+export const CUT_MODE_LEFT_TO_RIGHT = 'left-to-right'
+export const CUT_MODE_LEFT_ONLY = 'left-only'
 
 /**
  * @param {number} n
@@ -12,30 +19,34 @@ export function clampRotationN(n) {
 }
 
 /**
- * Effective number of cuts for full-silhouette mode (half of user N).
+ * Effective number of cuts for a given mode.
+ *  - 'left-only'     -> N cuts
+ *  - 'left-to-right' -> floor(N / 2) cuts (each pairs left@θ and right@θ+180°)
  *
  * @param {number} rotationN - user-facing N (3–64)
- * @param {boolean} [halfSpan]
+ * @param {{ mode?: string }} [options]
  * @returns {number}
  */
-export function effectiveCutCount(rotationN, halfSpan = FULL_SILHOUETTE_HALF_SPAN) {
+export function effectiveCutCount(rotationN, options = {}) {
   const n = clampRotationN(rotationN)
-  if (!halfSpan) return n
+  const mode = options.mode ?? CUT_MODE_LEFT_TO_RIGHT
+  if (mode === CUT_MODE_LEFT_ONLY) return n
   return Math.max(2, Math.floor(n / 2))
 }
 
 /**
- * Build cut angles. Step spacing stays 360/N; only the count is halved (0°…180°).
+ * Build cut angles. The rotation step is 360 / cutCount so the cuts always
+ * cover the full circle regardless of mode (left-to-right -> wider steps, full
+ * model visible; left-only -> fine steps).
  *
  * @param {number} n - user rotation N
- * @param {{ halfSpan?: boolean }} [options]
+ * @param {{ mode?: string }} [options]
  * @returns {number[]} angles in degrees
  */
 export function cutAnglesForN(n, options = {}) {
   const userN = clampRotationN(n)
-  const halfSpan = options.halfSpan ?? FULL_SILHOUETTE_HALF_SPAN
-  const count = halfSpan ? effectiveCutCount(userN, true) : userN
-  const step = 360 / userN
+  const count = effectiveCutCount(userN, options)
+  const step = 360 / count
   return Array.from({ length: count }, (_, i) => i * step)
 }
 
@@ -48,14 +59,14 @@ export function cutAnglesForN(n, options = {}) {
  * @param {THREE.BufferGeometry} geometry
  * @param {number} rotationN - user-facing N
  * @param {THREE.Vector3} planePoint
- * @param {{ halfSpan?: boolean, onProgress?: (done: number, total: number) => void|Promise<void> }} [options]
- * @returns {Promise<{ rotationN: number, cutCount: number, halfSpan: boolean, cuts: Array }>}
+ * @param {{ mode?: string, onProgress?: (done: number, total: number) => void|Promise<void> }} [options]
+ * @returns {Promise<{ rotationN: number, cutCount: number, mode: string, cuts: Array }>}
  */
 export async function buildCutJob(geometry, rotationN, planePoint, options = {}) {
   const userN = clampRotationN(rotationN)
-  const halfSpan = options.halfSpan ?? FULL_SILHOUETTE_HALF_SPAN
+  const mode = options.mode ?? CUT_MODE_LEFT_TO_RIGHT
   const silhouetteOpts = options.silhouetteOpts ?? {}
-  const angles = cutAnglesForN(userN, { halfSpan })
+  const angles = cutAnglesForN(userN, { mode })
   const onProgress = options.onProgress
   const cuts = []
   for (let index = 0; index < angles.length; index++) {
@@ -67,7 +78,7 @@ export async function buildCutJob(geometry, rotationN, planePoint, options = {})
   return {
     rotationN: userN,
     cutCount: cuts.length,
-    halfSpan,
+    mode,
     cuts,
   }
 }

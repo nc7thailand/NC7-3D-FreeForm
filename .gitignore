@@ -23,3 +23,18 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+
+# Local diagnostic / inspection artifacts
+.inspect/
+.continue/
+.cursor/
+tools/
+
+# Generated diagnostic outputs (SVG/PNG/CSV/NC renders from throwaway scripts)
+scripts/*.png
+scripts/*.svg
+scripts/*.csv
+scripts/*.nc
+
+# Reference / golden-comparison data (user-supplied DevFoam samples + screenshots)
+Example/

@@ -9,6 +9,7 @@
 // Envelope-only backup: src/lib/checkpoints/silhouette-envelope-v2.js
 
 import * as THREE from 'three'
+import { traceGridBoundary } from './gridContour.js'
 
 const BBOX_CORNERS = [
   new THREE.Vector3(),
@@ -49,9 +50,12 @@ export function clampProfileAccuracy(value) {
 }
 
 /** Grid resolution from DevFoam-style Profile accuracy (1–10). */
-export function shadowGridSpec(bounds, profileAccuracy) {
-  const acc = clampProfileAccuracy(profileAccuracy)
-  const vBins = Math.round(50 + acc * 16)
+export function shadowGridSpec(bounds, profileAccuracy, gridBins = null) {
+  // Explicit grid-bins override (2D preview resolution control) takes priority
+  // over the Profile-accuracy mapping; when omitted, accuracy maps as before.
+  const vBins = gridBins != null && gridBins > 0
+    ? Math.round(gridBins)
+    : Math.round(50 + clampProfileAccuracy(profileAccuracy) * 16)
   const uBins = Math.round(vBins * 1.25)
   const vSpan = Math.max(bounds.vMax - bounds.vMin, 1e-6)
   const uSpan = Math.max(bounds.uMax - bounds.uMin, 1e-6)
@@ -300,8 +304,45 @@ function mergeFullOutline({ left, right }) {
   return dedupePoints(leftSorted.length >= 2 ? leftSorted : rightSorted)
 }
 
+// --- True silhouette boundary (contour tracing on the shadow grid) ------------
+
+/**
+ * Build the full shadow contour (closed) via grid tracing.
+ * Returns empty array when the grid is unoccupied or tracing fails.
+ */
+function projectShadowContour(geometry, frame, bbox, profileAccuracy, gridBins = null) {
+  const bounds = sectionBounds(bbox, frame)
+  if (bounds.vMax <= bounds.vMin + 1e-6) return []
+
+  const spec = shadowGridSpec(bounds, profileAccuracy, gridBins)
+  const grid = new Uint8Array(spec.uBins * spec.vBins)
+
+  const pos = geometry.attributes.position?.array
+  if (!pos || pos.length < 9) return []
+
+  const index = geometry.index?.array
+  const triCount = index ? index.length / 3 : pos.length / 9
+  const v0 = new THREE.Vector3()
+  const v1 = new THREE.Vector3()
+  const v2 = new THREE.Vector3()
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = index ? index[t * 3] : t * 3
+    const i1 = index ? index[t * 3 + 1] : t * 3 + 1
+    const i2 = index ? index[t * 3 + 2] : t * 3 + 2
+    v0.fromArray(pos, i0 * 3)
+    v1.fromArray(pos, i1 * 3)
+    v2.fromArray(pos, i2 * 3)
+    fillProjectedTriangle(grid, spec.uBins, spec, projectToSection(v0, frame), projectToSection(v1, frame), projectToSection(v2, frame))
+  }
+
+  const contour = traceGridBoundary(grid, spec)
+  return dedupePoints(contour, Math.max(spec.uStep, spec.vStep))
+}
+
 /**
  * Method 1 left-side cut silhouette (u ≤ 0), rear-anchored collimated shadow.
+ * Prefers the true shadow contour; falls back to the per-v envelope.
  */
 export function extractLeftSilhouette(geometry, frame, opts = {}) {
   const pos = geometry.attributes.position
@@ -311,13 +352,21 @@ export function extractLeftSilhouette(geometry, frame, opts = {}) {
   const bbox = geometry.boundingBox
   if (!bbox || bbox.isEmpty()) return []
 
-  const { left } = projectFrontToRearExtents(geometry, frame, bbox, opts)
   const uMax = opts.uMax ?? 1e-3
+
+  const contour = projectShadowContour(geometry, frame, bbox, opts.profileAccuracy ?? 5)
+  if (contour.length >= 3) {
+    const left = contour.filter((p) => p.u <= uMax)
+    if (left.length >= 2) return left
+  }
+
+  const { left } = projectFrontToRearExtents(geometry, frame, bbox, opts)
   return dedupePoints(left.filter((p) => p.u <= uMax))
 }
 
 /**
- * Full front-to-rear silhouette — collimated shadow (left + right outline).
+ * Full front-to-rear silhouette — true shadow contour with concavities,
+ * falling back to the per-v min/max envelope when no clean loop is found.
  */
 export function extractFullSilhouette(geometry, frame, opts = {}) {
   const pos = geometry.attributes.position
@@ -326,6 +375,9 @@ export function extractFullSilhouette(geometry, frame, opts = {}) {
   geometry.computeBoundingBox()
   const bbox = geometry.boundingBox
   if (!bbox || bbox.isEmpty()) return []
+
+  const contour = projectShadowContour(geometry, frame, bbox, opts.profileAccuracy ?? 5, opts.gridBins ?? null)
+  if (contour.length >= 3) return contour
 
   const extents = projectFrontToRearExtents(geometry, frame, bbox, opts)
   return mergeFullOutline(extents)

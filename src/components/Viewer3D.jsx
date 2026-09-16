@@ -808,7 +808,7 @@ export default forwardRef(function Viewer3D(
         }
         const lineGeo = new THREE.BufferGeometry()
         lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x000000, depthTest: false })
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xff0000, depthTest: false })
         const shadowLine = new THREE.LineLoop(lineGeo, lineMat)
         state.scene.add(shadowLine)
         state.shadowPoints = shadowLine
