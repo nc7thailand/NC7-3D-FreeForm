@@ -3,50 +3,60 @@ import { useAppState } from '../context/AppState'
 
 /**
  * DevFoam-style toolpath parameters (foam block + wire offsets).
+ *
+ * Controlled component: renders from `value` and reports changes through
+ * `onChange(key, value)`. When `value`/`onChange` are omitted it falls back to
+ * the live AppState stock + handleStockChange (used by the sidebar form).
  */
-export default function ToolpathParametersForm({ compact = false }) {
+export default function ToolpathParametersForm({
+  compact = false,
+  value,
+  onChange,
+}) {
   const { stock, handleStockChange } = useAppState()
+  const s = value ?? stock
+  const change = onChange ?? handleStockChange
 
   return (
     <div className={`inputs${compact ? ' inputs--compact' : ''}`}>
       <label>Width (W)
-        <input type="number" min="1" value={stock.w} onChange={(e) => handleStockChange('w', +e.target.value)} />
+        <input type="number" min="1" value={s.w} onChange={(e) => change('w', +e.target.value)} />
       </label>
       <label>Thickness (T)
-        <input type="number" min="1" value={stock.t} onChange={(e) => handleStockChange('t', +e.target.value)} />
+        <input type="number" min="1" value={s.t} onChange={(e) => change('t', +e.target.value)} />
       </label>
       <label>Height (H)
-        <input type="number" min="1" value={stock.h} onChange={(e) => handleStockChange('h', +e.target.value)} />
+        <input type="number" min="1" value={s.h} onChange={(e) => change('h', +e.target.value)} />
       </label>
       <label>LO (wire clearance)
-        <input type="number" min="0" step="0.5" value={stock.lo} onChange={(e) => handleStockChange('lo', +e.target.value)} />
+        <input type="number" min="0" step="0.5" value={s.lo} onChange={(e) => change('lo', +e.target.value)} />
       </label>
       <label>BO (bottom offset)
         <input
           type="number"
           min="0"
           step="0.5"
-          value={stock.bo}
-          disabled={stock.boAuto !== false}
-          onChange={(e) => handleStockChange('bo', +e.target.value)}
+          value={s.bo}
+          disabled={s.boAuto !== false}
+          onChange={(e) => change('bo', +e.target.value)}
         />
       </label>
       <label className="checkbox-label">
         <input
           type="checkbox"
-          checked={stock.boAuto !== false}
-          onChange={(e) => handleStockChange('boAuto', e.target.checked)}
+          checked={s.boAuto !== false}
+          onChange={(e) => change('boAuto', e.target.checked)}
         />
         Auto bottom safe (hypot/2 + margin)
       </label>
-      {stock.boAuto !== false && (
+      {s.boAuto !== false && (
         <label>Bottom safe margin (mm)
           <input
             type="number"
             min="0"
             step="1"
-            value={stock.boMargin ?? 20}
-            onChange={(e) => handleStockChange('boMargin', +e.target.value)}
+            value={s.boMargin ?? 20}
+            onChange={(e) => change('boMargin', +e.target.value)}
           />
         </label>
       )}
@@ -56,22 +66,22 @@ export default function ToolpathParametersForm({ compact = false }) {
           min="1"
           max="10"
           step="1"
-          value={stock.profileAccuracy ?? 5}
-          onChange={(e) => handleStockChange('profileAccuracy', +e.target.value)}
+          value={s.profileAccuracy ?? 5}
+          onChange={(e) => change('profileAccuracy', +e.target.value)}
         />
-        <span className="range-readout">{stock.profileAccuracy ?? 5}</span>
+        <span className="range-readout">{s.profileAccuracy ?? 5}</span>
       </label>
       <label>Kerf (wire Ø comp.)
-        <input type="number" min="0" step="0.1" value={stock.kerf ?? 2} onChange={(e) => handleStockChange('kerf', +e.target.value)} />
+        <input type="number" min="0" step="0.1" value={s.kerf ?? 2} onChange={(e) => change('kerf', +e.target.value)} />
       </label>
       <label>Top safe offset
-        <input type="number" min="0" step="1" value={stock.topOffset ?? 20} onChange={(e) => handleStockChange('topOffset', +e.target.value)} />
+        <input type="number" min="0" step="1" value={s.topOffset ?? 20} onChange={(e) => change('topOffset', +e.target.value)} />
       </label>
       <label className="checkbox-label">
         <input
           type="checkbox"
-          checked={stock.showModelBBox !== false}
-          onChange={(e) => handleStockChange('showModelBBox', e.target.checked)}
+          checked={s.showModelBBox !== false}
+          onChange={(e) => change('showModelBBox', e.target.checked)}
         />
         Show model bounding box
       </label>

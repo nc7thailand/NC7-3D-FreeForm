@@ -405,6 +405,56 @@ body {
   margin: 10px 0 0;
 }
 
+.setup-overlay-dirty {
+  margin: 12px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffb84d;
+}
+
+.setup-overlay-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.setup-overlay-btn {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.setup-overlay-apply {
+  background: #2b6cb0;
+  color: #fff;
+  border-color: #2b6cb0;
+}
+.setup-overlay-apply:hover:not(:disabled) {
+  background: #3579c2;
+}
+.setup-overlay-apply:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.setup-overlay-reset {
+  background: #1f2530;
+  color: #9fb0c0;
+  border-color: #2a3340;
+}
+.setup-overlay-reset:hover:not(:disabled) {
+  background: #2a3340;
+  color: #fff;
+}
+.setup-overlay-reset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .inputs--compact label {
   font-size: 12px;
 }
@@ -1213,6 +1263,43 @@ button:hover {
 }
 .silhouette-preview-canvas-wrap {
   background: #f4f6f8;
+  position: relative;
+  touch-action: none;
+  cursor: grab;
+  overflow: hidden;
+}
+.silhouette-preview-canvas-wrap.is-panning {
+  cursor: grabbing;
+}
+.silhouette-zoom-controls {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.silhouette-zoom-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  color: #333d4a;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #c4cdd8;
+  border-radius: 5px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.silhouette-zoom-btn:hover {
+  background: #ffffff;
+}
+.silhouette-zoom-btn.silhouette-zoom-reset {
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
 }
 .silhouette-preview-footer {
   flex-shrink: 0;

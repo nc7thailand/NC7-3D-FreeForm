@@ -184,11 +184,11 @@ export default function ToolpathPage() {
                 cutMode={cutMode}
                 readOnly
                 showToolpathOverlay
-                showModelBBox={stock.showModelBBox !== false}
+                showModelBBox={false}
               />
             </section>
           </div>
-          {status && !status.startsWith('Session restored') && (
+          {status && !status.startsWith('Session restored') && !status.startsWith('Model saved') && (
             <div className="status-bar status-bar--above-nav">{status}</div>
           )}
           {stats && (

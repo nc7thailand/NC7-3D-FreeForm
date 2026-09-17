@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { extractFullSilhouette } from '../lib/silhouette'
 import { cuttingPlane, planePointMiddleFromStock } from '../lib/toolpath'
@@ -6,6 +6,10 @@ import { CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 
 // Quality is fixed at High (600 grid bins) for the Stage 1 preview.
 const GRID_BINS = 600
+
+// Zoom/pan limits for the 2D preview.
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 10
 
 /**
  * Interpolate where edge `a→b` crosses a constant value of `axis`.
@@ -30,12 +34,14 @@ function crossAt(a, b, axis, value) {
  * BO line is the workpiece's attachment base and is excluded. Both winding
  * directions are handled by keeping whichever arc reaches the greater height.
  *
- * In left-only mode the path stops at the silhouette's topmost crossing of the
- * rotation axis (u = 0) instead of continuing down the right side.
+ * In left-only mode the path walks the arc from the left BO crossing while
+ * u <= 0 and stops at the first vertex past the rotation axis, cutting at the
+ * interpolated u = 0 point. Vertices sitting exactly on u = 0 simply continue
+ * the walk, so they need no special case.
  *
  * @param {{u:number,v:number}[]} contour - closed loop
  * @param {number} boV - BO level (v = BO)
- * @param {boolean} leftOnly - stop at the topmost u = 0 crossing
+ * @param {boolean} leftOnly - stop at the first u > 0 vertex
  * @returns {{u:number,v:number}[]} open polyline (empty when unavailable)
  */
 function buildCutPath(contour, boV, leftOnly) {
@@ -81,23 +87,30 @@ function buildCutPath(contour, boV, leftOnly) {
 
   if (!leftOnly) return best.arc
 
-  // Left-only: stop where the path meets the rotation axis (u = 0). Take the
-  // highest such crossing on the arc — the path can dip through the axis more
-  // than once (e.g. under a concave neck), and the cut ends at the top of the
-  // left half, not at the first touch.
-  let cutIdx = -1
-  let cutV = -Infinity
-  let apex = null
+  // Left-only: walk the arc from the left BO crossing while u <= 0 and cut at
+  // the first vertex past the rotation axis. Walking by u-sign (rather than
+  // detecting crossings) needs no special handling for vertices sitting exactly
+  // on u = 0 or for near-tangent segments.
+  const cut = best.arc[best.arc.length - 1]
   for (let i = 1; i < best.arc.length; i++) {
-    const p = crossAt(best.arc[i - 1], best.arc[i], 'u', 0)
-    if (p && p.v > cutV) {
-      cutV = p.v
-      cutIdx = i
-      apex = p
+    const p = best.arc[i]
+    if (p.u > 0) {
+      const prev = best.arc[i - 1]
+      const t = prev.u / (prev.u - p.u)
+      const axis = { u: 0, v: prev.v + t * (p.v - prev.v) }
+      return [...best.arc.slice(0, i), axis]
     }
   }
-  if (cutIdx < 0) return best.arc
-  return [...best.arc.slice(0, cutIdx), apex]
+
+  // Never reached the axis: the kept half is undefined, so report it rather
+  // than silently returning the full silhouette as if the cut had happened.
+  console.warn('[SilhouettePreviewPanel] left-only cut found no u > 0 vertex', {
+    arcPoints: best.arc.length,
+    startU: best.arc[0].u,
+    endU: cut.u,
+    maxV: best.maxV,
+  })
+  return []
 }
 
 /**
@@ -128,6 +141,26 @@ export default function SilhouettePreviewPanel({
 }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
+
+  // Zoom/pan transform state. Pan is in screen pixels; zoom is a linear scale.
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const zoomRef = useRef(1)
+  const panRef = useRef({ x: 0, y: 0 })
+  const dragRef = useRef(null) // { x, y, pointerId }
+  const pinchRef = useRef(null) // { startDist, startZoom, cx, cy }
+
+  const setTransform = useCallback((nextZoom, nextPan) => {
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
+    zoomRef.current = z
+    panRef.current = nextPan
+    setZoom(z)
+    setPan(nextPan)
+  }, [])
+
+  const resetView = useCallback(() => {
+    setTransform(1, { x: 0, y: 0 })
+  }, [setTransform])
 
   const contour = useMemo(() => {
     if (!geometry) return []
@@ -174,26 +207,20 @@ export default function SilhouettePreviewPanel({
         return
       }
 
-      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity
-      for (const p of contour) {
-        if (p.u < minU) minU = p.u
-        if (p.u > maxU) maxU = p.u
-        if (p.v < minV) minV = p.v
-        if (p.v > maxV) maxV = p.v
-      }
-      const spanU = Math.max(maxU - minU, 1e-6)
-      const spanV = Math.max(maxV - minV, 1e-6)
-      const pad = Math.min(w, h) * 0.1
-      const scale = Math.min((w - pad * 2) / spanU, (h - pad * 2) / spanV)
-      const X = (u) => (u - minU) * scale + (w - spanU * scale) / 2
-      const Y = (v) => h - pad - (v - minV) * scale
+      const z = zoomRef.current
+      const pn = panRef.current
+
+      // Stock-based constant scale (foam block size, NOT silhouette bbox).
+      // u = 0 is anchored at canvas centre (w/2); v = 0 near the bottom (0.8h).
+      // The silhouette renders at its true position relative to the axis.
+      const stockExtent = Math.max(stock?.w ?? 1, stock?.t ?? 1, stock?.h ?? 1, 1)
+      const baseScale = (Math.min(w, h) * 0.7) / stockExtent
+
+      const scale = baseScale * z
+      const X = (u) => w / 2 + u * scale + pn.x
+      const Y = (v) => h * 0.8 - v * scale + pn.y
 
       // Reference axes — world origin guides, drawn behind the silhouette.
-      // Red vertical line at u = 0 (rotation axis); blue horizontal line at
-      // v = BO (bottom cutout offset) — the level where the wire stops cutting
-      // so the workpiece stays attached to the block below it. Both are thin
-      // dashed lines spanning the full canvas so they never compete with the
-      // silhouette.
       const boV = stock?.bo ?? 0
       const axisX = X(0)
       ctx.setLineDash([6, 5])
@@ -211,8 +238,7 @@ export default function SilhouettePreviewPanel({
       ctx.stroke()
       ctx.setLineDash([])
 
-      // Silhouette outline — dashed, 50% opacity so it reads lighter than the
-      // reference axes while staying traceable at every rotation.
+      // Silhouette outline — dashed, 50% opacity.
       ctx.setLineDash([5, 4])
       ctx.strokeStyle = '#000000'
       ctx.globalAlpha = 0.5
@@ -227,9 +253,7 @@ export default function SilhouettePreviewPanel({
       ctx.globalAlpha = 1
       ctx.setLineDash([])
 
-      // Cut path — the stretch of silhouette the wire actually follows. Solid
-      // brighter blue so it reads clearly against the dashed BO line, drawn on
-      // top of the reference outline.
+      // Cut path
       if (cutPath.length >= 2) {
         ctx.strokeStyle = '#1d5cff'
         ctx.lineWidth = 2
@@ -245,8 +269,133 @@ export default function SilhouettePreviewPanel({
     draw()
     const ro = new ResizeObserver(draw)
     ro.observe(wrap)
+
     return () => ro.disconnect()
-  }, [contour, cutPath, stock?.bo])
+  }, [contour, cutPath, stock, zoom, pan])
+
+  // Zoom / pan interaction handlers (wheel, pointer drag, pinch).
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+
+    const zoomAt = (clientX, clientY, factor) => {
+      const rect = wrap.getBoundingClientRect()
+      const z = zoomRef.current
+      const nextZ = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * factor))
+      if (nextZ === z) return
+      // Keep the point under the cursor fixed while zooming.
+      const cx = clientX - rect.left
+      const cy = clientY - rect.top
+      const pn = panRef.current
+      const nextPan = {
+        x: cx - (cx - pn.x) * (nextZ / z),
+        y: cy - (cy - pn.y) * (nextZ / z),
+      }
+      setTransform(nextZ, nextPan)
+    }
+
+    const onWheel = (e) => {
+      e.preventDefault()
+      const factor = Math.exp(-e.deltaY * 0.0015)
+      zoomAt(e.clientX, e.clientY, factor)
+    }
+
+    const onPointerDown = (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      dragRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId }
+      wrap.setPointerCapture(e.pointerId)
+      wrap.classList.add('is-panning')
+    }
+
+    const onPointerMove = (e) => {
+      const d = dragRef.current
+      if (!d || d.pointerId !== e.pointerId) return
+      const dx = e.clientX - d.x
+      const dy = e.clientY - d.y
+      d.x = e.clientX
+      d.y = e.clientY
+      const pn = panRef.current
+      setTransform(zoomRef.current, { x: pn.x + dx, y: pn.y + dy })
+    }
+
+    const endPan = (e) => {
+      const d = dragRef.current
+      if (!d) return
+      if (e && e.pointerId && d.pointerId !== e.pointerId) return
+      dragRef.current = null
+      wrap.classList.remove('is-panning')
+      if (e && e.pointerId != null) {
+        try { wrap.releasePointerCapture(e.pointerId) } catch (_) {}
+      }
+    }
+
+    // Pinch (two-finger) zoom for touch.
+    const touchDist = (touches) => Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY,
+    )
+
+    const onTouchStart = (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault()
+        const rect = wrap.getBoundingClientRect()
+        pinchRef.current = {
+          startDist: touchDist(e.touches),
+          startZoom: zoomRef.current,
+          cx: (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left,
+          cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top,
+        }
+      }
+    }
+
+    const onTouchMove = (e) => {
+      const p = pinchRef.current
+      if (p && e.touches.length === 2) {
+        e.preventDefault()
+        const dist = touchDist(e.touches)
+        if (p.startDist < 1) return
+        const factor = dist / p.startDist
+        const nextZ = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, p.startZoom * factor))
+        const pn = panRef.current
+        // Keep pinch centre fixed.
+        const nextPan = {
+          x: p.cx - (p.cx - pn.x) * (nextZ / zoomRef.current),
+          y: p.cy - (p.cy - pn.y) * (nextZ / zoomRef.current),
+        }
+        setTransform(nextZ, nextPan)
+      }
+    }
+
+    const onTouchEnd = (e) => {
+      if (e.touches.length < 2) pinchRef.current = null
+    }
+
+    const onDoubleClick = () => resetView()
+
+    wrap.addEventListener('wheel', onWheel, { passive: false })
+    wrap.addEventListener('pointerdown', onPointerDown)
+    wrap.addEventListener('pointermove', onPointerMove)
+    wrap.addEventListener('pointerup', endPan)
+    wrap.addEventListener('pointercancel', endPan)
+    wrap.addEventListener('touchstart', onTouchStart, { passive: false })
+    wrap.addEventListener('touchmove', onTouchMove, { passive: false })
+    wrap.addEventListener('touchend', onTouchEnd)
+    wrap.addEventListener('touchcancel', onTouchEnd)
+    wrap.addEventListener('dblclick', onDoubleClick)
+
+    return () => {
+      wrap.removeEventListener('wheel', onWheel)
+      wrap.removeEventListener('pointerdown', onPointerDown)
+      wrap.removeEventListener('pointermove', onPointerMove)
+      wrap.removeEventListener('pointerup', endPan)
+      wrap.removeEventListener('pointercancel', endPan)
+      wrap.removeEventListener('touchstart', onTouchStart)
+      wrap.removeEventListener('touchmove', onTouchMove)
+      wrap.removeEventListener('touchend', onTouchEnd)
+      wrap.removeEventListener('touchcancel', onTouchEnd)
+      wrap.removeEventListener('dblclick', onDoubleClick)
+    }
+  }, [setTransform, resetView])
 
   return (
     <section className="silhouette-preview-section">
@@ -273,10 +422,36 @@ export default function SilhouettePreviewPanel({
 
       <div className="preview-wrap silhouette-preview-canvas-wrap" ref={wrapRef}>
         <canvas ref={canvasRef} />
+        <div className="silhouette-zoom-controls">
+          <button
+            type="button"
+            className="silhouette-zoom-btn"
+            aria-label="Zoom in"
+            onClick={() => setTransform(zoomRef.current * 1.25, panRef.current)}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="silhouette-zoom-btn"
+            aria-label="Zoom out"
+            onClick={() => setTransform(zoomRef.current / 1.25, panRef.current)}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="silhouette-zoom-btn silhouette-zoom-reset"
+            aria-label="Reset zoom"
+            onClick={resetView}
+          >
+            Reset
+          </button>
+        </div>
       </div>
 
       <div className="silhouette-preview-footer">
-        {contour.length > 0 ? `${contour.length} pts · bins ${GRID_BINS}` : '—'}
+        {contour.length > 0 ? `${contour.length} pts · bins ${GRID_BINS} · ${(zoom * 100).toFixed(0)}%` : '—'}
       </div>
     </section>
   )

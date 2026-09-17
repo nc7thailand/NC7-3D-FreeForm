@@ -459,23 +459,24 @@ export function AppStateProvider({ children }) {
     return true
   }, [bakeModelTransform, updateStatsFrom])
 
-  const computeCutJob = useCallback(async (onProgress) => {
+  const computeCutJob = useCallback(async (onProgress, stockOverride = null) => {
     const geo = workingRef.current
     if (!geo) return null
-    planePoint.current.copy(planePointFromStock(stock))
+    const s = stockOverride ?? stock
+    planePoint.current.copy(planePointFromStock(s))
     const job = await buildCutJob(geo, rotationN, planePoint.current, {
-      silhouetteOpts: silhouetteOptsFromStock(stock),
+      silhouetteOpts: silhouetteOptsFromStock(s),
       mode: cutMode,
       onProgress,
     })
-    job.stock = { ...stock }
+    job.stock = { ...s }
     for (const cut of job.cuts) {
-      cut.wirePath = wirePathFromProfile(cut.profile, stock, cut.thetaDeg)
+      cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
     }
     return job
   }, [rotationN, cutMode, stock])
 
-  const saveToolpathStage = useCallback(async () => {
+  const saveToolpathStage = useCallback(async (stockOverride = null) => {
     const geo = workingRef.current
     if (!geo) return false
     const total = effectiveCutCount(rotationN, { mode: cutMode })
@@ -486,7 +487,7 @@ export function AppStateProvider({ children }) {
       const job = await computeCutJob(async (done, count) => {
         setBusyProgress(done, count)
         await yieldToPaint()
-      })
+      }, stockOverride)
       if (!cutJobHasProfile(job)) {
         setStatus('No cross-section found — check model or rotation count.')
         return false
@@ -510,6 +511,18 @@ export function AppStateProvider({ children }) {
   const applyToolpathSettings = useCallback(async () => {
     const ok = await saveToolpathStage()
     if (ok) setCutIndex(0)
+    return ok
+  }, [saveToolpathStage])
+
+  /**
+   * Commit a draft stock object and recompute with it. Used by the Toolpath
+   * Setup panel's Apply button: the draft is copied into applied state, then
+   * the cut job is rebuilt with the NEW stock (passed explicitly to avoid a
+   * stale-closure read of the previous stock).
+   */
+  const commitStock = useCallback(async (newStock) => {
+    setStock({ ...newStock })
+    const ok = await saveToolpathStage(newStock)
     return ok
   }, [saveToolpathStage])
 
@@ -639,6 +652,7 @@ export function AppStateProvider({ children }) {
     handleReset,
     handleCenter,
     handleStockChange,
+    commitStock,
     handleMeshTransformChange,
     saveModelStage,
     saveToolpathStage,

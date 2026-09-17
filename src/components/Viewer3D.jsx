@@ -631,8 +631,9 @@ export default forwardRef(function Viewer3D(
     // Remember framing info for the camera view presets
     state.frameInfo = { center: center.clone(), dist }
 
-    // Default camera view = "right" (button "RIGHT" in the view cube).
-    state.frameCamera('right')
+    // Default camera view = "front" — matches the 2D silhouette's face-on
+    // projection (looking along +Z, the same angle the 2D panel draws from).
+    state.frameCamera('front')
 
     // Resize the floor plan / world origin markers to match the model scale
     if (state.floorGrid) {
