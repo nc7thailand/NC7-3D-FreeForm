@@ -170,6 +170,7 @@ export default function ToolpathPage() {
               thetaDeg={thetaDeg}
               cutMode={cutMode}
               setCutMode={setCutMode}
+              stock={stock}
             />
             <section className="model-viewport-section">
               <Viewer3D
