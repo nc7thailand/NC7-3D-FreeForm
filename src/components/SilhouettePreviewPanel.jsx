@@ -238,6 +238,24 @@ export default function SilhouettePreviewPanel({
       ctx.stroke()
       ctx.setLineDash([])
 
+      // Foam block outline — dynamic projected width as the block rotates.
+      // projectedWidth(θ) = W·|cos θ| + T·|sin θ|, centred on u = 0, spanning
+      // v ∈ [0, stock.h]. Dashed grey, thin, no fill, drawn behind the
+      // silhouette and cut path.
+      const rad = (thetaDeg * Math.PI) / 180
+      const projectedW = (stock?.w ?? 0) * Math.abs(Math.cos(rad))
+        + (stock?.t ?? 0) * Math.abs(Math.sin(rad))
+      const blockLeftU = -projectedW / 2
+      const blockRightU = projectedW / 2
+      const blockTopV = stock?.h ?? 0
+      ctx.strokeStyle = '#8a9099'
+      ctx.globalAlpha = 0.4
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 4])
+      ctx.strokeRect(X(blockLeftU), Y(blockTopV), X(blockRightU) - X(blockLeftU), Y(0) - Y(blockTopV))
+      ctx.setLineDash([])
+      ctx.globalAlpha = 1
+
       // Silhouette outline — dashed, 50% opacity.
       ctx.setLineDash([5, 4])
       ctx.strokeStyle = '#000000'
