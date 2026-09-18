@@ -87,3 +87,47 @@ G93
 
 Start with Issue A (Safe Points) — highest-priority visible bug.
 Test by regenerating scripts/stage3-4-wire.svg and visually confirming top/bottom safe points extend straight up/down from wire endpoints.
+
+## 8. 2D Polish Status (as of 2026-09-17)
+
+### 8.1 What's been polished in the 2D preview
+
+- **Reference axes**: red dashed vertical line at u = 0 (rotation axis),
+  blue dashed horizontal line at v = BO (bottom cutout offset).
+- **Cut path**: solid blue polyline, per cut mode (Left→Right / Left only).
+- **Foam block outline**: dashed grey rectangle, dynamic projected width
+  `W·|cos θ| + T·|sin θ|`, centred on u = 0, spanning v ∈ [0, stock.h].
+- **Direction markers**: green (start) + red (end) squares outside the foam
+  block at v = BO; colours swap by rotation parity (odd → green left / red
+  right; even → red left / green right).
+- **Link lines**: horizontal solid lines at v = BO joining each marker to the
+  corresponding blue cut-path endpoint (green = start side, red = end side).
+- **Zoom/pan controls**: `+` / `−` / Reset buttons, wheel zoom, drag pan,
+  pinch (0.5x–10x). Stock-anchored viewport (u = 0 fixed at canvas centre).
+- **Blocking setup panel**: Toolpath Setup modal auto-opens on page entry and
+  gear click; draft-only params; Apply/Reset/✕/Escape; cut method row.
+
+Commits this session: `bafa5b5`, `e149409`, `f2f6e2c` (latest).
+
+### 8.2 Known Watch List (still open — deferred)
+
+- Red line might not be perfectly canvas-center (Project Leader re-verifying
+  with zoom reset).
+- 2D vs 3D orientation mismatch (deferred; 2D = source of truth, 3D is
+  visualisation only — do NOT change pipeline to satisfy 3D).
+- Safe Points fix (Issue A) — deferred.
+- G-code header G94 (Issue B) — deferred.
+- Coordinate system mirror (Issue C) — deferred.
+- F values comparison (Issue D) — deferred.
+
+### 8.3 Next session priority
+
+Either:
+- Continue 2D polish (per Project Leader direction), OR
+- Move to Stage 2 wiring (Safe Points + pipeline), starting with Issue A.
+
+### 8.4 Session token note
+
+Previous session reached ~14.4M input tokens — starting a fresh session to
+reduce context bloat. Read this handover plus `docs/HANDOVER-STAGE1.md` first.
+
