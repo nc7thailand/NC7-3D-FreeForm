@@ -143,20 +143,23 @@ reduce context bloat. Read this handover plus `docs/HANDOVER-STAGE1.md` first.
 - Latest commit: `63a40f8`
 - Session token reached 21.8M — opening fresh session next time.
 
-## 9. Working Protocol (New — applies from next session)
+## 9. Working Protocol (Recommendations)
 
-To reduce context bloat (previous session hit 21.8M tokens):
+Guidelines to keep sessions efficient — defaults, not constraints:
 
-1. **Language:** Reply in ENGLISH only. No Thai in reports.
-2. **Brevity:** Reports max 10 lines per task. Use bullet points.
-   No long explanations unless explicitly requested.
-3. **No screenshots via Chrome MCP.** Project Leader captures
-   screenshots on his phone and forwards to the advisor (DeepSeek).
-   Coder does NOT need to see pixels — Coder relies on Project
-   Leader's verbal confirmation.
-4. **No unsolicited proposals.** Complete the task as specified. Do
-   not suggest additional changes.
-5. **Wait for next instruction** after completing a task. Do not
-   start new work.
+1. **Language:** Prefer English for reports (cheaper tokens, faster).
+2. **Brevity:** Prefer concise reports. Skip restating tasks. Use
+   bullet points. Deep diagnosis is fine when warranted.
+3. **Screenshots:** Default to Project Leader capturing on his
+   phone and forwarding to the advisor. Use Chrome MCP screenshots
+   only when explicitly requested or when visual confirmation is
+   essential.
+4. **Scope:** Complete tasks as specified. Flag genuine blockers
+   or inconsistencies. Do not propose architectural changes
+   unprompted.
+5. **Waiting:** After completing a task, wait for the next
+   instruction.
+
+Project Leader may override any guideline at any time.
 
 
