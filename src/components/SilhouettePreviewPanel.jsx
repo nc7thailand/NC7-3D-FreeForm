@@ -87,30 +87,48 @@ function buildCutPath(contour, boV, leftOnly) {
 
   if (!leftOnly) return best.arc
 
-  // Left-only: walk the arc from the left BO crossing while u <= 0 and cut at
-  // the first vertex past the rotation axis. Walking by u-sign (rather than
-  // detecting crossings) needs no special handling for vertices sitting exactly
-  // on u = 0 or for near-tangent segments.
-  const cut = best.arc[best.arc.length - 1]
-  for (let i = 1; i < best.arc.length; i++) {
-    const p = best.arc[i]
-    if (p.u > 0) {
-      const prev = best.arc[i - 1]
-      const t = prev.u / (prev.u - p.u)
-      const axis = { u: 0, v: prev.v + t * (p.v - prev.v) }
-      return [...best.arc.slice(0, i), axis]
+  // Left-only: the path ends at the APEX — the u = 0 crossing with the HIGHEST
+  // v along the walk.
+  //
+  // Walk up from the left BO crossing, recording every u = 0 crossing (with the
+  // interpolated v). The apex is the GLOBAL highest-v crossing on the arc. We
+  // scan the whole arc rather than stopping at the first descent: the silhouette
+  // can dip between crossings (off-centre models weave across u = 0), so an
+  // early "descended below the best crossing" stop would miss a higher crossing
+  // further along. If the arc never crosses u = 0, keep going to its end — the
+  // crossing may only appear after the peak (centred case crosses at v=598.1).
+  //
+  // The returned path is truncated at the apex crossing, with the interpolated
+  // (u=0, v) point as its final vertex.
+  let apexIdx = -1
+  let apexV = -Infinity
+  let apexPoint = null
+
+  for (let i = 0; i < best.arc.length - 1; i++) {
+    const a = best.arc[i]
+    const b = best.arc[i + 1]
+    if ((a.u <= 0) !== (b.u <= 0)) {
+      const t = (0 - a.u) / (b.u - a.u)
+      const v = a.v + t * (b.v - a.v)
+      if (v > apexV + 1e-9) {
+        apexV = v
+        apexIdx = i
+        apexPoint = { u: 0, v }
+      }
     }
   }
 
-  // Never reached the axis: the kept half is undefined, so report it rather
-  // than silently returning the full silhouette as if the cut had happened.
-  console.warn('[SilhouettePreviewPanel] left-only cut found no u > 0 vertex', {
-    arcPoints: best.arc.length,
-    startU: best.arc[0].u,
-    endU: cut.u,
-    maxV: best.maxV,
-  })
-  return []
+  // No u = 0 crossing anywhere on the arc: fall back to the global-max-v vertex
+  // so the path still terminates sensibly.
+  if (!apexPoint) {
+    let gIdx = 0
+    for (let i = 1; i < best.arc.length; i++) {
+      if (best.arc[i].v > best.arc[gIdx].v) gIdx = i
+    }
+    return best.arc.slice(0, gIdx + 1)
+  }
+
+  return [...best.arc.slice(0, apexIdx + 1), apexPoint]
 }
 
 /**
@@ -325,6 +343,30 @@ export default function SilhouettePreviewPanel({
         ctx.stroke()
       }
 
+      // Small rhombus marker, optionally labelled with its (u, v) coordinate.
+      const drawRhombus = (px, py, color, label, radius = 5) => {
+        const r = radius
+        ctx.setLineDash([])
+        ctx.fillStyle = color
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(px, py - r)
+        ctx.lineTo(px + r, py)
+        ctx.lineTo(px, py + r)
+        ctx.lineTo(px - r, py)
+        ctx.closePath()
+        ctx.fill()
+        ctx.stroke()
+        if (label) {
+          ctx.fillStyle = '#7a1fa2'
+          ctx.font = '10px ui-monospace, monospace'
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(label, px + r + 2, py)
+        }
+      }
+
       if (cutMode === CUT_MODE_LEFT_ONLY) {
         // ---- Left Only mode ----
         // Top marker on the rotation axis, above the foam block.
@@ -341,20 +383,44 @@ export default function SilhouettePreviewPanel({
 
         if (cutPath.length >= 2) {
           const bottomPt = cutPath[0]                 // left BO crossing (u<0, v=BO)
-          const topPt = cutPath[cutPath.length - 1]   // axis point (u=0, v=top_of_cut)
+          const apexPt = cutPath[cutPath.length - 1]  // apex of the left arc
+          // Exactly two link lines:
+          //   GREEN: top marker → apex (the blue path's end)
+          //   RED:   bottom-left marker → path start (left-BO crossing)
+          // No artificial filler segments — the path itself must reach the apex.
           if (isOdd) {
-            // green: top marker → down → path top; red: path bottom → left marker
-            drawLink(X(topMarkerU), Y(topMarkerV), X(topPt.u), Y(topPt.v), GREEN)
+            drawLink(X(topMarkerU), Y(topMarkerV), X(apexPt.u), Y(apexPt.v), GREEN)
             drawLink(X(bottomPt.u), Y(bottomPt.v), X(leftMarkerU), Y(markerV), RED)
           } else {
-            // green: left marker → path bottom; red: path top → up → top marker
             drawLink(X(leftMarkerU), Y(markerV), X(bottomPt.u), Y(bottomPt.v), GREEN)
-            drawLink(X(topPt.u), Y(topPt.v), X(topMarkerU), Y(topMarkerV), RED)
+            drawLink(X(apexPt.u), Y(apexPt.v), X(topMarkerU), Y(topMarkerV), RED)
           }
         }
 
         drawMarkerAt(X(topMarkerU), Y(topMarkerV), topColor, topDark)
         drawMarkerAt(X(leftMarkerU), Y(markerV), bottomColor, bottomDark)
+
+        // Debug markers on the blue path (Left Only mode):
+        //  - magenta rhombus + (u, v) label at every u = 0 crossing
+        //  - larger ORANGE apex rhombus, labelled "APEX (v=…)", at the highest
+        //    crossing (the path's last vertex, which is now the apex crossing)
+        const MAGENTA = '#ff00ff'
+        const ORANGE = '#ff8c00'
+        if (cutPath.length >= 2) {
+          const apex = cutPath[cutPath.length - 1]
+          for (let i = 0; i < cutPath.length - 1; i++) {
+            const a = cutPath[i]
+            const b = cutPath[i + 1]
+            if ((a.u <= 0) !== (b.u <= 0)) {
+              const t = (0 - a.u) / (b.u - a.u)
+              const v = a.v + t * (b.v - a.v)
+              const isApex = Math.abs(v - apex.v) < 1e-6 && Math.abs(apex.u) < 1e-6
+              if (!isApex) drawRhombus(X(0), Y(v), MAGENTA, `(u=0.0, v=${v.toFixed(1)})`)
+            }
+          }
+          // Distinct apex marker (bigger) at the path's end.
+          drawRhombus(X(apex.u), Y(apex.v), ORANGE, `APEX (v=${apex.v.toFixed(1)})`, 8)
+        }
       } else {
         // ---- Left → Right mode ----
         const leftColor = isOdd ? GREEN : RED
