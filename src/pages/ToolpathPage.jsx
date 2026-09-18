@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import Viewer3D from '../components/Viewer3D'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import PageNav from '../components/PageNav'
@@ -126,12 +126,19 @@ export default function ToolpathPage() {
     stats,
     rotationN,
     cutCount,
+    cutIndex,
     cutMode,
-    setCutMode,
+    openToolpathSetup,
   } = useAppState()
 
   // Mobile view: only one of {2D, 3D} is shown at a time (default 3D).
   const [mobileView, setMobileView] = useState('3d')
+
+  // Open the blocking Toolpath Setup panel on every entry to this page.
+  useEffect(() => {
+    openToolpathSetup()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const wirePointCount = useMemo(() => {
     if (!profile?.polylines?.length) return null
@@ -168,8 +175,8 @@ export default function ToolpathPage() {
             <SilhouettePreviewPanel
               geometry={geometry}
               thetaDeg={thetaDeg}
+              cutIndex={cutIndex}
               cutMode={cutMode}
-              setCutMode={setCutMode}
               stock={stock}
             />
             <section className="model-viewport-section">

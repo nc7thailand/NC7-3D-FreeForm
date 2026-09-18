@@ -84,6 +84,7 @@ export function AppStateProvider({ children }) {
   const [modelName, setModelName] = useState(DUMMY_STL_NAME)
   const [sessionReady, setSessionReady] = useState(false)
   const [hydrating, setHydrating] = useState(true)
+  const [toolpathSetupOpen, setToolpathSetupOpen] = useState(false)
 
   const workingRef = useRef(null)
   const viewerRef = useRef(null)
@@ -459,14 +460,15 @@ export function AppStateProvider({ children }) {
     return true
   }, [bakeModelTransform, updateStatsFrom])
 
-  const computeCutJob = useCallback(async (onProgress, stockOverride = null) => {
+  const computeCutJob = useCallback(async (onProgress, stockOverride = null, cutModeOverride = null) => {
     const geo = workingRef.current
     if (!geo) return null
     const s = stockOverride ?? stock
+    const mode = cutModeOverride ?? cutMode
     planePoint.current.copy(planePointFromStock(s))
     const job = await buildCutJob(geo, rotationN, planePoint.current, {
       silhouetteOpts: silhouetteOptsFromStock(s),
-      mode: cutMode,
+      mode,
       onProgress,
     })
     job.stock = { ...s }
@@ -476,25 +478,26 @@ export function AppStateProvider({ children }) {
     return job
   }, [rotationN, cutMode, stock])
 
-  const saveToolpathStage = useCallback(async (stockOverride = null) => {
+  const saveToolpathStage = useCallback(async (stockOverride = null, cutModeOverride = null) => {
     const geo = workingRef.current
     if (!geo) return false
-    const total = effectiveCutCount(rotationN, { mode: cutMode })
-    setStatus(`Computing ${total} cuts (N=${rotationN}, ${cutMode})…`)
+    const mode = cutModeOverride ?? cutMode
+    const total = effectiveCutCount(rotationN, { mode })
+    setStatus(`Computing ${total} cuts (N=${rotationN}, ${mode})…`)
     beginBusy('Computing toolpath…', { done: 0, total })
     await yieldToPaint()
     try {
       const job = await computeCutJob(async (done, count) => {
         setBusyProgress(done, count)
         await yieldToPaint()
-      }, stockOverride)
+      }, stockOverride, cutModeOverride)
       if (!cutJobHasProfile(job)) {
         setStatus('No cross-section found — check model or rotation count.')
         return false
       }
       setCutJob(job)
       const withProfile = job.cuts.filter((c) => c.profile.polylines.length > 0).length
-      setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${cutMode}).`)
+      setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${mode}).`)
       return true
     } catch (err) {
       setStatus(`Toolpath error: ${err.message}`)
@@ -502,7 +505,7 @@ export function AppStateProvider({ children }) {
     } finally {
       await endBusy()
     }
-  }, [computeCutJob, rotationN, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+  }, [computeCutJob, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
 
   /**
    * Toolpath page Apply button. Recomputes every cut for the current settings
@@ -515,16 +518,22 @@ export function AppStateProvider({ children }) {
   }, [saveToolpathStage])
 
   /**
-   * Commit a draft stock object and recompute with it. Used by the Toolpath
-   * Setup panel's Apply button: the draft is copied into applied state, then
-   * the cut job is rebuilt with the NEW stock (passed explicitly to avoid a
-   * stale-closure read of the previous stock).
+   * Commit draft toolpath settings (stock + cut mode) and recompute. Used by
+   * the Toolpath Setup panel's Apply button: draft values are copied into
+   * applied state, then the cut job is rebuilt with the NEW values (passed
+   * explicitly to avoid stale-closure reads). Set cutIndex to 0 so the first
+   * cut is shown with the new settings.
    */
-  const commitStock = useCallback(async (newStock) => {
+  const commitToolpathSettings = useCallback(async ({ stock: newStock, cutMode: newCutMode }) => {
     setStock({ ...newStock })
-    const ok = await saveToolpathStage(newStock)
+    setCutMode(newCutMode)
+    const ok = await saveToolpathStage(newStock, newCutMode)
+    if (ok) setCutIndex(0)
     return ok
   }, [saveToolpathStage])
+
+  const openToolpathSetup = useCallback(() => setToolpathSetupOpen(true), [])
+  const closeToolpathSetup = useCallback(() => setToolpathSetupOpen(false), [])
 
   const handleSaveProject = useCallback(async () => {
     if (!workingRef.current) {
@@ -652,7 +661,10 @@ export function AppStateProvider({ children }) {
     handleReset,
     handleCenter,
     handleStockChange,
-    commitStock,
+    commitToolpathSettings,
+    toolpathSetupOpen,
+    openToolpathSetup,
+    closeToolpathSetup,
     handleMeshTransformChange,
     saveModelStage,
     saveToolpathStage,

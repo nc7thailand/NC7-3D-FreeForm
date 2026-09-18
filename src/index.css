@@ -405,6 +405,24 @@ body {
   margin: 10px 0 0;
 }
 
+.setup-overlay-cutmethod {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.setup-overlay-cutmethod-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b788a;
+  min-width: 72px;
+}
+.setup-overlay-cutmethod-btns {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+
 .setup-overlay-dirty {
   margin: 12px 0 0;
   font-size: 12px;

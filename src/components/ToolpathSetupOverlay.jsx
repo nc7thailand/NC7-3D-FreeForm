@@ -1,53 +1,116 @@
 import React, { useEffect, useState } from 'react'
 import ToolpathParametersForm from './ToolpathParametersForm'
 import { useAppState } from '../context/AppState'
+import { CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 
 /**
- * Toolpath Setup modal (gear icon). Draft-only: edits accumulate in a local
- * `draftStock` and take effect only on Apply. Reset restores the applied stock.
+ * Toolpath Setup modal — BLOCKING. Opens on Toolpath page entry and on gear
+ * click. Draft-only: edits accumulate in `draftStock` + `draftCutMode` and take
+ * effect only on Apply. Reset/✕/Escape discard the draft and close.
  */
 export default function ToolpathSetupOverlay({ open, onClose }) {
-  const { stock, commitStock } = useAppState()
+  const {
+    stock,
+    cutMode,
+    commitToolpathSettings,
+  } = useAppState()
+
   const [draftStock, setDraftStock] = useState(null)
+  const [draftCutMode, setDraftCutMode] = useState(cutMode)
   const [applying, setApplying] = useState(false)
 
-  // Seed draft from applied stock each time the panel opens.
+  // Seed draft from applied state each time the panel opens.
   useEffect(() => {
-    if (open) setDraftStock({ ...stock })
-  }, [open, stock])
+    if (open) {
+      setDraftStock({ ...stock })
+      setDraftCutMode(cutMode)
+    }
+  }, [open, stock, cutMode])
+
+  // Escape = Reset (discard + close). Only active while open.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleReset()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, draftStock, draftCutMode])
 
   if (!open || !draftStock) return null
 
-  const dirty = Object.keys(stock).some((k) => stock[k] !== draftStock[k])
+  const stockDirty = Object.keys(stock).some((k) => stock[k] !== draftStock[k])
+  const dirty = stockDirty || draftCutMode !== cutMode
 
   const updateDraft = (key, value) => {
     setDraftStock((prev) => ({ ...prev, [key]: value }))
   }
 
+  const resetDraft = () => {
+    setDraftStock({ ...stock })
+    setDraftCutMode(cutMode)
+  }
+
+  const handleReset = () => {
+    resetDraft()
+    onClose()
+  }
+
   const handleApply = async () => {
+    if (!dirty) {
+      // No changes — just close, no recompute.
+      onClose()
+      return
+    }
     setApplying(true)
     try {
-      await commitStock(draftStock)
+      await commitToolpathSettings({ stock: draftStock, cutMode: draftCutMode })
+      onClose()
     } finally {
       setApplying(false)
     }
   }
 
-  const handleReset = () => {
-    setDraftStock({ ...stock })
-  }
-
   return (
     <>
-      <div className="backdrop setup-backdrop" onClick={onClose} aria-hidden />
-      <div className="setup-overlay" role="dialog" aria-label="Toolpath setup">
+      <div className="backdrop setup-backdrop" aria-hidden />
+      <div
+        className="setup-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Toolpath setup"
+      >
         <div className="setup-overlay-header">
           <h2>Toolpath Setup</h2>
-          <button type="button" className="setup-overlay-close" onClick={onClose} aria-label="Close setup">
+          <button type="button" className="setup-overlay-close" onClick={handleReset} aria-label="Close setup">
             ✕
           </button>
         </div>
         <p className="setup-overlay-sub">Foam block &amp; wire offsets (Method 1)</p>
+
+        <div className="setup-overlay-cutmethod">
+          <span className="setup-overlay-cutmethod-label">Cut method</span>
+          <div className="setup-overlay-cutmethod-btns">
+            <button
+              type="button"
+              className={`silhouette-mode-btn${draftCutMode === CUT_MODE_LEFT_ONLY ? ' is-active' : ''}`}
+              onClick={() => setDraftCutMode(CUT_MODE_LEFT_ONLY)}
+            >
+              Left
+            </button>
+            <button
+              type="button"
+              className={`silhouette-mode-btn${draftCutMode === CUT_MODE_LEFT_TO_RIGHT ? ' is-active' : ''}`}
+              onClick={() => setDraftCutMode(CUT_MODE_LEFT_TO_RIGHT)}
+            >
+              Left → Right
+            </button>
+          </div>
+        </div>
 
         <ToolpathParametersForm compact value={draftStock} onChange={updateDraft} />
 
@@ -60,7 +123,7 @@ export default function ToolpathSetupOverlay({ open, onClose }) {
             type="button"
             className="setup-overlay-btn setup-overlay-apply"
             onClick={handleApply}
-            disabled={applying || !dirty}
+            disabled={applying}
           >
             {applying ? 'Applying…' : 'Apply'}
           </button>
@@ -68,7 +131,7 @@ export default function ToolpathSetupOverlay({ open, onClose }) {
             type="button"
             className="setup-overlay-btn setup-overlay-reset"
             onClick={handleReset}
-            disabled={!dirty}
+            disabled={applying}
           >
             Reset
           </button>

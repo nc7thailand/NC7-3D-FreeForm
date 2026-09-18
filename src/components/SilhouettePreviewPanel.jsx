@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { extractFullSilhouette } from '../lib/silhouette'
 import { cuttingPlane, planePointMiddleFromStock } from '../lib/toolpath'
-import { CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
+import { CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 
 // Quality is fixed at High (600 grid bins) for the Stage 1 preview.
 const GRID_BINS = 600
@@ -135,8 +135,8 @@ function buildCutPath(contour, boV, leftOnly) {
 export default function SilhouettePreviewPanel({
   geometry,
   thetaDeg,
+  cutIndex = 0,
   cutMode,
-  setCutMode,
   stock,
 }) {
   const wrapRef = useRef(null)
@@ -282,6 +282,83 @@ export default function SilhouettePreviewPanel({
         for (let i = 1; i < cutPath.length; i++) ctx.lineTo(X(cutPath[i].u), Y(cutPath[i].v))
         ctx.stroke()
       }
+
+      // Cut-entry / cut-exit markers + lead-in / lead-out link lines.
+      //
+      // The wire alternates direction by rotation parity:
+      //   odd  rotation (1,3,5,7): LEFT = green (start), RIGHT = red (end)  → left→right
+      //   even rotation (2,4,6,8): LEFT = red   (end),   RIGHT = green (start) → right→left
+      //
+      // Markers sit OUTSIDE the foam block on each side at v = BO. The link
+      // lines are horizontal (both markers and cut-path endpoints are at v=BO)
+      // and join the green marker to the cut path's start endpoint and the cut
+      // path's end endpoint to the red marker.
+      const fallbackBoMargin = 20
+      const bottomSafeOffset = stock?.boMargin ?? fallbackBoMargin
+      const leftMarkerU = blockLeftU - bottomSafeOffset
+      const rightMarkerU = blockRightU + bottomSafeOffset
+      const markerV = boV
+      const markerSize = 7
+      const GREEN = '#22c55e'
+      const GREEN_DARK = '#15803d'
+      const RED = '#ef4444'
+      const RED_DARK = '#b91c1c'
+
+      const rotationNumber = cutIndex + 1
+      const isOdd = rotationNumber % 2 === 1
+      const leftColor = isOdd ? GREEN : RED
+      const leftDark = isOdd ? GREEN_DARK : RED_DARK
+      const rightColor = isOdd ? RED : GREEN
+      const rightDark = isOdd ? RED_DARK : GREEN_DARK
+
+      const drawMarker = (u, color, dark) => {
+        const mx = X(u)
+        const my = Y(markerV)
+        ctx.fillStyle = color
+        ctx.strokeStyle = dark
+        ctx.lineWidth = 1
+        ctx.fillRect(mx - markerSize / 2, my - markerSize / 2, markerSize, markerSize)
+        ctx.strokeRect(mx - markerSize / 2, my - markerSize / 2, markerSize, markerSize)
+      }
+
+      // Link lines — only meaningful in left→right mode with a real cut path.
+      // The cut path runs from its left endpoint (cutPath[0], u<0) over the top
+      // to its right endpoint (cutPath[last], u>0); both at v = BO.
+      if (cutMode !== CUT_MODE_LEFT_ONLY && cutPath.length >= 2) {
+        const startPt = cutPath[0]                 // left BO crossing
+        const endPt = cutPath[cutPath.length - 1]  // right BO crossing
+        const y = Y(markerV)
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([])
+        if (isOdd) {
+          // green: left marker → path start (left); red: path end (right) → right marker
+          ctx.strokeStyle = GREEN
+          ctx.beginPath()
+          ctx.moveTo(X(leftMarkerU), y)
+          ctx.lineTo(X(startPt.u), y)
+          ctx.stroke()
+          ctx.strokeStyle = RED
+          ctx.beginPath()
+          ctx.moveTo(X(endPt.u), y)
+          ctx.lineTo(X(rightMarkerU), y)
+          ctx.stroke()
+        } else {
+          // green: right marker → path end (right); red: path start (left) → left marker
+          ctx.strokeStyle = GREEN
+          ctx.beginPath()
+          ctx.moveTo(X(endPt.u), y)
+          ctx.lineTo(X(rightMarkerU), y)
+          ctx.stroke()
+          ctx.strokeStyle = RED
+          ctx.beginPath()
+          ctx.moveTo(X(leftMarkerU), y)
+          ctx.lineTo(X(startPt.u), y)
+          ctx.stroke()
+        }
+      }
+
+      drawMarker(leftMarkerU, leftColor, leftDark)
+      drawMarker(rightMarkerU, rightColor, rightDark)
     }
 
     draw()
@@ -289,7 +366,7 @@ export default function SilhouettePreviewPanel({
     ro.observe(wrap)
 
     return () => ro.disconnect()
-  }, [contour, cutPath, stock, zoom, pan])
+  }, [contour, cutPath, stock, cutIndex, cutMode, thetaDeg, zoom, pan])
 
   // Zoom / pan interaction handlers (wheel, pointer drag, pinch).
   useEffect(() => {
@@ -418,25 +495,6 @@ export default function SilhouettePreviewPanel({
   return (
     <section className="silhouette-preview-section">
       <div className="section-label section-label-sub">2D Silhouette Preview (Stage 1)</div>
-
-      <div className="silhouette-preview-controls">
-        <div className="silhouette-mode-toggle">
-          <button
-            type="button"
-            className={`silhouette-mode-btn${cutMode === CUT_MODE_LEFT_TO_RIGHT ? ' is-active' : ''}`}
-            onClick={() => setCutMode(CUT_MODE_LEFT_TO_RIGHT)}
-          >
-            Left → Right
-          </button>
-          <button
-            type="button"
-            className={`silhouette-mode-btn${cutMode === CUT_MODE_LEFT_ONLY ? ' is-active' : ''}`}
-            onClick={() => setCutMode(CUT_MODE_LEFT_ONLY)}
-          >
-            Left only
-          </button>
-        </div>
-      </div>
 
       <div className="preview-wrap silhouette-preview-canvas-wrap" ref={wrapRef}>
         <canvas ref={canvasRef} />

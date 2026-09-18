@@ -41,25 +41,6 @@ export default function ToolpathParametersForm({
           onChange={(e) => change('bo', +e.target.value)}
         />
       </label>
-      <label className="checkbox-label">
-        <input
-          type="checkbox"
-          checked={s.boAuto !== false}
-          onChange={(e) => change('boAuto', e.target.checked)}
-        />
-        Auto bottom safe (hypot/2 + margin)
-      </label>
-      {s.boAuto !== false && (
-        <label>Bottom safe margin (mm)
-          <input
-            type="number"
-            min="0"
-            step="1"
-            value={s.boMargin ?? 20}
-            onChange={(e) => change('boMargin', +e.target.value)}
-          />
-        </label>
-      )}
       <label>Profile accuracy (1–10)
         <input
           type="range"
@@ -76,6 +57,23 @@ export default function ToolpathParametersForm({
       </label>
       <label>Top safe offset
         <input type="number" min="0" step="1" value={s.topOffset ?? 20} onChange={(e) => change('topOffset', +e.target.value)} />
+      </label>
+      <label>Bottom safe point offset (mm)
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={s.boMargin ?? 20}
+          onChange={(e) => change('boMargin', +e.target.value)}
+        />
+      </label>
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={s.boAuto !== false}
+          onChange={(e) => change('boAuto', e.target.checked)}
+        />
+        Auto bottom safe (hypot/2 + margin)
       </label>
       <label className="checkbox-label">
         <input

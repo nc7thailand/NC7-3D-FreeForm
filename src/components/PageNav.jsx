@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ROUTES } from '../routes'
 import { useAppState } from '../context/AppState'
@@ -70,8 +70,7 @@ function ToolpathNavCenter({ onOpenSetup }) {
 
 export default function PageNav({ page }) {
   const navigate = useNavigate()
-  const { hasModel, hasToolpath, saveModelStage, saveToolpathStage } = useAppState()
-  const [setupOpen, setSetupOpen] = useState(false)
+  const { hasModel, hasToolpath, saveModelStage, saveToolpathStage, toolpathSetupOpen, openToolpathSetup, closeToolpathSetup } = useAppState()
 
   const config = {
     model: {
@@ -115,7 +114,7 @@ export default function PageNav({ page }) {
   return (
     <>
       {page === 'toolpath' && (
-        <ToolpathSetupOverlay open={setupOpen} onClose={() => setSetupOpen(false)} />
+        <ToolpathSetupOverlay open={toolpathSetupOpen} onClose={closeToolpathSetup} />
       )}
       <footer className={`page-nav${page === 'toolpath' ? ' page-nav--toolpath' : ''}`}>
         <div className="page-nav-inner">
@@ -127,7 +126,7 @@ export default function PageNav({ page }) {
             <span className="nav-spacer" />
           )}
           {page === 'toolpath' && (
-            <ToolpathNavCenter onOpenSetup={() => setSetupOpen(true)} />
+            <ToolpathNavCenter onOpenSetup={openToolpathSetup} />
           )}
           {config.next ? (
             <button
