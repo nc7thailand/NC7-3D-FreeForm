@@ -10,6 +10,7 @@ import {
 } from '../lib/toolpath'
 import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
+import { buildOverlayData, OVERLAY_COLORS } from '../lib/cutOverlay'
 
 /** Rear cutting plane overlay — set false to show middle plane only. */
 const SHOW_CUTTING_PLANE = false
@@ -97,6 +98,7 @@ export default forwardRef(function Viewer3D(
     geometry,
     resetKey,
     thetaDeg = 0,
+    cutIndex = 0,
     stock,
     profile,
     silhouettePreview,
@@ -108,6 +110,8 @@ export default forwardRef(function Viewer3D(
     readOnly = false,
     showToolpathOverlay = false,
     showModelBBox = true,
+    combinedView = false,
+    lockCamera = false,
   },
   ref
 ) {
@@ -139,6 +143,10 @@ export default forwardRef(function Viewer3D(
     profileLines: null,
     shadowPlane: null,
     shadowPoints: null,
+    overlayGroup: null,
+    overlaySignature: null,
+    cameraLocked: false,
+    freeCameraBeforeLock: null,
   })
 
   useImperativeHandle(ref, () => ({
@@ -433,6 +441,41 @@ export default forwardRef(function Viewer3D(
       state.controls.update()
     }
     state.frameCamera = frameCamera
+
+    /**
+     * Snap to a named view with the damping residue cleared.
+     *
+     * OrbitControls keeps an internal spherical offset plus a damping delta. A
+     * plain frameCamera() sets the position on the camera, but the next damped
+     * update() re-derives the position from that internal state and pulls the
+     * camera back off the requested view (right radius, stale azimuth). So:
+     * flush the residue with damping off, write the target pose last, and only
+     * then restore damping.
+     */
+    const snapCamera = (view) => {
+      const controls = state.controls
+      if (!controls) return
+      const damping = controls.enableDamping
+      controls.enableDamping = false
+
+      // Drain any pending spherical delta while damping is off.
+      controls.update()
+
+      // Compute the target pose, then let update() consume the (now empty)
+      // residue and finally re-assert the pose so nothing can shift it.
+      frameCamera(view)
+      const pose = {
+        position: state.camera.position.clone(),
+        target: controls.target.clone(),
+      }
+      controls.update()
+      state.camera.position.copy(pose.position)
+      controls.target.copy(pose.target)
+      state.camera.lookAt(pose.target)
+
+      controls.enableDamping = damping
+    }
+    state.snapCamera = snapCamera
 
     // Orbit the camera around the target by azimuth/polar deltas (radians)
     const orbitCamera = (dAzimuth, dPolar) => {
@@ -926,6 +969,103 @@ export default forwardRef(function Viewer3D(
     }
   }, [thetaDeg, stock, profile, silhouettePreview, cutMode, geometry, resetKey, showToolpathOverlay])
 
+  // Combined view: the 2D cut drawing rendered as translucent geometry lying
+  // on the FIXED middle plane (the physical wire plane, normal +Z, unrotated).
+  //
+  // Mapping is the raw MP-local one: u → world X, v → world Y, plane depth → 0.
+  // The MP mesh is itself unrotated, so the overlay stays coplanar with it at
+  // every θ, and the silhouette shape updates with θ while the plane does not.
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.scene) return
+
+    const disposeGroup = () => {
+      const g = state.overlayGroup
+      if (!g) return
+      state.scene.remove(g)
+      g.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose()
+        if (obj.material) obj.material.dispose()
+      })
+      state.overlayGroup = null
+    }
+
+    disposeGroup()
+
+    if (!combinedView || !geometry) return
+
+    const data = buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex })
+    const { contour, cutPath, markers, links } = data
+    if (!contour.length) return
+
+    const group = new THREE.Group()
+    group.name = 'CombinedOverlay'
+
+    // Section (u, v) → world on the fixed MP plane. The MP spans v ∈ [0, h]
+    // centred at y = h/2, i.e. v is already measured from the plane's bottom.
+    const toWorld = (p) => new THREE.Vector3(p.u, p.v, 0)
+
+    const addLine = (points, color, { closed = false, opacity = 1, dash = null } = {}) => {
+      if (points.length < 2) return
+      const verts = []
+      for (const p of points) {
+        const w = toWorld(p)
+        verts.push(w.x, w.y, w.z)
+      }
+      if (closed) {
+        const w = toWorld(points[0])
+        verts.push(w.x, w.y, w.z)
+      }
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+      const mat = dash
+        ? new THREE.LineDashedMaterial({
+            color, transparent: true, opacity, depthTest: false, depthWrite: false,
+            dashSize: dash[0], gapSize: dash[1],
+          })
+        : new THREE.LineBasicMaterial({
+            color, transparent: true, opacity, depthTest: false, depthWrite: false,
+          })
+      const line = new THREE.Line(geo, mat)
+      if (dash) line.computeLineDistances()
+      group.add(line)
+    }
+
+    // Silhouette loop — dashed, dimmed (matches the 2D panel's black 50% dash).
+    addLine(contour, OVERLAY_COLORS.contour, { closed: true, opacity: 0.55, dash: [2.5, 2] })
+    // Cut path — solid blue.
+    addLine(cutPath, OVERLAY_COLORS.cutPath, { opacity: 1 })
+    // Link lines — green / red.
+    for (const link of links) {
+      addLine([link.from, link.to], link.color, { opacity: 0.95 })
+    }
+
+    // Direction markers — small translucent quads standing on the plane.
+    for (const m of markers) {
+      const size = m.size
+      const geo = new THREE.PlaneGeometry(size, size)
+      const mat = new THREE.MeshBasicMaterial({
+        color: m.color,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+      })
+      const quad = new THREE.Mesh(geo, mat)
+      quad.position.set(m.u, m.v, 0)
+      quad.renderOrder = 5
+      group.add(quad)
+    }
+
+    group.renderOrder = 4
+    state.scene.add(group)
+    state.overlayGroup = group
+    state.overlaySignature = thetaDeg
+
+    return () => disposeGroup()
+  }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex])
+
   // View-only mode (Page 2): orbit with left-drag, hide gizmo toolbar
   useEffect(() => {
     const state = stateRef.current
@@ -944,7 +1084,50 @@ export default forwardRef(function Viewer3D(
     state.controls.update()
   }, [readOnly, geometry, resetKey])
 
-  // Update toolbar highlight
+  // Camera lock (Combined view). The MP plane's normal is +Z, so the "front"
+  // preset (a straight +Z look-at) shows the plane face-on. Orbiting would
+  // foreshorten the overlay to an unreadable edge, so interaction is disabled
+  // here; on leaving, the controls are re-enabled and the user's free camera
+  // position is restored.
+  //
+  // The free position is captured once, on the locked→free transition, and
+  // stored on the ref. React runs the previous effect's cleanup before the new
+  // effect, so a naive save-on-enter/restore-on-exit would restore a position
+  // captured while already locked and drift the camera on every toggle.
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.controls || !state?.camera) return
+
+    if (lockCamera) {
+      // Entering Combined: remember the free camera only if not already locked.
+      if (!state.cameraLocked) {
+        state.freeCameraBeforeLock = {
+          position: state.camera.position.clone(),
+          target: state.controls.target.clone(),
+        }
+      }
+      state.cameraLocked = true
+      state.controls.enabled = false
+      // Damping is meaningless while the controls are disabled, and its residue
+      // keeps easing the camera off the snapped view in the animate loop. Keep
+      // it off for the whole locked period.
+      state.controls.enableDamping = false
+      if (state.snapCamera) state.snapCamera('front')
+    } else if (state.cameraLocked) {
+      // Leaving Combined: hand the camera back where the user left it.
+      state.cameraLocked = false
+      state.controls.enabled = true
+      const saved = state.freeCameraBeforeLock
+      if (saved) {
+        state.camera.position.copy(saved.position)
+        state.controls.target.copy(saved.target)
+        state.controls.update()
+        state.freeCameraBeforeLock = null
+      }
+      state.controls.enableDamping = true
+    }
+  }, [lockCamera, geometry, resetKey])
+
   const updateToolbar = (mode) => {
     const toolbar = toolbarRef.current
     if (!toolbar) return
@@ -1069,6 +1252,7 @@ export default forwardRef(function Viewer3D(
       )}
       <ViewCube
         ref={viewCubeRef}
+        hidden={lockCamera}
         onSetView={setView}
         onOrbit={orbitView}
         onFlip={flipView}

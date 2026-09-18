@@ -131,8 +131,10 @@ export default function ToolpathPage() {
     openToolpathSetup,
   } = useAppState()
 
-  // Mobile view: only one of {2D, 3D} is shown at a time (default 3D).
-  const [mobileView, setMobileView] = useState('3d')
+  // View mode: 'combined' shows the 3D viewport with the 2D cut drawing
+  // overlaid on the fixed wire plane; '2d' and '3d' keep their existing
+  // behaviour. Combined is the default.
+  const [viewMode, setViewMode] = useState('combined')
 
   // Open the blocking Toolpath Setup panel on every entry to this page.
   useEffect(() => {
@@ -145,55 +147,75 @@ export default function ToolpathPage() {
     return wirePathFromProfile(profile, stock, thetaDeg).length
   }, [profile, stock, thetaDeg])
 
+  const isCombined = viewMode === 'combined'
+  const show2d = viewMode === '2d'
+  const show3d = viewMode !== '2d'
+
   return (
     <>
       <ToolpathPanel />
 
       <main className="page-main page-main--toolpath">
         <div className="page-body">
-          <div className={`cam-split${mobileView === '2d' ? ' cam-split--mobile-2d' : ' cam-split--mobile-3d'}`}>
+          <div className={`cam-split cam-split--mode-${viewMode}`}>
             <div className="mobile-view-toggle" role="tablist" aria-label="View toggle">
               <button
                 type="button"
                 role="tab"
-                aria-selected={mobileView === '2d'}
-                className={`mobile-view-toggle-btn${mobileView === '2d' ? ' is-active' : ''}`}
-                onClick={() => setMobileView('2d')}
+                aria-selected={show2d}
+                className={`mobile-view-toggle-btn${show2d ? ' is-active' : ''}`}
+                onClick={() => setViewMode('2d')}
               >
                 2D
               </button>
               <button
                 type="button"
                 role="tab"
-                aria-selected={mobileView === '3d'}
-                className={`mobile-view-toggle-btn${mobileView === '3d' ? ' is-active' : ''}`}
-                onClick={() => setMobileView('3d')}
+                aria-selected={viewMode === '3d'}
+                className={`mobile-view-toggle-btn${viewMode === '3d' ? ' is-active' : ''}`}
+                onClick={() => setViewMode('3d')}
               >
                 3D
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={isCombined}
+                className={`mobile-view-toggle-btn${isCombined ? ' is-active' : ''}`}
+                onClick={() => setViewMode('combined')}
+              >
+                Combined
+              </button>
             </div>
-            <SilhouettePreviewPanel
-              geometry={geometry}
-              thetaDeg={thetaDeg}
-              cutIndex={cutIndex}
-              cutMode={cutMode}
-              stock={stock}
-            />
-            <section className="model-viewport-section">
-              <Viewer3D
-                ref={viewerRef}
+            {show2d && (
+              <SilhouettePreviewPanel
                 geometry={geometry}
-                resetKey={resetKey}
                 thetaDeg={thetaDeg}
-                stock={stock}
-                profile={profile}
-                silhouettePreview={silhouettePreview}
+                cutIndex={cutIndex}
                 cutMode={cutMode}
-                readOnly
-                showToolpathOverlay
-                showModelBBox={false}
+                stock={stock}
               />
-            </section>
+            )}
+            {show3d && (
+              <section className="model-viewport-section">
+                <Viewer3D
+                  ref={viewerRef}
+                  geometry={geometry}
+                  resetKey={resetKey}
+                  thetaDeg={thetaDeg}
+                  cutIndex={cutIndex}
+                  stock={stock}
+                  profile={profile}
+                  silhouettePreview={silhouettePreview}
+                  cutMode={cutMode}
+                  readOnly
+                  showToolpathOverlay
+                  showModelBBox={false}
+                  combinedView={isCombined}
+                  lockCamera={isCombined}
+                />
+              </section>
+            )}
           </div>
           {status && !status.startsWith('Session restored') && !status.startsWith('Model saved') && (
             <div className="status-bar status-bar--above-nav">{status}</div>

@@ -1,135 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import * as THREE from 'three'
-import { extractFullSilhouette } from '../lib/silhouette'
-import { cuttingPlane, planePointMiddleFromStock } from '../lib/toolpath'
 import { CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
+import {
+  OVERLAY_GRID_BINS,
+  buildCutPath,
+  extractOverlayContour,
+  buildOverlayAnnotations,
+} from '../lib/cutOverlay'
 
 // Quality is fixed at High (600 grid bins) for the Stage 1 preview.
-const GRID_BINS = 600
+const GRID_BINS = OVERLAY_GRID_BINS
 
 // Zoom/pan limits for the 2D preview.
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 10
-
-/**
- * Interpolate where edge `a→b` crosses a constant value of `axis`.
- * Returns null when the edge does not cross (or is degenerate).
- */
-function crossAt(a, b, axis, value) {
-  const av = a[axis], bv = b[axis]
-  if ((av - value) * (bv - value) >= 0) return null
-  const t = (value - av) / (bv - av)
-  return {
-    u: a.u + t * (b.u - a.u),
-    v: a.v + t * (b.v - a.v),
-  }
-}
-
-/**
- * Build the open cut path for one rotation: the part of the closed silhouette
- * that the wire actually traces, starting and ending on the BO line (v = BO).
- *
- * The path is the arc that runs from the left-hand BO crossing, up and over the
- * top of the silhouette, to the right-hand BO crossing. The short arc under the
- * BO line is the workpiece's attachment base and is excluded. Both winding
- * directions are handled by keeping whichever arc reaches the greater height.
- *
- * In left-only mode the path walks the arc from the left BO crossing while
- * u <= 0 and stops at the first vertex past the rotation axis, cutting at the
- * interpolated u = 0 point. Vertices sitting exactly on u = 0 simply continue
- * the walk, so they need no special case.
- *
- * @param {{u:number,v:number}[]} contour - closed loop
- * @param {number} boV - BO level (v = BO)
- * @param {boolean} leftOnly - stop at the first u > 0 vertex
- * @returns {{u:number,v:number}[]} open polyline (empty when unavailable)
- */
-function buildCutPath(contour, boV, leftOnly) {
-  const n = contour.length
-  if (n < 3) return []
-
-  const leftCross = []   // u < 0
-  const rightCross = []  // u > 0
-  for (let i = 0; i < n; i++) {
-    const a = contour[i]
-    const b = contour[(i + 1) % n]
-    const p = crossAt(a, b, 'v', boV)
-    if (!p) continue
-    if (p.u < 0) leftCross.push({ i, ...p })
-    else if (p.u > 0) rightCross.push({ i, ...p })
-  }
-  if (!leftCross.length || !rightCross.length) return []
-
-  // Walk the loop from one edge-index to another, always stepping +1.
-  const walk = (fromEdge, toEdge, startPt, endPt) => {
-    const pts = [{ u: startPt.u, v: startPt.v }]
-    let i = (fromEdge + 1) % n
-    let guard = 0
-    while (guard++ <= n) {
-      if (i === (toEdge + 1) % n) break
-      pts.push(contour[i])
-      i = (i + 1) % n
-    }
-    pts.push({ u: endPt.u, v: endPt.v })
-    return pts
-  }
-
-  let best = null
-  for (const l of leftCross) {
-    for (const r of rightCross) {
-      const arc = walk(l.i, r.i, l, r)
-      let maxV = -Infinity
-      for (const p of arc) if (p.v > maxV) maxV = p.v
-      if (!best || maxV > best.maxV) best = { arc, maxV }
-    }
-  }
-  if (!best) return []
-
-  if (!leftOnly) return best.arc
-
-  // Left-only: the path ends at the APEX — the u = 0 crossing with the HIGHEST
-  // v along the walk.
-  //
-  // Walk up from the left BO crossing, recording every u = 0 crossing (with the
-  // interpolated v). The apex is the GLOBAL highest-v crossing on the arc. We
-  // scan the whole arc rather than stopping at the first descent: the silhouette
-  // can dip between crossings (off-centre models weave across u = 0), so an
-  // early "descended below the best crossing" stop would miss a higher crossing
-  // further along. If the arc never crosses u = 0, keep going to its end — the
-  // crossing may only appear after the peak (centred case crosses at v=598.1).
-  //
-  // The returned path is truncated at the apex crossing, with the interpolated
-  // (u=0, v) point as its final vertex.
-  let apexIdx = -1
-  let apexV = -Infinity
-  let apexPoint = null
-
-  for (let i = 0; i < best.arc.length - 1; i++) {
-    const a = best.arc[i]
-    const b = best.arc[i + 1]
-    if ((a.u <= 0) !== (b.u <= 0)) {
-      const t = (0 - a.u) / (b.u - a.u)
-      const v = a.v + t * (b.v - a.v)
-      if (v > apexV + 1e-9) {
-        apexV = v
-        apexIdx = i
-        apexPoint = { u: 0, v }
-      }
-    }
-  }
-
-  // No u = 0 crossing anywhere on the arc: fall back to the global-max-v vertex
-  // so the path still terminates sensibly.
-  if (!apexPoint) {
-    let gIdx = 0
-    for (let i = 1; i < best.arc.length; i++) {
-      if (best.arc[i].v > best.arc[gIdx].v) gIdx = i
-    }
-    return best.arc.slice(0, gIdx + 1)
-  }
-
-  return [...best.arc.slice(0, apexIdx + 1), apexPoint]
-}
 
 /**
  * Stage 1 two-dimensional silhouette preview — DevFoam-style, synced to the
@@ -180,20 +63,19 @@ export default function SilhouettePreviewPanel({
     setTransform(1, { x: 0, y: 0 })
   }, [setTransform])
 
-  const contour = useMemo(() => {
-    if (!geometry) return []
-    try {
-      const frame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
-      return extractFullSilhouette(geometry, frame, { profileAccuracy: 5, gridBins: GRID_BINS })
-    } catch (err) {
-      console.warn('silhouette preview failed:', err)
-      return []
-    }
-  }, [geometry, thetaDeg])
+  const contour = useMemo(
+    () => extractOverlayContour(geometry, thetaDeg),
+    [geometry, thetaDeg],
+  )
 
   const cutPath = useMemo(
     () => buildCutPath(contour, stock?.bo ?? 0, cutMode === CUT_MODE_LEFT_ONLY),
     [contour, stock?.bo, cutMode],
+  )
+
+  const annotations = useMemo(
+    () => buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geometry, thetaDeg }),
+    [cutPath, cutMode, stock, cutIndex, geometry, thetaDeg],
   )
 
   useEffect(() => {
@@ -257,35 +139,18 @@ export default function SilhouettePreviewPanel({
       ctx.setLineDash([])
 
       // Foam block outline — dynamic projected width, centred on the MODEL's
-      // projected 3D-bbox centre (not on the rotation axis). The user may have
-      // moved/rotated the model on the Model page; that frozen position is the
-      // reference. projectedWidth(θ) = W·|cos θ| + T·|sin θ|, spanning
-      // v ∈ [0, stock.h]. Dashed grey, thin, no fill, behind the silhouette.
-      const rad = (thetaDeg * Math.PI) / 180
-      const projectedW = (stock?.w ?? 0) * Math.abs(Math.cos(rad))
-        + (stock?.t ?? 0) * Math.abs(Math.sin(rad))
-
-      // Model bbox centre projected with the SAME uAxis the silhouette uses, so
-      // the block surrounds the silhouette symmetrically.
-      let uCenter = 0
-      if (geometry) {
-        geometry.computeBoundingBox()
-        const bb = geometry.boundingBox
-        if (bb && !bb.isEmpty()) {
-          const c = bb.getCenter(new THREE.Vector3())
-          const uAxis = cuttingPlane(thetaDeg, planePointMiddleFromStock()).uAxis
-          uCenter = c.x * uAxis.x + c.z * uAxis.z
-        }
-      }
-
-      const blockLeftU = uCenter - projectedW / 2
-      const blockRightU = uCenter + projectedW / 2
-      const blockTopV = stock?.h ?? 0
+      // projected 3D-bbox centre (not on the rotation axis). Same numbers the
+      // 3D Combined overlay draws. Dashed grey, thin, no fill, behind the
+      // silhouette.
+      const { block } = annotations
       ctx.strokeStyle = '#8a9099'
       ctx.globalAlpha = 0.4
       ctx.lineWidth = 1
       ctx.setLineDash([4, 4])
-      ctx.strokeRect(X(blockLeftU), Y(blockTopV), X(blockRightU) - X(blockLeftU), Y(0) - Y(blockTopV))
+      ctx.strokeRect(
+        X(block.leftU), Y(block.topV),
+        X(block.rightU) - X(block.leftU), Y(block.bottomV) - Y(block.topV),
+      )
       ctx.setLineDash([])
       ctx.globalAlpha = 1
 
@@ -317,35 +182,14 @@ export default function SilhouettePreviewPanel({
       }
 
       // Cut-entry / cut-exit markers + lead-in / lead-out link lines.
-      //
-      // The wire alternates direction by rotation parity:
-      //   odd  rotation (1,3,5,7): LEFT = green (start), RIGHT = red (end)  → left→right
-      //   even rotation (2,4,6,8): LEFT = red   (end),   RIGHT = green (start) → right→left
-      //
-      // Markers sit OUTSIDE the foam block on each side at v = BO. The link
-      // lines are horizontal (both markers and cut-path endpoints are at v=BO)
-      // and join the green marker to the cut path's start endpoint and the cut
-      // path's end endpoint to the red marker.
-      const fallbackBoMargin = 20
-      const bottomSafeOffset = stock?.boMargin ?? fallbackBoMargin
-      const leftMarkerU = blockLeftU - bottomSafeOffset
-      const rightMarkerU = blockRightU + bottomSafeOffset
-      const markerV = boV
-      const markerSize = 7
-      const GREEN = '#22c55e'
-      const GREEN_DARK = '#15803d'
-      const RED = '#ef4444'
-      const RED_DARK = '#b91c1c'
-
-      const rotationNumber = cutIndex + 1
-      const isOdd = rotationNumber % 2 === 1
-
-      const drawMarkerAt = (px, py, color, dark) => {
+      // Positions and colours come from the shared overlay module, so the 3D
+      // Combined view draws the identical drawing on the fixed MP plane.
+      const drawMarkerAt = (px, py, color, dark, size) => {
         ctx.fillStyle = color
         ctx.strokeStyle = dark
         ctx.lineWidth = 1
-        ctx.fillRect(px - markerSize / 2, py - markerSize / 2, markerSize, markerSize)
-        ctx.strokeRect(px - markerSize / 2, py - markerSize / 2, markerSize, markerSize)
+        ctx.fillRect(px - size / 2, py - size / 2, size, size)
+        ctx.strokeRect(px - size / 2, py - size / 2, size, size)
       }
 
       const drawLink = (x1, y1, x2, y2, color) => {
@@ -358,62 +202,11 @@ export default function SilhouettePreviewPanel({
         ctx.stroke()
       }
 
-      if (cutMode === CUT_MODE_LEFT_ONLY) {
-        // ---- Left Only mode ----
-        // Top marker on the rotation axis, above the foam block.
-        // Bottom-left marker at BO, outside the foam block (same formula as
-        // left→right mode's left marker so they align at every angle).
-        // Cut path runs from its left BO crossing (cutPath[0], u<0, v=BO) up to
-        // its top endpoint on the axis (cutPath[last], u=0, v=top_of_cut).
-        const topMarkerU = 0
-        const topMarkerV = (stock?.h ?? 0) + (stock?.topOffset ?? 20)
-        const topColor = isOdd ? GREEN : RED
-        const topDark = isOdd ? GREEN_DARK : RED_DARK
-        const bottomColor = isOdd ? RED : GREEN
-        const bottomDark = isOdd ? RED_DARK : GREEN_DARK
-
-        if (cutPath.length >= 2) {
-          const bottomPt = cutPath[0]                 // left BO crossing (u<0, v=BO)
-          const apexPt = cutPath[cutPath.length - 1]  // apex of the left arc
-          // Exactly two link lines:
-          //   GREEN: top marker → apex (the blue path's end)
-          //   RED:   bottom-left marker → path start (left-BO crossing)
-          // No artificial filler segments — the path itself must reach the apex.
-          if (isOdd) {
-            drawLink(X(topMarkerU), Y(topMarkerV), X(apexPt.u), Y(apexPt.v), GREEN)
-            drawLink(X(bottomPt.u), Y(bottomPt.v), X(leftMarkerU), Y(markerV), RED)
-          } else {
-            drawLink(X(leftMarkerU), Y(markerV), X(bottomPt.u), Y(bottomPt.v), GREEN)
-            drawLink(X(apexPt.u), Y(apexPt.v), X(topMarkerU), Y(topMarkerV), RED)
-          }
-        }
-
-        drawMarkerAt(X(topMarkerU), Y(topMarkerV), topColor, topDark)
-        drawMarkerAt(X(leftMarkerU), Y(markerV), bottomColor, bottomDark)
-      } else {
-        // ---- Left → Right mode ----
-        const leftColor = isOdd ? GREEN : RED
-        const leftDark = isOdd ? GREEN_DARK : RED_DARK
-        const rightColor = isOdd ? RED : GREEN
-        const rightDark = isOdd ? RED_DARK : GREEN_DARK
-
-        if (cutPath.length >= 2) {
-          const startPt = cutPath[0]                 // left BO crossing
-          const endPt = cutPath[cutPath.length - 1]  // right BO crossing
-          const y = Y(markerV)
-          if (isOdd) {
-            // green: left marker → path start (left); red: path end (right) → right marker
-            drawLink(X(leftMarkerU), y, X(startPt.u), y, GREEN)
-            drawLink(X(endPt.u), y, X(rightMarkerU), y, RED)
-          } else {
-            // green: right marker → path end (right); red: path start (left) → left marker
-            drawLink(X(endPt.u), y, X(rightMarkerU), y, GREEN)
-            drawLink(X(leftMarkerU), y, X(startPt.u), y, RED)
-          }
-        }
-
-        drawMarkerAt(X(leftMarkerU), Y(markerV), leftColor, leftDark)
-        drawMarkerAt(X(rightMarkerU), Y(markerV), rightColor, rightDark)
+      for (const link of annotations.links) {
+        drawLink(X(link.from.u), Y(link.from.v), X(link.to.u), Y(link.to.v), link.color)
+      }
+      for (const m of annotations.markers) {
+        drawMarkerAt(X(m.u), Y(m.v), m.color, m.dark, m.size)
       }
     }
 
@@ -422,7 +215,7 @@ export default function SilhouettePreviewPanel({
     ro.observe(wrap)
 
     return () => ro.disconnect()
-  }, [contour, cutPath, stock, cutIndex, cutMode, thetaDeg, zoom, pan])
+  }, [contour, cutPath, annotations, stock, cutIndex, cutMode, thetaDeg, zoom, pan])
 
   // Zoom / pan interaction handlers (wheel, pointer drag, pinch).
   useEffect(() => {

@@ -1209,7 +1209,31 @@ button:hover {
   flex: 1 1 100%;
   border-right: none;
 }
+/* View-mode layout: the toggle is visible on every breakpoint, so the mode
+   classes (not the media query) decide which panes are laid out. */
+.cam-split--mode-2d .silhouette-preview-section,
+.cam-split--mode-3d .model-viewport-section,
+.cam-split--mode-combined .model-viewport-section {
+  flex: 1 1 100%;
+  border-right: none;
+}
+.cam-split--mode-2d .silhouette-preview-section {
+  border-right: none;
+}
 .mobile-view-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #eef1f5;
+  border-bottom: 1px solid #d5dbe3;
+}
+/* The toggle sits above the panes, so the split stacks vertically whenever it
+   is a sibling row — reposition it as an overlay strip in the wide layout. */
+.cam-split:has(> .mobile-view-toggle) {
+  flex-direction: column;
+}
+.view-cube-widget--hidden {
   display: none;
 }
 .mobile-view-toggle-btn {
@@ -1463,15 +1487,6 @@ button:hover {
     overflow: hidden;
   }
 
-  .page-main--toolpath .mobile-view-toggle {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 6px;
-    padding: 8px 10px;
-    background: #eef1f5;
-    border-bottom: 1px solid #d5dbe3;
-  }
-
   .page-main--toolpath .silhouette-preview-section,
   .page-main--toolpath .model-viewport-section {
     flex: 1 1 auto;
@@ -1480,10 +1495,7 @@ button:hover {
   }
 
   /* one view at a time on mobile */
-  .page-main--toolpath .cam-split--mobile-3d .silhouette-preview-section {
-    display: none;
-  }
-  .page-main--toolpath .cam-split--mobile-2d .model-viewport-section {
+  .page-main--toolpath .cam-split--mode-2d .model-viewport-section {
     display: none;
   }
 
