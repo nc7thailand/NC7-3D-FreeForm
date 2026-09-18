@@ -306,59 +306,80 @@ export default function SilhouettePreviewPanel({
 
       const rotationNumber = cutIndex + 1
       const isOdd = rotationNumber % 2 === 1
-      const leftColor = isOdd ? GREEN : RED
-      const leftDark = isOdd ? GREEN_DARK : RED_DARK
-      const rightColor = isOdd ? RED : GREEN
-      const rightDark = isOdd ? RED_DARK : GREEN_DARK
 
-      const drawMarker = (u, color, dark) => {
-        const mx = X(u)
-        const my = Y(markerV)
+      const drawMarkerAt = (px, py, color, dark) => {
         ctx.fillStyle = color
         ctx.strokeStyle = dark
         ctx.lineWidth = 1
-        ctx.fillRect(mx - markerSize / 2, my - markerSize / 2, markerSize, markerSize)
-        ctx.strokeRect(mx - markerSize / 2, my - markerSize / 2, markerSize, markerSize)
+        ctx.fillRect(px - markerSize / 2, py - markerSize / 2, markerSize, markerSize)
+        ctx.strokeRect(px - markerSize / 2, py - markerSize / 2, markerSize, markerSize)
       }
 
-      // Link lines — only meaningful in left→right mode with a real cut path.
-      // The cut path runs from its left endpoint (cutPath[0], u<0) over the top
-      // to its right endpoint (cutPath[last], u>0); both at v = BO.
-      if (cutMode !== CUT_MODE_LEFT_ONLY && cutPath.length >= 2) {
-        const startPt = cutPath[0]                 // left BO crossing
-        const endPt = cutPath[cutPath.length - 1]  // right BO crossing
-        const y = Y(markerV)
+      const drawLink = (x1, y1, x2, y2, color) => {
+        ctx.strokeStyle = color
         ctx.lineWidth = 1.5
         ctx.setLineDash([])
-        if (isOdd) {
-          // green: left marker → path start (left); red: path end (right) → right marker
-          ctx.strokeStyle = GREEN
-          ctx.beginPath()
-          ctx.moveTo(X(leftMarkerU), y)
-          ctx.lineTo(X(startPt.u), y)
-          ctx.stroke()
-          ctx.strokeStyle = RED
-          ctx.beginPath()
-          ctx.moveTo(X(endPt.u), y)
-          ctx.lineTo(X(rightMarkerU), y)
-          ctx.stroke()
-        } else {
-          // green: right marker → path end (right); red: path start (left) → left marker
-          ctx.strokeStyle = GREEN
-          ctx.beginPath()
-          ctx.moveTo(X(endPt.u), y)
-          ctx.lineTo(X(rightMarkerU), y)
-          ctx.stroke()
-          ctx.strokeStyle = RED
-          ctx.beginPath()
-          ctx.moveTo(X(leftMarkerU), y)
-          ctx.lineTo(X(startPt.u), y)
-          ctx.stroke()
-        }
+        ctx.beginPath()
+        ctx.moveTo(x1, y1)
+        ctx.lineTo(x2, y2)
+        ctx.stroke()
       }
 
-      drawMarker(leftMarkerU, leftColor, leftDark)
-      drawMarker(rightMarkerU, rightColor, rightDark)
+      if (cutMode === CUT_MODE_LEFT_ONLY) {
+        // ---- Left Only mode ----
+        // Top marker on the rotation axis, above the foam block.
+        // Bottom-left marker at BO, outside the foam block (same formula as
+        // left→right mode's left marker so they align at every angle).
+        // Cut path runs from its left BO crossing (cutPath[0], u<0, v=BO) up to
+        // its top endpoint on the axis (cutPath[last], u=0, v=top_of_cut).
+        const topMarkerU = 0
+        const topMarkerV = (stock?.h ?? 0) + (stock?.topOffset ?? 20)
+        const topColor = isOdd ? GREEN : RED
+        const topDark = isOdd ? GREEN_DARK : RED_DARK
+        const bottomColor = isOdd ? RED : GREEN
+        const bottomDark = isOdd ? RED_DARK : GREEN_DARK
+
+        if (cutPath.length >= 2) {
+          const bottomPt = cutPath[0]                 // left BO crossing (u<0, v=BO)
+          const topPt = cutPath[cutPath.length - 1]   // axis point (u=0, v=top_of_cut)
+          if (isOdd) {
+            // green: top marker → down → path top; red: path bottom → left marker
+            drawLink(X(topMarkerU), Y(topMarkerV), X(topPt.u), Y(topPt.v), GREEN)
+            drawLink(X(bottomPt.u), Y(bottomPt.v), X(leftMarkerU), Y(markerV), RED)
+          } else {
+            // green: left marker → path bottom; red: path top → up → top marker
+            drawLink(X(leftMarkerU), Y(markerV), X(bottomPt.u), Y(bottomPt.v), GREEN)
+            drawLink(X(topPt.u), Y(topPt.v), X(topMarkerU), Y(topMarkerV), RED)
+          }
+        }
+
+        drawMarkerAt(X(topMarkerU), Y(topMarkerV), topColor, topDark)
+        drawMarkerAt(X(leftMarkerU), Y(markerV), bottomColor, bottomDark)
+      } else {
+        // ---- Left → Right mode ----
+        const leftColor = isOdd ? GREEN : RED
+        const leftDark = isOdd ? GREEN_DARK : RED_DARK
+        const rightColor = isOdd ? RED : GREEN
+        const rightDark = isOdd ? RED_DARK : GREEN_DARK
+
+        if (cutPath.length >= 2) {
+          const startPt = cutPath[0]                 // left BO crossing
+          const endPt = cutPath[cutPath.length - 1]  // right BO crossing
+          const y = Y(markerV)
+          if (isOdd) {
+            // green: left marker → path start (left); red: path end (right) → right marker
+            drawLink(X(leftMarkerU), y, X(startPt.u), y, GREEN)
+            drawLink(X(endPt.u), y, X(rightMarkerU), y, RED)
+          } else {
+            // green: right marker → path end (right); red: path start (left) → left marker
+            drawLink(X(endPt.u), y, X(rightMarkerU), y, GREEN)
+            drawLink(X(leftMarkerU), y, X(startPt.u), y, RED)
+          }
+        }
+
+        drawMarkerAt(X(leftMarkerU), Y(markerV), leftColor, leftDark)
+        drawMarkerAt(X(rightMarkerU), Y(markerV), rightColor, rightDark)
+      }
     }
 
     draw()
