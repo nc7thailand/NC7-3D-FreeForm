@@ -256,15 +256,30 @@ export default function SilhouettePreviewPanel({
       ctx.stroke()
       ctx.setLineDash([])
 
-      // Foam block outline — dynamic projected width as the block rotates.
-      // projectedWidth(θ) = W·|cos θ| + T·|sin θ|, centred on u = 0, spanning
-      // v ∈ [0, stock.h]. Dashed grey, thin, no fill, drawn behind the
-      // silhouette and cut path.
+      // Foam block outline — dynamic projected width, centred on the MODEL's
+      // projected 3D-bbox centre (not on the rotation axis). The user may have
+      // moved/rotated the model on the Model page; that frozen position is the
+      // reference. projectedWidth(θ) = W·|cos θ| + T·|sin θ|, spanning
+      // v ∈ [0, stock.h]. Dashed grey, thin, no fill, behind the silhouette.
       const rad = (thetaDeg * Math.PI) / 180
       const projectedW = (stock?.w ?? 0) * Math.abs(Math.cos(rad))
         + (stock?.t ?? 0) * Math.abs(Math.sin(rad))
-      const blockLeftU = -projectedW / 2
-      const blockRightU = projectedW / 2
+
+      // Model bbox centre projected with the SAME uAxis the silhouette uses, so
+      // the block surrounds the silhouette symmetrically.
+      let uCenter = 0
+      if (geometry) {
+        geometry.computeBoundingBox()
+        const bb = geometry.boundingBox
+        if (bb && !bb.isEmpty()) {
+          const c = bb.getCenter(new THREE.Vector3())
+          const uAxis = cuttingPlane(thetaDeg, planePointMiddleFromStock()).uAxis
+          uCenter = c.x * uAxis.x + c.z * uAxis.z
+        }
+      }
+
+      const blockLeftU = uCenter - projectedW / 2
+      const blockRightU = uCenter + projectedW / 2
       const blockTopV = stock?.h ?? 0
       ctx.strokeStyle = '#8a9099'
       ctx.globalAlpha = 0.4
@@ -343,30 +358,6 @@ export default function SilhouettePreviewPanel({
         ctx.stroke()
       }
 
-      // Small rhombus marker, optionally labelled with its (u, v) coordinate.
-      const drawRhombus = (px, py, color, label, radius = 5) => {
-        const r = radius
-        ctx.setLineDash([])
-        ctx.fillStyle = color
-        ctx.strokeStyle = '#ffffff'
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(px, py - r)
-        ctx.lineTo(px + r, py)
-        ctx.lineTo(px, py + r)
-        ctx.lineTo(px - r, py)
-        ctx.closePath()
-        ctx.fill()
-        ctx.stroke()
-        if (label) {
-          ctx.fillStyle = '#7a1fa2'
-          ctx.font = '10px ui-monospace, monospace'
-          ctx.textAlign = 'left'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(label, px + r + 2, py)
-        }
-      }
-
       if (cutMode === CUT_MODE_LEFT_ONLY) {
         // ---- Left Only mode ----
         // Top marker on the rotation axis, above the foam block.
@@ -399,28 +390,6 @@ export default function SilhouettePreviewPanel({
 
         drawMarkerAt(X(topMarkerU), Y(topMarkerV), topColor, topDark)
         drawMarkerAt(X(leftMarkerU), Y(markerV), bottomColor, bottomDark)
-
-        // Debug markers on the blue path (Left Only mode):
-        //  - magenta rhombus + (u, v) label at every u = 0 crossing
-        //  - larger ORANGE apex rhombus, labelled "APEX (v=…)", at the highest
-        //    crossing (the path's last vertex, which is now the apex crossing)
-        const MAGENTA = '#ff00ff'
-        const ORANGE = '#ff8c00'
-        if (cutPath.length >= 2) {
-          const apex = cutPath[cutPath.length - 1]
-          for (let i = 0; i < cutPath.length - 1; i++) {
-            const a = cutPath[i]
-            const b = cutPath[i + 1]
-            if ((a.u <= 0) !== (b.u <= 0)) {
-              const t = (0 - a.u) / (b.u - a.u)
-              const v = a.v + t * (b.v - a.v)
-              const isApex = Math.abs(v - apex.v) < 1e-6 && Math.abs(apex.u) < 1e-6
-              if (!isApex) drawRhombus(X(0), Y(v), MAGENTA, `(u=0.0, v=${v.toFixed(1)})`)
-            }
-          }
-          // Distinct apex marker (bigger) at the path's end.
-          drawRhombus(X(apex.u), Y(apex.v), ORANGE, `APEX (v=${apex.v.toFixed(1)})`, 8)
-        }
       } else {
         // ---- Left → Right mode ----
         const leftColor = isOdd ? GREEN : RED
