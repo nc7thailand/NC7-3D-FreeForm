@@ -129,6 +129,8 @@ export default function ToolpathPage() {
     cutIndex,
     cutMode,
     openToolpathSetup,
+    simActive,
+    simPlaying,
   } = useAppState()
 
   // View mode: 'combined' shows the 3D viewport with the 2D cut drawing
@@ -186,6 +188,9 @@ export default function ToolpathPage() {
                 cutIndex={cutIndex}
                 cutMode={cutMode}
                 stock={stock}
+                simActive={simActive}
+                simPlaying={simPlaying}
+                rotationN={rotationN}
               />
             )}
             {show3d && (

@@ -36,7 +36,7 @@ export default function GcodePage() {
     <main className="page-main">
       <div className="page-body">
         <div className="gcode-page">
-          <div className="section-label">Page 3 — G-code Generation</div>
+          <div className="section-label">Page 4 — G-code Generation</div>
 
           {!cutJob ? (
             <div className="placeholder-content">

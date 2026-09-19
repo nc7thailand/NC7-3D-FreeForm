@@ -830,6 +830,33 @@ body {
   font-family: ui-monospace, monospace;
 }
 
+/* Experimental Sim toggle — same shape as the cut-nav buttons, highlighted
+   while the Sim module is active. */
+.sim-toggle-btn.is-active {
+  background: #2b6cb0;
+  border-color: #3f6fa0;
+  color: #eaf2fb;
+}
+
+.sim-toggle-btn.is-active:hover:not(:disabled) {
+  background: #34699f;
+}
+
+.sim-play-btn {
+  min-width: 62px;
+}
+
+.sim-play-btn.is-active {
+  background: #2b6cb0;
+  border-color: #3f6fa0;
+  color: #eaf2fb;
+}
+
+.sim-play-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .placeholder-page {
   flex: 1;
   display: flex;

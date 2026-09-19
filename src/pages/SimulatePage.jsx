@@ -115,7 +115,7 @@ export default function SimulatePage() {
       <main className="page-main">
         <div className="page-body">
           <div className="placeholder-page">
-            <div className="section-label">Page 4 — Simulation</div>
+            <div className="section-label">Page 3 — Simulation</div>
             <div className="placeholder-content">
               <p className="placeholder-note">No saved cut job — go back to Page 2 and press Next to commit the toolpath.</p>
             </div>
@@ -130,7 +130,7 @@ export default function SimulatePage() {
     <main className="page-main page-main--simulate">
       <div className="page-body">
         <div className="section-label section-label-row simulate-header">
-          <span>Page 4 — Simulation</span>
+          <span>Page 3 — Simulation</span>
           <span className="simulate-header-meta">{stack.length} wire profiles · {timeline.length} segments</span>
         </div>
 

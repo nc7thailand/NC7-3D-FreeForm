@@ -93,6 +93,10 @@ export function AppStateProvider({ children }) {
   const [sessionReady, setSessionReady] = useState(false)
   const [hydrating, setHydrating] = useState(true)
   const [toolpathSetupOpen, setToolpathSetupOpen] = useState(false)
+  // Experimental Sim module (2D panel only). Ephemeral view state — not part of
+  // the project/session persistence, not read by the G-code pipeline.
+  const [simActive, setSimActive] = useState(false)
+  const [simPlaying, setSimPlaying] = useState(false)
 
   const workingRef = useRef(null)
   const viewerRef = useRef(null)
@@ -298,6 +302,12 @@ export function AppStateProvider({ children }) {
     if (hydrating) return
     setCutIndex((i) => Math.min(i, Math.max(effectiveCutCount(rotationN, { mode: cutMode }) - 1, 0)))
   }, [rotationN, cutMode, hydrating])
+
+  // Sim playback is per-rotation: any change of previewed cut restarts it, and
+  // switching the module off clears it.
+  useEffect(() => {
+    setSimPlaying(false)
+  }, [cutIndex, simActive])
 
   // Settings changes do NOT invalidate the buffered job — it is replaced on
   // Apply. Keeping it lets the user keep browsing cuts while editing values.
@@ -678,6 +688,10 @@ export function AppStateProvider({ children }) {
     toolpathSetupOpen,
     openToolpathSetup,
     closeToolpathSetup,
+    simActive,
+    setSimActive,
+    simPlaying,
+    setSimPlaying,
     handleMeshTransformChange,
     saveModelStage,
     saveToolpathStage,

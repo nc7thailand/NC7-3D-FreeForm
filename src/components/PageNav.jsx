@@ -12,6 +12,10 @@ function ToolpathNavCenter({ onOpenSetup }) {
     cutIndex,
     setCutIndex,
     thetaDeg,
+    simActive,
+    setSimActive,
+    simPlaying,
+    setSimPlaying,
   } = useAppState()
 
   const clampN = (n) => Math.min(64, Math.max(3, n))
@@ -64,6 +68,27 @@ function ToolpathNavCenter({ onOpenSetup }) {
       >
         ▶
       </button>
+      <button
+        type="button"
+        className={`cut-nav-btn sim-toggle-btn${simActive ? ' is-active' : ''}`}
+        onClick={() => setSimActive((v) => !v)}
+        aria-pressed={simActive}
+        aria-label="Toggle Sim"
+        title="Sim"
+      >
+        Sim
+      </button>
+      <button
+        type="button"
+        className={`cut-nav-btn sim-play-btn${simPlaying ? ' is-active' : ''}`}
+        disabled={!simActive}
+        onClick={() => setSimPlaying((v) => !v)}
+        aria-pressed={simPlaying}
+        aria-label="Play wire animation"
+        title="Play"
+      >
+        {simPlaying ? 'Pause' : 'Play'}
+      </button>
     </div>
   )
 }
@@ -83,20 +108,20 @@ export default function PageNav({ page }) {
     toolpath: {
       back: ROUTES.model,
       backLabel: '← Back to Model',
-      next: ROUTES.gcode,
-      nextLabel: 'Next → G-code',
-      nextDisabled: !hasToolpath,
-    },
-    gcode: {
-      back: ROUTES.toolpath,
-      backLabel: '← Back to Toolpath',
       next: ROUTES.simulate,
       nextLabel: 'Next → Simulate',
-      nextDisabled: false,
+      nextDisabled: !hasToolpath,
     },
     simulate: {
-      back: ROUTES.gcode,
-      backLabel: '← Back to G-code',
+      back: ROUTES.toolpath,
+      backLabel: '← Back to Toolpath',
+      next: ROUTES.gcode,
+      nextLabel: 'Next → G-code',
+      nextDisabled: false,
+    },
+    gcode: {
+      back: ROUTES.simulate,
+      backLabel: '← Back to Simulate',
       next: null,
       nextLabel: null,
       nextDisabled: true,

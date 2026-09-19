@@ -36,7 +36,10 @@ export default function Stepper() {
       {STEPS.map((step, i) => {
         const active = pathname === step.path
         const unlocked = canVisit(step.path)
-        const dimmed = step.path === ROUTES.gcode && hasToolpath && !hasToolpathSaved
+        const dimmed = (
+          (step.path === ROUTES.simulate || step.path === ROUTES.gcode)
+          && hasToolpath && !hasToolpathSaved
+        )
         return (
           <React.Fragment key={step.path}>
             {i > 0 && <span className="stepper-sep" aria-hidden="true" />}
@@ -46,12 +49,12 @@ export default function Stepper() {
                 className={`stepper-item${active ? ' active' : ''}`}
                 onClick={(e) => goTo(step.path, e)}
               >
-                <span className="stepper-num">{step.short}</span>
+                <span className="stepper-num">{i + 1}</span>
                 <span className="stepper-label">{step.label}</span>
               </NavLink>
             ) : (
               <span className={`stepper-item locked${active ? ' active' : ''}${dimmed ? ' dimmed' : ''}`}>
-                <span className="stepper-num">{step.short}</span>
+                <span className="stepper-num">{i + 1}</span>
                 <span className="stepper-label">{step.label}</span>
               </span>
             )}

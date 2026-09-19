@@ -6,8 +6,8 @@ export const ROUTES = {
 }
 
 export const STEPS = [
-  { path: ROUTES.model, label: 'Model', short: '1' },
-  { path: ROUTES.toolpath, label: 'Toolpath', short: '2' },
-  { path: ROUTES.gcode, label: 'G-code', short: '3' },
-  { path: ROUTES.simulate, label: 'Simulate', short: '4' },
+  { path: ROUTES.model, label: 'Model' },
+  { path: ROUTES.toolpath, label: 'Toolpath' },
+  { path: ROUTES.simulate, label: 'Simulate' },
+  { path: ROUTES.gcode, label: 'G-code' },
 ]
