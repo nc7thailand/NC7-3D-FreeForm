@@ -162,4 +162,86 @@ Guidelines to keep sessions efficient — defaults, not constraints:
 
 Project Leader may override any guideline at any time.
 
+### 9.1 Dev Server Protocol
+
+Before starting a dev server:
+
+```
+lsof -i :5173 | grep LISTEN
+```
+
+- If a server is already running on 5173: **REUSE it**
+- Do **NOT** start a second one
+
+When done:
+
+```
+pkill -f "NC7Studio3D.*vite"
+```
+
+(or kill by PID)
+
+- Never leave background processes across sessions.
+- If the port is occupied → kill the old one, do **NOT** auto-increment
+  (Vite's "Port 5173 is in use, trying another one..." fallback is the
+  failure mode this rule exists to prevent — it silently stacks servers on
+  5174, 5175, … and the Project Leader ends up verifying a stale build.)
+
+Verify no servers remain before reporting "session ready to close":
+
+```
+lsof -i :5173-5179 | grep LISTEN
+```
+
+## 10. Combined View Feature (2026-09-18, branch `experiment/combined-view`)
+
+A third toolpath view mode. **Branch-based experiment — NOT merged to `main`.**
+
+- **Branch:** `experiment/combined-view` (created from `main` @ `2fd4026`).
+- **Committed:** `d733153` — "feat(toolpath): Combined view — 2D cut drawing
+  on the fixed wire plane" (pushed to origin).
+- **What it does:** adds a `[2D] [Combined]` toggle (desktop + mobile,
+  **Combined default**). Combined shows the 3D viewport with the 2D cut drawing
+  (silhouette loop, cut path, direction markers, link lines) as translucent 3D
+  geometry on the **fixed** middle plane. 2D mode is unchanged.
+- **Overlay placement:** raw MP-local mapping — `u → world X`, `v → world Y`,
+  `z = 0`. The MP mesh stays unrotated; the silhouette shape changes with θ
+  while the plane does not. `unprojectFromSection` is deliberately NOT used.
+- **Shared data:** `src/lib/cutOverlay.js` (new, pure math) now supplies the
+  contour / cut path / markers / links for BOTH the 2D panel and the 3D
+  overlay — removed ~285 lines of duplicated logic from
+  `SilhouettePreviewPanel.jsx`.
+- **G-code verified byte-identical** to `main` (SHA-256 `dae3c735…`, both cut
+  modes) via `scripts/dump-gcode.mjs`. Rendering only — silhouette extraction,
+  wire path, toolpath and G-code generation are untouched.
+- **`npm run build` clean.**
+
+### 10.1 Polish pass (2026-09-19, uncommitted)
+
+Three changes applied in the working tree — **not yet committed**:
+
+1. **Plain 3D removed from the Toolpath toggle.** `ToolpathPage.jsx` now offers
+   `[2D] [Combined]` only; the `'3d'` state value is gone. `Viewer3D` itself is
+   untouched and is still used in full by the Model page.
+2. **Red MP plane hidden in Combined.** `mpPlane.visible = !combinedView` — the
+   mesh stays in the scene with its transform intact, and material must be
+   attached for `visible` to reach the render list, so overlay placement on the
+   MP coordinate space is unaffected.
+3. **Camera unlocked in Combined.** The `lockCamera` prop is removed. `viewMode`
+   Combined still snaps once to the **back** preset on entry (camera at `−Z`
+   looking along `+Z`), but orbit/zoom/pan stay live and the ViewCube is shown.
+   The overlay foreshortens at oblique angles — accepted.
+
+**Verified in-browser (Combined, θ = 0°):** toggle shows `2D`/`Combined` only;
+`mpVisible false` / MP group still parented to the scene; overlay present with 6
+children; `controls.enabled true`, damping on, left+right = ROTATE; camera
+`(0, 310.75, −1553.75)` on entry = rear; a synthetic right-drag moved the camera
+to an oblique pose, confirming orbit. Round-trip 2D → Combined re-snaps to rear
+and restores the overlay. Model page unchanged (Move/Rotate/Reset/Settle/Center,
+rotation panel, ViewCube visible). Screenshots:
+`.inspect/combined-clean-default.png`, `.inspect/combined-clean-orbited.png`.
+
+Push anything further only on explicit instruction. Do NOT merge to `main`.
+
+
 
