@@ -218,6 +218,10 @@ A third toolpath view mode. **Branch-based experiment — NOT merged to `main`.*
 
 ### 10.1 Polish pass (2026-09-19, committed)
 
+**Source commit: `7249901`** — "feat(toolpath): Combined view + polish + bug
+fixes" (branch `experiment/combined-view`, pushed to origin). This section and
+§10.2 describe the changes in that commit; it also covers §10.2's bug fixes.
+
 Changes to the Combined overlay and the setup panel:
 
 1. **Plain 3D removed from the Toolpath toggle.** `ToolpathPage.jsx` now offers
@@ -247,6 +251,8 @@ Changes to the Combined overlay and the setup panel:
    vertically centred.
 
 ### 10.2 Bug fixes (2026-09-19)
+
+**Source commit: `7249901`** (same commit as §10.1).
 
 1. **Overlay thickness had no effect, and looked "exploded" on mobile.**
    Root cause: `THREE.LineBasicMaterial` cannot render thick lines under core
