@@ -327,34 +327,46 @@ artifacts — is Project-Leader-verified, not machine-verified.**
 
 Push anything further only on explicit instruction. Do NOT merge to `main`.
 
-## 11. Sim Module (2026-09-19, branch experiment/combined-view)
-
-Commit d45cec0.
+## 11. Sim Module (2026-09-19, commit 324eb5b)
 
 ### 11.1 Features
 
 - Sim toggle button (after rotation > button)
-- Play button (after Sim) animates the wire marker
+- Play button (after Sim) triggers wire marker animation
 - White dot with blue+yellow stroke = next rotation's start point
 - Wire marker animates along full wire path:
-  green line → blue cut path → red line
+  green marker → oriented cut path → red marker
 - Blink effect during cutting (orange glow, ~0.45s cycle)
 - Direction follows parity (green → red always)
-- Reset on cutIndex change / simActive off
+- Distance-based animation (SIM_SPEED_MM_PER_SEC = 100)
+- Trail track accumulates during Play
+- Live data label shows N, t, u, v, distance, progress, phase
+- Click label → opens track-log overlay with CSV export
 
 ### 11.2 Status
 
 - Left Only mode: verified
-- Left → Right mode: deferred for polish
+- Left → Right mode: verified (N=1-4)
+- Crash fixed: isFinite guards on marker coords
+- Overshoot eliminated: marker anchored at real marker position
+- Path: [greenMarker, ...orientedCutPath, redMarker]
+
+### 11.3 Deferred
+
+- K point + turntable rotation concept (draft notes exist)
+- Left → Right Combined view polish
+- Animation speed tuning (currently slow by design)
 
 ## 12. Nav Reorder (2026-09-19)
-
-Commit on branch.
 
 - Nav order: 1 Model | 2 Toolpath | 3 Simulate | 4 G-code
 - URLs unchanged (/model, /toolpath, /gcode, /simulate)
 - Next/Back rewired per new order
 - Dim logic: both Simulate and G-code dim until toolpath saved
+
+## 13. Next Session — G-code Pipeline
+
+Priority: G01 basic pipeline. Then G93 inverse time (DevFoam-style).
 
 
 
