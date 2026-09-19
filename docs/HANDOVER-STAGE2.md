@@ -327,6 +327,36 @@ artifacts — is Project-Leader-verified, not machine-verified.**
 
 Push anything further only on explicit instruction. Do NOT merge to `main`.
 
+## 11. Sim Module (2026-09-19, branch experiment/combined-view)
+
+Commit d45cec0.
+
+### 11.1 Features
+
+- Sim toggle button (after rotation > button)
+- Play button (after Sim) animates the wire marker
+- White dot with blue+yellow stroke = next rotation's start point
+- Wire marker animates along full wire path:
+  green line → blue cut path → red line
+- Blink effect during cutting (orange glow, ~0.45s cycle)
+- Direction follows parity (green → red always)
+- Reset on cutIndex change / simActive off
+
+### 11.2 Status
+
+- Left Only mode: verified
+- Left → Right mode: deferred for polish
+
+## 12. Nav Reorder (2026-09-19)
+
+Commit on branch.
+
+- Nav order: 1 Model | 2 Toolpath | 3 Simulate | 4 G-code
+- URLs unchanged (/model, /toolpath, /gcode, /simulate)
+- Next/Back rewired per new order
+- Dim logic: both Simulate and G-code dim until toolpath saved
+
+
 
 
 
