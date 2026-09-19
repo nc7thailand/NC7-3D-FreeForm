@@ -32,75 +32,137 @@ const WIRE_CORE_R = 3.5
 const WIRE_GLOW_COLOR = '#ff4500'
 const WIRE_CORE_COLOR = '#fff7ed'
 const WIRE_BLINK_PERIOD = 0.45
-// Fixed playback duration for one full wire travel (lead-in + cut + lead-out),
-// held at the end.
-const SIM_PLAY_SECONDS = 4
+// Sim playback is purely distance-based: the wire advances at a constant
+// feedrate along the travel polyline, so the animation is deterministic and
+// reflects real machine motion. No phase timings, no dwells.
+const SIM_SPEED_MM_PER_SEC = 100
+// Data-log sampling interval during playback (10 Hz).
+const SIM_SAMPLE_MS = 100
+// Trail stroke.
+const TRAIL_COLOR = 'rgba(255, 69, 0, 0.35)'
+const TRAIL_WIDTH = 1.5
 // Matches cutOverlay.js's MARKER_SIZE so the Sim dot is the same size as the
 // green/red direction markers.
 const MARKER_SIZE = 7
 
 /**
- * Point at normalised arc-length `frac` (0..1) along a polyline. Sampling by
- * length rather than by vertex index keeps the wire marker's speed uniform
- * where the contour's vertices bunch up.
+ * Cumulative arc length at each vertex of a polyline, in mm.
+ * `cum[0]` is 0 and `cum[last]` is the total travel length.
  *
  * @param {{u:number,v:number}[]} pts
- * @param {number} frac
+ * @returns {number[]}
  */
-function pointAtFraction(pts, frac) {
-  if (!pts?.length) return null
-  if (pts.length === 1) return pts[0]
-  const segLen = []
-  let total = 0
+function cumulativeLengths(pts) {
+  const cum = [0]
   for (let i = 1; i < pts.length; i++) {
-    const d = Math.hypot(pts[i].u - pts[i - 1].u, pts[i].v - pts[i - 1].v)
-    segLen.push(d)
-    total += d
+    cum.push(cum[i - 1] + Math.hypot(pts[i].u - pts[i - 1].u, pts[i].v - pts[i - 1].v))
   }
-  if (total <= 0) return pts[0]
-  let target = Math.min(1, Math.max(0, frac)) * total
-  for (let i = 0; i < segLen.length; i++) {
-    if (target <= segLen[i] || i === segLen.length - 1) {
-      const t = segLen[i] > 0 ? target / segLen[i] : 0
-      return {
-        u: pts[i].u + t * (pts[i + 1].u - pts[i].u),
-        v: pts[i].v + t * (pts[i + 1].v - pts[i].v),
-      }
-    }
-    target -= segLen[i]
-  }
-  return pts[pts.length - 1]
+  return cum
 }
 
 /**
- * The wire's full travel for one rotation, as one polyline:
- * green safe point → lead-in → cut path → lead-out → red safe point.
+ * Point at absolute arc length `distance` (mm) along a polyline, with the
+ * cumulative-length table supplied by the caller so playback does not rebuild
+ * it every frame.
  *
- * The lead-in / lead-out segments are the drawn link lines; the green one
- * always ends on one end of the cut path and the red one begins at the other,
- * so orienting the cut path by which end the green link attaches to makes the
- * movement follow green → red on both parities. The cut path array itself is
- * never modified.
+ * Interpolates within the containing segment — it never snaps to a vertex, and
+ * it never leaves the polyline, so a sampled position cannot overshoot the
+ * travel's extent. `distance` is clamped to [0, total].
+ *
+ * @param {{u:number,v:number}[]} pts
+ * @param {number[]} cum - cumulative lengths, same length as `pts`
+ * @param {number} distance - mm along the polyline
+ */
+function pointAtDistance(pts, cum, distance) {
+  if (!pts?.length) return null
+  if (pts.length === 1) return { u: pts[0].u, v: pts[0].v }
+  const total = cum[cum.length - 1]
+  // Bail out rather than returning a vertex: a non-finite total means the
+  // polyline itself is poisoned, and handing back coordinates here is what fed
+  // NaN into createRadialGradient.
+  if (!isFinite(total) || !(total > 0)) return null
+  if (!isFinite(distance)) return null
+
+  const d = Math.min(total, Math.max(0, distance))
+  // Advance while the next vertex is nearer than our target. Linear from the
+  // end: the tables are a few hundred entries, so a scan is cheaper than a
+  // binary search at 60 fps.
+  let i = 0
+  while (i < cum.length - 2 && cum[i + 1] < d) i++
+  const segLen = cum[i + 1] - cum[i]
+  if (!(segLen > 0)) return { u: pts[i].u, v: pts[i].v }
+  const t = (d - cum[i]) / segLen
+  return {
+    u: pts[i].u + t * (pts[i + 1].u - pts[i].u),
+    v: pts[i].v + t * (pts[i + 1].v - pts[i].v),
+  }
+}
+
+/**
+ * Which logical leg of the travel `distance` (mm) falls in, for the log's
+ * `phase` column. Derived purely from the cumulative-length table, so it can
+ * never disagree with the sampled position.
+ *
+ * @param {number[]} cum
+ * @param {number} distance
+ */
+function legAtDistance(cum, distance) {
+  const n = cum.length
+  if (n < 2) return 'cut'
+  const d = Math.min(cum[n - 1], Math.max(0, distance))
+  if (d <= cum[1]) return 'leadin'
+  if (d >= cum[n - 2]) return 'leadout'
+  return 'cut'
+}
+
+/**
+ * The wire's full travel for one rotation, as one MONOTONE polyline:
+ * green marker → cut path → red marker.
+ *
+ * The marker squares come straight from `markers` (coloured by parity), and the
+ * cut path is oriented so its first point is the end nearer the green marker.
+ * Assembling it from the link endpoints instead produced an out-and-back
+ * excursion: one link endpoint always lies exactly ON a cut-path end, so
+ * walking `[link.from, link.to, ...cut]` visited the far marker and returned.
  *
  * @param {{u:number,v:number}[]} cutPath
- * @param {{from:{u:number,v:number}, to:{u:number,v:number}, color:string}[]} links
+ * @param {{u:number,v:number,color:string}[]} markers
  * @param {{green:string, red:string}} colors
  */
-function buildFullWirePath(cutPath, links, colors) {
+function buildFullWirePath(cutPath, markers, colors) {
   if (!cutPath?.length) return []
-  const green = links.find((l) => l.color === colors.green)
-  const red = links.find((l) => l.color === colors.red)
-  if (!green || !red) return cutPath
+  const greenMarker = markers?.find((m) => m.color === colors.green)
+  const redMarker = markers?.find((m) => m.color === colors.red)
+  // Guard on the *coordinates*, not just on the find(): a wrong-shaped argument
+  // (e.g. the link objects, which carry a color but no u/v) matches by colour
+  // and then yields undefined coordinates, which poisons every downstream
+  // position with NaN instead of failing loudly.
+  if (!isFinite(greenMarker?.u) || !isFinite(greenMarker?.v)
+    || !isFinite(redMarker?.u) || !isFinite(redMarker?.v)) {
+    console.warn(
+      '[sim] wire-path marker lookup failed — expected marker squares with '
+      + `finite u/v for ${colors.green} and ${colors.red}. Got: `
+      + JSON.stringify(greenMarker) + ' / ' + JSON.stringify(redMarker),
+    )
+    return cutPath
+  }
 
-  // Walk the cut path from whichever end the green lead-in lands on.
-  const distToStart = Math.hypot(
-    green.to.u - cutPath[0].u, green.to.v - cutPath[0].v,
-  )
   const last = cutPath[cutPath.length - 1]
-  const distToEnd = Math.hypot(green.to.u - last.u, green.to.v - last.v)
-  const cut = distToStart <= distToEnd ? cutPath : [...cutPath].reverse()
+  const distStart = Math.hypot(cutPath[0].u - greenMarker.u, cutPath[0].v - greenMarker.v)
+  const distEnd = Math.hypot(last.u - greenMarker.u, last.v - greenMarker.v)
+  const cut = distStart <= distEnd ? cutPath : [...cutPath].reverse()
 
-  return [green.from, green.to, ...cut.slice(1), red.to]
+  const full = [
+    { u: greenMarker.u, v: greenMarker.v },
+    ...cut,
+    { u: redMarker.u, v: redMarker.v },
+  ]
+
+  // Drop consecutive duplicates — zero-length segments would make the
+  // arc-length sampler divide by zero and stall the animation.
+  return full.filter((p, i) => i === 0 || Math.hypot(
+    p.u - full[i - 1].u, p.v - full[i - 1].v,
+  ) > 1e-6)
 }
 
 /**
@@ -142,12 +204,22 @@ export default function SilhouettePreviewPanel({
   const panRef = useRef({ x: 0, y: 0 })
   const dragRef = useRef(null) // { x, y, pointerId }
   const pinchRef = useRef(null) // { startDist, startZoom, cx, cy }
-  // Sim playback progress along the cut path, 0..1. Held in a ref (not state)
+  // Sim playback distance along the travel, in mm. Held in a ref (not state)
   // so the animation loop can drive the canvas without re-rendering React on
   // every frame; `simDrawRef` lets the loop call the current draw closure.
-  const simProgressRef = useRef(0)
+  const simDistRef = useRef(0)
   const simDrawRef = useRef(() => {})
   const simRafRef = useRef(null)
+  // Sim trail (points the marker has passed through) and the 10 Hz data log.
+  // The trail is a ref because the draw loop repaints from it every frame; the
+  // live label needs React state so the DOM text updates.
+  const simTrailRef = useRef([])
+  const simLogRef = useRef([])
+  const simLastSampleRef = useRef(-Infinity)
+  const [simLabel, setSimLabel] = useState(null)
+  const [simLogOpen, setSimLogOpen] = useState(false)
+  const [simLogTick, setSimLogTick] = useState(0)
+  const [simCopied, setSimCopied] = useState(false)
 
   const setTransform = useCallback((nextZoom, nextPan) => {
     const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
@@ -180,9 +252,18 @@ export default function SilhouettePreviewPanel({
   // animation. Derived from the drawn link lines, so no geometry is recomputed
   // and neither cutPath nor the rendering changes.
   const fullWirePath = useMemo(
-    () => buildFullWirePath(cutPath, annotations.links, OVERLAY_COLORS),
-    [cutPath, annotations.links],
+    () => buildFullWirePath(cutPath, annotations.markers, OVERLAY_COLORS),
+    [cutPath, annotations.markers],
   )
+
+  // Cumulative arc length per vertex, in mm. Playback samples by distance, so
+  // this is the only thing that defines position along the travel — there are
+  // no index-based fractions left to disagree with it. Rebuilt only when the
+  // path changes, never per frame.
+  const wireCum = useMemo(() => cumulativeLengths(fullWirePath), [fullWirePath])
+  const wireLengthMM = wireCum.length ? wireCum[wireCum.length - 1] : 0
+  // Constant feedrate → total playback time is derived, not configured.
+  const simDuration = wireLengthMM > 0 ? wireLengthMM / SIM_SPEED_MM_PER_SEC : 0
 
   // Experimental Sim: the next rotation's cut-entry point, drawn in the current
   // view. The step is one full cutCount revolution step, so it is 360/cutCount
@@ -349,41 +430,61 @@ export default function SilhouettePreviewPanel({
         )
       }
 
+      // Experimental Sim — trail of the ground the marker has already covered.
+      // Drawn above the overlay drawing but below the marker itself.
+      if (simActive && simTrailRef.current.length >= 2) {
+        ctx.strokeStyle = TRAIL_COLOR
+        ctx.lineWidth = TRAIL_WIDTH
+        ctx.lineJoin = 'round'
+        ctx.lineCap = 'round'
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.moveTo(X(simTrailRef.current[0].u), Y(simTrailRef.current[0].v))
+        for (let i = 1; i < simTrailRef.current.length; i++) {
+          ctx.lineTo(X(simTrailRef.current[i].u), Y(simTrailRef.current[i].v))
+        }
+        ctx.stroke()
+      }
+
       // Experimental Sim — the hot wire tip travelling the current rotation's
       // full travel: green safe point → lead-in → cut path → lead-out → red
       // safe point, as one continuous motion. Screen-space radii (does not
       // scale with zoom). The blink is driven off wall-clock time so it stays
       // steady regardless of frame rate.
       if (simActive && fullWirePath.length >= 2) {
-        const wirePt = pointAtFraction(fullWirePath, simProgressRef.current)
+        const wirePt = pointAtDistance(fullWirePath, wireCum, simDistRef.current)
         if (wirePt) {
           const wx = X(wirePt.u)
           const wy = Y(wirePt.v)
-          const t = (Date.now() / 1000) % WIRE_BLINK_PERIOD
-          const phase = Math.sin((t / WIRE_BLINK_PERIOD) * Math.PI * 2)
-          const opacity = 0.5 + 0.45 * phase
+          // Never hand the canvas a non-finite coordinate: createRadialGradient
+          // throws outright, which would take the whole draw loop down.
+          if (isFinite(wx) && isFinite(wy)) {
+            const t = (Date.now() / 1000) % WIRE_BLINK_PERIOD
+            const phase = Math.sin((t / WIRE_BLINK_PERIOD) * Math.PI * 2)
+            const opacity = 0.5 + 0.45 * phase
 
-          // Soft halo — a radial gradient standing in for a drop shadow.
-          const halo = ctx.createRadialGradient(wx, wy, 0, wx, wy, WIRE_GLOW_R * 2)
-          halo.addColorStop(0, WIRE_GLOW_COLOR)
-          halo.addColorStop(1, 'rgba(255, 69, 0, 0)')
-          ctx.globalAlpha = Math.max(0, opacity * 0.45)
-          ctx.fillStyle = halo
-          ctx.beginPath()
-          ctx.arc(wx, wy, WIRE_GLOW_R * 2, 0, Math.PI * 2)
-          ctx.fill()
+            // Soft halo — a radial gradient standing in for a drop shadow.
+            const halo = ctx.createRadialGradient(wx, wy, 0, wx, wy, WIRE_GLOW_R * 2)
+            halo.addColorStop(0, WIRE_GLOW_COLOR)
+            halo.addColorStop(1, 'rgba(255, 69, 0, 0)')
+            ctx.globalAlpha = Math.max(0, opacity * 0.45)
+            ctx.fillStyle = halo
+            ctx.beginPath()
+            ctx.arc(wx, wy, WIRE_GLOW_R * 2, 0, Math.PI * 2)
+            ctx.fill()
 
-          ctx.globalAlpha = Math.max(0, opacity)
-          ctx.fillStyle = WIRE_GLOW_COLOR
-          ctx.beginPath()
-          ctx.arc(wx, wy, WIRE_GLOW_R, 0, Math.PI * 2)
-          ctx.fill()
+            ctx.globalAlpha = Math.max(0, opacity)
+            ctx.fillStyle = WIRE_GLOW_COLOR
+            ctx.beginPath()
+            ctx.arc(wx, wy, WIRE_GLOW_R, 0, Math.PI * 2)
+            ctx.fill()
 
-          ctx.fillStyle = WIRE_CORE_COLOR
-          ctx.beginPath()
-          ctx.arc(wx, wy, WIRE_CORE_R, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.globalAlpha = 1
+            ctx.fillStyle = WIRE_CORE_COLOR
+            ctx.beginPath()
+            ctx.arc(wx, wy, WIRE_CORE_R, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.globalAlpha = 1
+          }
         }
       }
     }
@@ -396,32 +497,100 @@ export default function SilhouettePreviewPanel({
     return () => ro.disconnect()
   }, [contour, cutPath, fullWirePath, annotations, stock, cutIndex, cutMode, thetaDeg, zoom, pan, simDot, simActive])
 
-  // Sim playback: advance the wire marker along the full travel over a fixed
-  // duration, then hold at the end. Only this loop repaints — everything else
-  // in the panel still redraws on state change. Progress is reset whenever the
-  // path or the previewed rotation changes, so ◀ ▶ restarts the scene.
+  // Sim playback: advance the wire along the travel at a constant feedrate
+  // (SIM_SPEED_MM_PER_SEC), accumulating a trail and logging a data row every
+  // SIM_SAMPLE_MS. Position is a pure function of elapsed time and distance —
+  // there are no phase timings and no dwells. Only this loop repaints; the rest
+  // of the panel still redraws on state change.
   useEffect(() => {
-    if (!simPlaying || fullWirePath.length < 2) return undefined
+    if (!simPlaying || fullWirePath.length < 2 || !(wireLengthMM > 0)) return undefined
+    // A new Play always starts a fresh trail and log.
     let start = null
+    let lastLabelAt = -Infinity
     const step = (now) => {
-      if (start == null) start = now
-      const frac = Math.min(1, (now - start) / (SIM_PLAY_SECONDS * 1000))
-      simProgressRef.current = frac
+      if (start == null) {
+        start = now
+        // Reset synchronously on the first frame, before anything is sampled,
+        // so the marker's first painted position is the travel's start
+        // (green.from) rather than the previous cut's leftover distance.
+        simDistRef.current = 0
+        simTrailRef.current = []
+        simLogRef.current = []
+        simLastSampleRef.current = -Infinity
+      }
+      // Pure distance-based motion: constant feedrate, deterministic, no phases.
+      const elapsed = (now - start) / 1000
+      const distance = Math.min(elapsed * SIM_SPEED_MM_PER_SEC, wireLengthMM)
+      simDistRef.current = distance
+      const progress = wireLengthMM > 0 ? distance / wireLengthMM : 0
+      const phase = legAtDistance(wireCum, distance)
+
+      const pt = pointAtDistance(fullWirePath, wireCum, distance)
+      if (pt) {
+        const trail = simTrailRef.current
+        const tail = trail[trail.length - 1]
+        if (!tail || Math.hypot(pt.u - tail.u, pt.v - tail.v) > 1e-6) {
+          trail.push({ u: pt.u, v: pt.v })
+        }
+      }
+
+      // 10 Hz data log, independent of frame rate.
+      if (now - simLastSampleRef.current >= SIM_SAMPLE_MS && pt) {
+        simLastSampleRef.current = now
+        simLogRef.current.push({
+          n: (cutIndex ?? 0) + 1,
+          t: +elapsed.toFixed(2),
+          u: +pt.u.toFixed(2),
+          v: +pt.v.toFixed(2),
+          distance: +distance.toFixed(1),
+          progress: +progress.toFixed(4),
+          phase,
+        })
+        setSimLogTick(simLogRef.current.length)
+      }
+
+      const label = {
+        n: (cutIndex ?? 0) + 1,
+        t: elapsed,
+        u: pt?.u ?? 0,
+        v: pt?.v ?? 0,
+        distance,
+        progress,
+        phase,
+      }
+      // Re-render for the label at 10 Hz, not every frame.
+      if (now - lastLabelAt >= SIM_SAMPLE_MS) {
+        lastLabelAt = now
+        setSimLabel(label)
+      }
+
       simDrawRef.current()
-      if (frac < 1) simRafRef.current = requestAnimationFrame(step)
-      else simRafRef.current = null
+      if (distance >= wireLengthMM) {
+        simRafRef.current = null
+        setSimLabel(label)
+      } else {
+        simRafRef.current = requestAnimationFrame(step)
+      }
     }
     simRafRef.current = requestAnimationFrame(step)
     return () => {
       if (simRafRef.current) cancelAnimationFrame(simRafRef.current)
       simRafRef.current = null
     }
-  }, [simPlaying, fullWirePath])
+  }, [simPlaying, fullWirePath, wireCum, wireLengthMM, cutIndex])
 
   useEffect(() => {
-    simProgressRef.current = 0
+    // Park the marker at the travel's start (green.from) whenever the path
+    // changes. Reset before the repaint so no frame can show the new path with
+    // the previous cut's distance still in the ref.
+    simDistRef.current = 0
+    simTrailRef.current = []
+    simLogRef.current = []
+    simLastSampleRef.current = -Infinity
+    setSimLabel(null)
+    setSimLogTick(0)
     simDrawRef.current()
-  }, [fullWirePath, cutIndex, simActive])
+  }, [fullWirePath, wireCum, cutIndex, simActive])
 
   // Zoom / pan interaction handlers (wheel, pointer drag, pinch).
   useEffect(() => {
@@ -547,12 +716,40 @@ export default function SilhouettePreviewPanel({
     }
   }, [setTransform, resetView])
 
+  const handleCopyLog = useCallback(async () => {
+    const rows = simLogRef.current
+    const csv = [
+      'N,t,u,v,distance_mm,progress,phase',
+      ...rows.map((r) => `${r.n},${r.t.toFixed(2)},${r.u.toFixed(2)},${r.v.toFixed(2)},${r.distance?.toFixed(1) ?? ''},${r.progress.toFixed(4)},${r.phase}`),
+    ].join('\n')
+    try {
+      await navigator.clipboard.writeText(csv)
+      setSimCopied(true)
+      setTimeout(() => setSimCopied(false), 500)
+    } catch {
+      /* clipboard may be unavailable */
+    }
+  }, [])
+
   return (
     <section className="silhouette-preview-section">
       <div className="section-label section-label-sub">2D Silhouette Preview (Stage 1)</div>
 
       <div className="preview-wrap silhouette-preview-canvas-wrap" ref={wrapRef}>
         <canvas ref={canvasRef} />
+        {simActive && simLabel && (
+          <button
+            type="button"
+            className="sim-data-label"
+            onClick={() => setSimLogOpen(true)}
+            title="Open Sim track log"
+          >
+            {`N=${simLabel.n}  t=${simLabel.t.toFixed(2)}s  `
+              + `u=${simLabel.u.toFixed(1)}  v=${simLabel.v.toFixed(1)}  `
+              + `${(simLabel.distance ?? 0).toFixed(0)}mm  `
+              + `${simLabel.phase}`}
+          </button>
+        )}
         <div className="silhouette-zoom-controls">
           <button
             type="button"
@@ -584,6 +781,54 @@ export default function SilhouettePreviewPanel({
       <div className="silhouette-preview-footer">
         {contour.length > 0 ? `${contour.length} pts · bins ${GRID_BINS} · ${(zoom * 100).toFixed(0)}%` : '—'}
       </div>
+
+      {simLogOpen && (
+        <div className="sim-log-backdrop" role="dialog" aria-label="Sim track log">
+          <div className="sim-log-panel">
+            <div className="sim-log-header">
+              <span className="sim-log-title">
+                Sim Track Log
+                <span className="sim-log-count">{` · ${simLogTick} rows`}</span>
+              </span>
+              <button
+                type="button"
+                className="sim-log-close"
+                onClick={() => setSimLogOpen(false)}
+                aria-label="Close log"
+              >
+                ×
+              </button>
+            </div>
+            <div className="sim-log-body">
+              <table className="sim-log-table">
+                <thead>
+                  <tr>
+                    <th>N</th><th>t</th><th>u</th><th>v</th><th>mm</th><th>prog</th><th>phase</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {simLogRef.current.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.n}</td>
+                      <td>{r.t.toFixed(2)}</td>
+                      <td>{r.u.toFixed(2)}</td>
+                      <td>{r.v.toFixed(2)}</td>
+                      <td>{r.distance?.toFixed(1) ?? '—'}</td>
+                      <td>{r.progress.toFixed(3)}</td>
+                      <td>{r.phase}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="sim-log-footer">
+              <button type="button" className="sim-log-export" onClick={handleCopyLog}>
+                {simCopied ? 'Copied' : 'Copy CSV'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

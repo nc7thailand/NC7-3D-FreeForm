@@ -857,6 +857,145 @@ body {
   cursor: not-allowed;
 }
 
+/* ---------- Sim module: live data label + track log ---------- */
+.sim-data-label {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border: 1px solid #c3ccd8;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #24303f;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sim-data-label:hover {
+  background: #fff;
+  border-color: #8fa3bb;
+}
+
+.sim-log-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 11, 15, 0.72);
+}
+
+.sim-log-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 32px));
+  height: min(70vh, 560px);
+  background: #161a21;
+  border: 1px solid #2a3340;
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+.sim-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #2a3340;
+}
+
+.sim-log-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.sim-log-count {
+  font-weight: 400;
+  color: #8b98a8;
+}
+
+.sim-log-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  background: #1f2530;
+  color: #9fb0c0;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sim-log-close:hover {
+  background: #2a3340;
+  color: #e6edf3;
+}
+
+.sim-log-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px;
+}
+
+.sim-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #c8d3e0;
+}
+
+.sim-log-table th {
+  position: sticky;
+  top: 0;
+  background: #161a21;
+  padding: 6px 6px;
+  text-align: right;
+  color: #8b98a8;
+  font-weight: 600;
+  border-bottom: 1px solid #2a3340;
+}
+
+.sim-log-table td {
+  padding: 3px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sim-log-table td:last-child,
+.sim-log-table th:last-child {
+  text-align: left;
+}
+
+.sim-log-footer {
+  padding: 10px 12px;
+  border-top: 1px solid #2a3340;
+}
+
+.sim-log-export {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #3f6fa0;
+  border-radius: 6px;
+  background: #2c5c8f;
+  color: #eaf2fb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sim-log-export:hover {
+  background: #34699f;
+}
+
 .placeholder-page {
   flex: 1;
   display: flex;
