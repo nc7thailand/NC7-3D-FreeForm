@@ -351,10 +351,13 @@ body {
 .setup-overlay {
   position: fixed;
   left: 50%;
-  bottom: calc(68px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+  top: 50%;
+  /* 80% of the containing block (the viewport — the panel is fixed-position, so
+     it has no in-flow parent to measure against). Removed the old 520px cap,
+     which clipped the parameter list on tall screens. */
+  height: 80vh;
+  transform: translate(-50%, -50%);
   width: min(360px, calc(100vw - 24px));
-  max-height: min(70vh, 520px);
   overflow-y: auto;
   z-index: 220;
   background: #161a21;
@@ -421,6 +424,21 @@ body {
   display: flex;
   gap: 6px;
   flex: 1;
+}
+.setup-overlay-select {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e6edf5;
+  background: #1f2530;
+  border: 1px solid #2a3340;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.setup-overlay-select:focus {
+  outline: none;
+  border-color: #3d7fd6;
 }
 
 .setup-overlay-dirty {

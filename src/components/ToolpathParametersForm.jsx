@@ -83,6 +83,16 @@ export default function ToolpathParametersForm({
         />
         Show model bounding box
       </label>
+      <label>Overlay thickness
+        <input
+          type="number"
+          min="1"
+          max="10"
+          step="1"
+          value={s.overlayThickness ?? 3}
+          onChange={(e) => change('overlayThickness', +e.target.value)}
+        />
+      </label>
       {!compact && (
         <p className="panel-hint">Top safe Y = H + topOffset · Kerf shifts wire path left</p>
       )}

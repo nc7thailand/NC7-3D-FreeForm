@@ -6,7 +6,7 @@ import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
-import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
+import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 import { wirePathFromProfile } from '../lib/wirePath'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
@@ -30,6 +30,11 @@ const DEFAULT_STOCK = {
   boMargin: 20,
   showModelBBox: true,
   profileAccuracy: 5,
+  // Display-only multiplier for the 2D-derived overlay elements in Combined
+  // view (cut path, link lines, markers). The silhouette contour is not scaled.
+  // Lives in `stock` so it inherits the existing persistence; the G-code
+  // pipeline reads only its known fields and ignores this one.
+  overlayThickness: 3,
 }
 const DEFAULT_ROTATION_N = 16
 
@@ -74,7 +79,10 @@ export function AppStateProvider({ children }) {
 
   const [stock, setStock] = useState(DEFAULT_STOCK)
   const [rotationN, setRotationN] = useState(DEFAULT_ROTATION_N)
-  const [cutMode, setCutMode] = useState(CUT_MODE_LEFT_TO_RIGHT)
+  // CAM convention: the blocking setup panel forces an explicit mode choice
+  // every session, so the default is a starting suggestion rather than a silent
+  // choice. Left only = one half per rotation (16 cuts at N=16).
+  const [cutMode, setCutMode] = useState(CUT_MODE_LEFT_ONLY)
   const [cutIndex, setCutIndex] = useState(0)
   const [profile, setProfile] = useState(null)
   const [silhouettePreview, setSilhouettePreview] = useState(null)
@@ -180,7 +188,10 @@ export function AppStateProvider({ children }) {
     workingRef.current = data.geometry
     setGeometry(data.geometry)
     setModelName(data.modelName)
-    setStock(data.stock)
+    // Merge over defaults: a session saved before a stock field existed omits
+    // that key, and replacing wholesale would drop it — which also hid the new
+    // field from the setup panel's dirty check, silently discarding its edits.
+    setStock({ ...DEFAULT_STOCK, ...data.stock })
     setRotationN(data.rotationN)
     setCutIndex(data.cutIndex)
     setCutJob(data.cutJob)
@@ -587,7 +598,9 @@ export function AppStateProvider({ children }) {
       workingRef.current = data.geometry
       setGeometry(data.geometry)
       setModelName(data.modelName)
-      setStock(data.stock)
+      // Same forward-compatibility merge as applyRestoredSession: an older
+      // .nc7project predates any stock field added since, and must not lose it.
+      setStock({ ...DEFAULT_STOCK, ...data.stock })
       setRotationN(data.rotationN)
       setCutIndex(data.cutIndex)
       setCutJob(data.cutJob)

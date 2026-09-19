@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useCallback, forwardRef, useImperativeHandle 
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { Line2 } from 'three/examples/jsm/lines/Line2.js'
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import ViewCube from './ViewCube'
 import {
   toRadians,
@@ -111,7 +114,6 @@ export default forwardRef(function Viewer3D(
     showToolpathOverlay = false,
     showModelBBox = true,
     combinedView = false,
-    lockCamera = false,
   },
   ref
 ) {
@@ -145,8 +147,7 @@ export default forwardRef(function Viewer3D(
     shadowPoints: null,
     overlayGroup: null,
     overlaySignature: null,
-    cameraLocked: false,
-    freeCameraBeforeLock: null,
+    overlayMaterials: [],
   })
 
   useImperativeHandle(ref, () => ({
@@ -532,6 +533,16 @@ export default forwardRef(function Viewer3D(
     animate()
 
     // --- Resize ---
+    // Line2 lays its quads out in screen space, so every LineMaterial must be
+    // told the new viewport size or the strokes warp (the "exploded" look on
+    // mobile, where the viewport changes orientation often).
+    const syncOverlayResolution = (w, h) => {
+      const mats = state.overlayMaterials
+      if (!mats?.length) return
+      for (const m of mats) m.resolution.set(w, h)
+    }
+    state.syncOverlayResolution = syncOverlayResolution
+
     const onResize = () => {
       if (!mount) return
       const w = mount.clientWidth
@@ -539,12 +550,20 @@ export default forwardRef(function Viewer3D(
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      syncOverlayResolution(w, h)
     }
     window.addEventListener('resize', onResize)
+
+    // The window listener misses container-only changes (mobile URL-bar
+    // collapse, panel layout shifts) — which are exactly the mobile cases where
+    // a stale Line2 resolution warps the overlay strokes. Observe the mount too.
+    const sizeObserver = new ResizeObserver(onResize)
+    sizeObserver.observe(mount)
 
     return () => {
       running = false
       cancelAnimationFrame(animId)
+      sizeObserver.disconnect()
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKeyDown)
       renderer.domElement.removeEventListener('pointerdown', onMouseDown)
@@ -824,6 +843,11 @@ export default forwardRef(function Viewer3D(
     mpPlane.position.y = mpHeight / 2
     // In left-only mode, shift the half-plane so it covers u ∈ [-full/2, 0].
     if (isLeftOnly) mpPlane.position.x = -fullWidth / 4
+    // Combined view draws the cut as an overlay on this plane's coordinate
+    // space, and the red sheet competes with it visually, so it is hidden
+    // there. The mesh stays in the scene with its transform intact — only its
+    // rendering is suppressed, so the overlay placement is unaffected.
+    mpPlane.visible = !combinedView
     mpGroup.add(mpPlane)
     state.scene.add(mpGroup)
     state.middlePlaneGroup = mpGroup
@@ -846,6 +870,10 @@ export default forwardRef(function Viewer3D(
     const rotaryAxisLine = new THREE.Mesh(axisGeo, axisMat)
     rotaryAxisLine.position.set(0, axisTop / 2, 0)
     rotaryAxisLine.renderOrder = 3
+    // Combined view draws the cut on the fixed MP plane, where the red wire
+    // marker at the origin competes with the overlay. Hidden, not removed —
+    // the mesh keeps its transform so nothing downstream needs to change.
+    rotaryAxisLine.visible = !combinedView
     state.scene.add(rotaryAxisLine)
     state.rotaryAxisLine = rotaryAxisLine
 
@@ -967,7 +995,7 @@ export default forwardRef(function Viewer3D(
       disposeObj(state.shadowPlane)
       disposeObj(state.shadowPoints)
     }
-  }, [thetaDeg, stock, profile, silhouettePreview, cutMode, geometry, resetKey, showToolpathOverlay])
+  }, [thetaDeg, stock, profile, silhouettePreview, cutMode, geometry, resetKey, showToolpathOverlay, combinedView])
 
   // Combined view: the 2D cut drawing rendered as translucent geometry lying
   // on the FIXED middle plane (the physical wire plane, normal +Z, unrotated).
@@ -988,6 +1016,7 @@ export default forwardRef(function Viewer3D(
         if (obj.material) obj.material.dispose()
       })
       state.overlayGroup = null
+      state.overlayMaterials = []
     }
 
     disposeGroup()
@@ -1005,7 +1034,36 @@ export default forwardRef(function Viewer3D(
     // centred at y = h/2, i.e. v is already measured from the plane's bottom.
     const toWorld = (p) => new THREE.Vector3(p.u, p.v, 0)
 
-    const addLine = (points, color, { closed = false, opacity = 1, dash = null } = {}) => {
+    // Overlay elements — the 2D-derived drawing rendered as 3D geometry in
+    // Combined view: overlay contour, overlay cut path, overlay link lines and
+    // overlay markers. Their visual size is driven by the user's Overlay
+    // thickness setting (stock.overlayThickness, 1–10).
+    //
+    // The overlay contour is deliberately exempt: it is a thin dashed reference
+    // outline, and a heavier dash would compete with the overlay cut path it
+    // frames. The contour therefore renders at its fixed base weight.
+    //
+    // The solid overlay lines use Line2 (not THREE.Line). WebGL's core profile
+    // clamps gl.lineWidth to 1, so LineBasicMaterial silently ignores
+    // `linewidth` — the path and links never thickened, and on some mobile
+    // drivers partial wide-line emulation rendered them as scattered stubs.
+    // Line2 draws each segment as a screen-space quad, so `linewidth` is real
+    // in pixels on every platform. It requires `material.resolution` to match
+    // the canvas size or the quads are laid out wrong (same mobile artifact),
+    // which the resize handler keeps in sync.
+    const overlayScale = Math.min(10, Math.max(1, stock?.overlayThickness ?? 3))
+
+    // Line2 widths are in CSS pixels, so they need a canvas-pixel resolution,
+    // not one scaled by devicePixelRatio (the renderer already handles DPR).
+    const viewSize = state.renderer
+      ? state.renderer.getSize(new THREE.Vector2())
+      : new THREE.Vector2(1, 1)
+
+    // Every LineMaterial built here, so the resize handler can re-point their
+    // resolution. Cleared with the group in disposeGroup.
+    state.overlayMaterials = []
+
+    const addLine = (points, color, { closed = false, opacity = 1, dash = null, width = 1, scale = false } = {}) => {
       if (points.length < 2) return
       const verts = []
       for (const p of points) {
@@ -1016,33 +1074,57 @@ export default forwardRef(function Viewer3D(
         const w = toWorld(points[0])
         verts.push(w.x, w.y, w.z)
       }
-      const geo = new THREE.BufferGeometry()
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
-      const mat = dash
-        ? new THREE.LineDashedMaterial({
-            color, transparent: true, opacity, depthTest: false, depthWrite: false,
-            dashSize: dash[0], gapSize: dash[1],
-          })
-        : new THREE.LineBasicMaterial({
-            color, transparent: true, opacity, depthTest: false, depthWrite: false,
-          })
-      const line = new THREE.Line(geo, mat)
-      if (dash) line.computeLineDistances()
+
+      // Dashed lines stay on THREE.Line: Line2 has no dash support, and the
+      // contour is unscaled so it never needed wide lines anyway.
+      if (dash) {
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+        const mat = new THREE.LineDashedMaterial({
+          color, transparent: true, opacity, depthTest: false, depthWrite: false,
+          dashSize: dash[0], gapSize: dash[1], linewidth: width,
+        })
+        const line = new THREE.Line(geo, mat)
+        line.computeLineDistances()
+        group.add(line)
+        return
+      }
+
+      const geo = new LineGeometry()
+      geo.setPositions(verts)
+      const mat = new LineMaterial({
+        color: new THREE.Color(color).getHex(),
+        transparent: true,
+        opacity,
+        depthTest: false,
+        depthWrite: false,
+        linewidth: scale ? width * overlayScale : width,
+      })
+      mat.resolution.set(viewSize.x, viewSize.y)
+      state.overlayMaterials.push(mat)
+
+      const line = new Line2(geo, mat)
+      line.computeLineDistances()
       group.add(line)
     }
 
-    // Silhouette loop — dashed, dimmed (matches the 2D panel's black 50% dash).
-    addLine(contour, OVERLAY_COLORS.contour, { closed: true, opacity: 0.55, dash: [2.5, 2] })
-    // Cut path — solid blue.
-    addLine(cutPath, OVERLAY_COLORS.cutPath, { opacity: 1 })
-    // Link lines — green / red.
+    // Overlay contour — WHITE and dashed in Combined. The 2D panel draws it
+    // black because it sits on a light background; on the dark 3D scene white
+    // is the readable equivalent, and the dash keeps it from stealing focus
+    // from the solid blue overlay cut path. Never scaled.
+    addLine(contour, '#ffffff', { closed: true, opacity: 0.85, dash: [2.5, 2], width: 1.6 })
+    // Overlay cut path — solid blue, scaled.
+    addLine(cutPath, OVERLAY_COLORS.cutPath, { opacity: 1, width: 1.5, scale: true })
+    // Overlay link lines — green / red, scaled.
     for (const link of links) {
-      addLine([link.from, link.to], link.color, { opacity: 0.95 })
+      addLine([link.from, link.to], link.color, { opacity: 0.95, width: 1.25, scale: true })
     }
 
-    // Direction markers — small translucent quads standing on the plane.
+    // Overlay markers — translucent quads standing on the plane, with a darker
+    // border matching the 2D panel's strokeRect. Scaled by the same setting.
+    const MARKER_BORDER_SCALE = 1.18
     for (const m of markers) {
-      const size = m.size
+      const size = m.size * overlayScale
       const geo = new THREE.PlaneGeometry(size, size)
       const mat = new THREE.MeshBasicMaterial({
         color: m.color,
@@ -1056,6 +1138,22 @@ export default forwardRef(function Viewer3D(
       quad.position.set(m.u, m.v, 0)
       quad.renderOrder = 5
       group.add(quad)
+
+      if (m.dark) {
+        const borderGeo = new THREE.PlaneGeometry(size * MARKER_BORDER_SCALE, size * MARKER_BORDER_SCALE)
+        const borderMat = new THREE.MeshBasicMaterial({
+          color: m.dark,
+          transparent: true,
+          opacity: 1,
+          side: THREE.DoubleSide,
+          depthTest: false,
+          depthWrite: false,
+        })
+        const border = new THREE.Mesh(borderGeo, borderMat)
+        border.position.set(m.u, m.v, 0)
+        border.renderOrder = 4
+        group.add(border)
+      }
     }
 
     group.renderOrder = 4
@@ -1084,49 +1182,21 @@ export default forwardRef(function Viewer3D(
     state.controls.update()
   }, [readOnly, geometry, resetKey])
 
-  // Camera lock (Combined view). The MP plane's normal is +Z, so the "front"
-  // preset (a straight +Z look-at) shows the plane face-on. Orbiting would
-  // foreshorten the overlay to an unreadable edge, so interaction is disabled
-  // here; on leaving, the controls are re-enabled and the user's free camera
-  // position is restored.
+  // Combined view (Combined mode only). The MP plane's normal is +Z, so the
+  // "front" preset (camera at +Z looking along −Z) shows the scene face-on.
   //
-  // The free position is captured once, on the locked→free transition, and
-  // stored on the ref. React runs the previous effect's cleanup before the new
-  // effect, so a naive save-on-enter/restore-on-exit would restore a position
-  // captured while already locked and drift the camera on every toggle.
+  // The camera is SNAPPED once on entering the mode to give that a stable
+  // starting pose, but it is not locked: orbit/zoom/pan stay live so the model
+  // can be inspected from any angle. The overlay foreshortens as the view
+  // swings away from the plane normal — accepted, it is the user's choice.
   useEffect(() => {
     const state = stateRef.current
     if (!state?.controls || !state?.camera) return
 
-    if (lockCamera) {
-      // Entering Combined: remember the free camera only if not already locked.
-      if (!state.cameraLocked) {
-        state.freeCameraBeforeLock = {
-          position: state.camera.position.clone(),
-          target: state.controls.target.clone(),
-        }
-      }
-      state.cameraLocked = true
-      state.controls.enabled = false
-      // Damping is meaningless while the controls are disabled, and its residue
-      // keeps easing the camera off the snapped view in the animate loop. Keep
-      // it off for the whole locked period.
-      state.controls.enableDamping = false
+    if (combinedView) {
       if (state.snapCamera) state.snapCamera('front')
-    } else if (state.cameraLocked) {
-      // Leaving Combined: hand the camera back where the user left it.
-      state.cameraLocked = false
-      state.controls.enabled = true
-      const saved = state.freeCameraBeforeLock
-      if (saved) {
-        state.camera.position.copy(saved.position)
-        state.controls.target.copy(saved.target)
-        state.controls.update()
-        state.freeCameraBeforeLock = null
-      }
-      state.controls.enableDamping = true
     }
-  }, [lockCamera, geometry, resetKey])
+  }, [combinedView, geometry, resetKey])
 
   const updateToolbar = (mode) => {
     const toolbar = toolbarRef.current
@@ -1252,7 +1322,7 @@ export default forwardRef(function Viewer3D(
       )}
       <ViewCube
         ref={viewCubeRef}
-        hidden={lockCamera}
+        hidden={false}
         onSetView={setView}
         onOrbit={orbitView}
         onFlip={flipView}

@@ -216,32 +216,111 @@ A third toolpath view mode. **Branch-based experiment — NOT merged to `main`.*
   wire path, toolpath and G-code generation are untouched.
 - **`npm run build` clean.**
 
-### 10.1 Polish pass (2026-09-19, uncommitted)
+### 10.1 Polish pass (2026-09-19, committed)
 
-Three changes applied in the working tree — **not yet committed**:
+Changes to the Combined overlay and the setup panel:
 
 1. **Plain 3D removed from the Toolpath toggle.** `ToolpathPage.jsx` now offers
    `[2D] [Combined]` only; the `'3d'` state value is gone. `Viewer3D` itself is
-   untouched and is still used in full by the Model page.
+   unchanged and is still used in full by the Model page.
 2. **Red MP plane hidden in Combined.** `mpPlane.visible = !combinedView` — the
-   mesh stays in the scene with its transform intact, and material must be
-   attached for `visible` to reach the render list, so overlay placement on the
-   MP coordinate space is unaffected.
-3. **Camera unlocked in Combined.** The `lockCamera` prop is removed. `viewMode`
-   Combined still snaps once to the **back** preset on entry (camera at `−Z`
-   looking along `+Z`), but orbit/zoom/pan stay live and the ViewCube is shown.
-   The overlay foreshortens at oblique angles — accepted.
+   mesh stays in the scene with its transform intact, so overlay placement on
+   the MP coordinate space is unaffected.
+3. **Red wire (vertical axis cylinder) hidden in Combined.**
+   `rotaryAxisLine.visible = !combinedView`, same hide-not-delete rule.
+4. **Camera unlocked in Combined.** The `lockCamera` prop is removed. Combined
+   snaps once to the **front** preset on entry (camera at `+Z` looking along
+   `−Z`, previously `back`), then orbit/zoom/pan stay live and the ViewCube is
+   shown. The overlay foreshortens at oblique angles — accepted.
+5. **Overlay styling.** Overlay contour is **white dashed** (was black, for
+   contrast on the dark 3D background); overlay cut path stays blue; overlay
+   link lines and markers keep the green/red 2D colour code. Terminology
+   adopted: *overlay contour / overlay cut path / overlay link lines / overlay
+   markers*.
+6. **`stock.overlayThickness` (1–10, default 3).** Numeric input in the Toolpath
+   Setup panel; scales the overlay cut path, link lines and markers. The overlay
+   contour is deliberately exempt (unscaled thin dash). Lives in `stock`, so it
+   inherits the existing project/session persistence; the G-code pipeline reads
+   only its known fields and ignores it. Part of the draft/apply flow.
+7. **Setup panel.** Cut method is now a `<select>` (`Left only` / `Left → Right`)
+   replacing the two buttons; panel height is `80vh` with `overflow-y: auto`,
+   vertically centred.
 
-**Verified in-browser (Combined, θ = 0°):** toggle shows `2D`/`Combined` only;
-`mpVisible false` / MP group still parented to the scene; overlay present with 6
-children; `controls.enabled true`, damping on, left+right = ROTATE; camera
-`(0, 310.75, −1553.75)` on entry = rear; a synthetic right-drag moved the camera
-to an oblique pose, confirming orbit. Round-trip 2D → Combined re-snaps to rear
-and restores the overlay. Model page unchanged (Move/Rotate/Reset/Settle/Center,
-rotation panel, ViewCube visible). Screenshots:
-`.inspect/combined-clean-default.png`, `.inspect/combined-clean-orbited.png`.
+### 10.2 Bug fixes (2026-09-19)
+
+1. **Overlay thickness had no effect, and looked "exploded" on mobile.**
+   Root cause: `THREE.LineBasicMaterial` cannot render thick lines under core
+   WebGL — `gl.lineWidth` is clamped to 1 on most desktop drivers, and partial
+   wide-line emulation on some mobile drivers produced perpendicular stubs.
+   Markers grew (they are meshes) while lines did not.
+   **Fix:** the solid overlay lines now use `Line2` + `LineGeometry` +
+   `LineMaterial` from `three/examples/jsm/lines/`, which draws each segment as
+   a screen-space quad. `material.resolution` is set at construction and kept in
+   sync by a `ResizeObserver` on the mount plus the window resize handler — a
+   stale resolution is what warps the strokes on mobile. The dashed overlay
+   contour stays on `THREE.Line` (Line2 has no dash support, and the contour is
+   unscaled).
+2. **`overlayThickness` reverted to 3 after refresh.** Root cause: both restore
+   paths called `setStock(data.stock)`, **replacing** wholesale. A session saved
+   before the field existed has no such key, so it was dropped on load — and
+   because the setup panel's dirty check is `Object.keys(stock)`, the missing
+   key also made its edits invisible to Apply, which then silently discarded
+   them. **Fix:** `setStock({ ...DEFAULT_STOCK, ...data.stock })` at both sites
+   (`AppState.jsx` session restore and project open), matching the existing
+   `gcodeSettings` merge pattern.
+3. **`CUT_MODE_LEFT_ONLY` ReferenceError at startup.** The constant already
+   existed (`src/lib/cutJob.js:11`, value `'left-only'`); the defect was a
+   missing import in `AppState.jsx` after the default cut mode was flipped.
+   Note: `npm run build` did **not** catch this — Rollup does not resolve
+   undefined identifiers inside function bodies, so a clean build was not
+   evidence here.
+
+**Default cut mode is now `Left only`** (`AppState.jsx`), intentional: the
+blocking setup panel forces an explicit mode choice each session, so the default
+is a starting suggestion. Left only yields N cuts (16 at N=16) rather than
+floor(N/2). **This changes G-code output for fresh sessions** —
+`scripts/dump-gcode.mjs` cannot detect it, because it passes the mode
+explicitly.
+
+**Verification status.** G-code SHA verified byte-identical to `main`
+(`dae3c735…`, both modes) — site 1 / `buildSectionProfile` untouched throughout.
+Build clean. The Line2 stack and the merge-on-restore behaviour were verified
+programmatically (API surface, resolution set/sync, merge reproducing and
+resolving the missing-key defect). **Desktop and mobile visual behaviour — thick
+lines at thickness 3 vs 10, persistence across refresh, and absence of mobile
+artifacts — is Project-Leader-verified, not machine-verified.**
+
+### 10.3 Open items
+
+- **Stage 2 — vector boolean split** has not been started. Split the closed
+  silhouette loop at the rotation axis into left/right halves (a vector boolean
+  operation, not a `filter(u ≤ 0)` and not a sort). Reference
+  `scripts/gen-stage3-4-5.mjs` for the original logic, but rebuild cleanly on the
+  locked Stage 1 pipeline.
+- **Issue A — Safe points** (`src/lib/wirePath.js` :: `addSafePoints`): bottom
+  safe currently places at `blockSectionHalfWidth` (block corner) instead of
+  extending straight from the wire endpoints. Highest-priority visible bug.
+- **Issue B — G-code header** (`src/lib/gcode.js`): missing `G94` before `M3`,
+  duplicate `G93`.
+- **Issue C — Coordinate system mirror** (SVG Y-down vs CNC Y-up): apply the
+  mirror at the display layer only; G-code already correct.
+- **Issue D — F values:** our range ~F70–145 vs DevFoam ~F6–10000. Feedrate
+  algorithm differs; deferred.
+- **Display vs G-code orientation.** The display chain was flipped to `−θ`
+  (`buildFullSilhouettePreview`, `extractOverlayContour`, `blockCenterU`) so the
+  2D/Combined drawing matches the 3D view's rotation direction. Site 1
+  (`buildSectionProfile`, which feeds G-code) was deliberately **not** flipped.
+  Display and G-code therefore differ in orientation until the G-code direction
+  is reconciled against the DevFoam golden — a separate task.
+- **`buildFullSilhouettePreview` output is unused by the renderer.** It is
+  computed into `silhouettePreview` but nothing draws it; the 2D panel and the
+  Combined overlay both derive from `extractOverlayContour`.
+- **Orphaned CSS:** `.silhouette-mode-btn` / `.silhouette-mode-btn.is-active`
+  in `index.css` have no remaining JSX consumers after the cut-method `<select>`
+  swap.
 
 Push anything further only on explicit instruction. Do NOT merge to `main`.
+
 
 
 

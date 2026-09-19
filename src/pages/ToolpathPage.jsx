@@ -132,8 +132,9 @@ export default function ToolpathPage() {
   } = useAppState()
 
   // View mode: 'combined' shows the 3D viewport with the 2D cut drawing
-  // overlaid on the fixed wire plane; '2d' and '3d' keep their existing
-  // behaviour. Combined is the default.
+  // overlaid on the fixed wire plane; '2d' keeps its existing behaviour.
+  // The plain 3D view is not offered on this page — Combined supersedes it.
+  // Combined is the default.
   const [viewMode, setViewMode] = useState('combined')
 
   // Open the blocking Toolpath Setup panel on every entry to this page.
@@ -171,15 +172,6 @@ export default function ToolpathPage() {
               <button
                 type="button"
                 role="tab"
-                aria-selected={viewMode === '3d'}
-                className={`mobile-view-toggle-btn${viewMode === '3d' ? ' is-active' : ''}`}
-                onClick={() => setViewMode('3d')}
-              >
-                3D
-              </button>
-              <button
-                type="button"
-                role="tab"
                 aria-selected={isCombined}
                 className={`mobile-view-toggle-btn${isCombined ? ' is-active' : ''}`}
                 onClick={() => setViewMode('combined')}
@@ -212,7 +204,6 @@ export default function ToolpathPage() {
                   showToolpathOverlay
                   showModelBBox={false}
                   combinedView={isCombined}
-                  lockCamera={isCombined}
                 />
               </section>
             )}

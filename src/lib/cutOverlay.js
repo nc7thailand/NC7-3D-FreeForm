@@ -146,7 +146,11 @@ export function buildCutPath(contour, boV, leftOnly) {
 export function extractOverlayContour(geometry, thetaDeg) {
   if (!geometry) return []
   try {
-    const frame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
+    // DISPLAY-ONLY θ flip — see buildFullSilhouettePreview. The frame's
+    // normal/uAxis assume a camera orbiting by +θ while the model physically
+    // turns on a fixed wire, which mirrored the 2D/Combined drawing against
+    // the 3D view at θ ≠ 0.
+    const frame = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
     return extractFullSilhouette(geometry, frame, {
       profileAccuracy: 5,
       gridBins: OVERLAY_GRID_BINS,
@@ -174,7 +178,9 @@ export function blockCenterU(geometry, thetaDeg) {
   const bb = geometry.boundingBox
   if (!bb || bb.isEmpty()) return 0
   const c = bb.getCenter(new (bb.min.constructor)())
-  const uAxis = cuttingPlane(thetaDeg, planePointMiddleFromStock()).uAxis
+  // DISPLAY-ONLY θ flip — must match extractOverlayContour's axis, otherwise
+  // the foam block detaches from the silhouette it is drawn around.
+  const uAxis = cuttingPlane(-thetaDeg, planePointMiddleFromStock()).uAxis
   return c.x * uAxis.x + c.z * uAxis.z
 }
 

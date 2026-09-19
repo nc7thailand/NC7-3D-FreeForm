@@ -252,10 +252,20 @@ export function shiftSectionToMiddleAnchor(points, rearFrame) {
  */
 export function buildFullSilhouettePreview(geometry, thetaDeg, rearPlanePoint, worldMatrix = null, opts = {}) {
   const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
-  const rearFrame = cuttingPlane(thetaDeg, rearPlanePoint)
+  // DISPLAY-ONLY θ flip. The frame's normal/uAxis are built from θ as though
+  // the camera orbits the model by +θ, but physically the model turns by +θ on
+  // a fixed wire. The two agree only at θ = 0; at every other angle the display
+  // came out mirrored against the 3D view. Negating θ here corrects the 2D
+  // contour, its middle-plane anchor, and the u-shift between them together.
+  //
+  // buildSectionProfile is deliberately NOT flipped — it feeds the G-code
+  // pipeline, whose direction is reconciled against the DevFoam golden
+  // separately. Display and G-code therefore differ in orientation for now.
+  const displayTheta = -thetaDeg
+  const rearFrame = cuttingPlane(displayTheta, rearPlanePoint)
   const outline = extractFullSilhouette(sliceGeo, rearFrame, opts)
   sliceGeo.dispose()
-  const middleFrame = cuttingPlane(thetaDeg, planePointMiddleFromStock())
+  const middleFrame = cuttingPlane(displayTheta, planePointMiddleFromStock())
   const displayPoly = shiftSectionToMiddleAnchor(outline, rearFrame)
   const polylines = displayPoly.length >= 2 ? [displayPoly] : []
   return {

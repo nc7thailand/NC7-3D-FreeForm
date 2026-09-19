@@ -93,23 +93,16 @@ export default function ToolpathSetupOverlay({ open, onClose }) {
         <p className="setup-overlay-sub">Foam block &amp; wire offsets (Method 1)</p>
 
         <div className="setup-overlay-cutmethod">
-          <span className="setup-overlay-cutmethod-label">Cut method</span>
-          <div className="setup-overlay-cutmethod-btns">
-            <button
-              type="button"
-              className={`silhouette-mode-btn${draftCutMode === CUT_MODE_LEFT_ONLY ? ' is-active' : ''}`}
-              onClick={() => setDraftCutMode(CUT_MODE_LEFT_ONLY)}
-            >
-              Left
-            </button>
-            <button
-              type="button"
-              className={`silhouette-mode-btn${draftCutMode === CUT_MODE_LEFT_TO_RIGHT ? ' is-active' : ''}`}
-              onClick={() => setDraftCutMode(CUT_MODE_LEFT_TO_RIGHT)}
-            >
-              Left → Right
-            </button>
-          </div>
+          <label className="setup-overlay-cutmethod-label" htmlFor="setup-cutmode">Cut method</label>
+          <select
+            id="setup-cutmode"
+            className="setup-overlay-select"
+            value={draftCutMode}
+            onChange={(e) => setDraftCutMode(e.target.value)}
+          >
+            <option value={CUT_MODE_LEFT_ONLY}>Left only</option>
+            <option value={CUT_MODE_LEFT_TO_RIGHT}>Left → Right</option>
+          </select>
         </div>
 
         <ToolpathParametersForm compact value={draftStock} onChange={updateDraft} />
