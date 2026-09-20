@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react'
 import Viewer3D from '../components/Viewer3D'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
+import SimulationGcodePanel from '../components/SimulationGcodePanel'
 import PageNav from '../components/PageNav'
 import ProjectPanel from '../components/ProjectPanel'
 import ToolpathParametersForm from '../components/ToolpathParametersForm'
@@ -131,6 +132,13 @@ export default function ToolpathPage() {
     openToolpathSetup,
     simActive,
     simPlaying,
+    setSimPlaying,
+    setSimActive,
+    simSettings,
+    updateSimSettings,
+    simPanelOpen,
+    openSimPanel,
+    closeSimPanel,
   } = useAppState()
 
   // View mode: 'combined' shows the 3D viewport with the 2D cut drawing
@@ -190,7 +198,12 @@ export default function ToolpathPage() {
                 stock={stock}
                 simActive={simActive}
                 simPlaying={simPlaying}
+                setSimPlaying={setSimPlaying}
                 rotationN={rotationN}
+                simSettings={simSettings}
+                updateSimSettings={updateSimSettings}
+                onOpenSimPanel={openSimPanel}
+                onStopSim={() => setSimActive(false)}
               />
             )}
             {show3d && (
@@ -228,6 +241,9 @@ export default function ToolpathPage() {
         </div>
         <PageNav page="toolpath" />
       </main>
+
+      {/* Simulation & G-code settings, opened by the gear in the simulator bar. */}
+      <SimulationGcodePanel open={simPanelOpen} onClose={closeSimPanel} />
     </>
   )
 }

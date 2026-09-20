@@ -16,6 +16,7 @@ import {
   defaultProjectFilename,
 } from '../lib/project'
 import { saveBrowserSession, loadBrowserSession, clearBrowserSession } from '../lib/session'
+import { loadSimSettings, saveSimSettings } from '../lib/simSettings'
 import { ROUTES } from '../routes'
 
 const DEFAULT_STOCK = {
@@ -97,6 +98,11 @@ export function AppStateProvider({ children }) {
   // the project/session persistence, not read by the G-code pipeline.
   const [simActive, setSimActive] = useState(false)
   const [simPlaying, setSimPlaying] = useState(false)
+  // Playback preferences for the 2D wire simulator. Seeded from localStorage and
+  // persisted there alone — deliberately NOT in the project manifest or in
+  // `gcodeSettings`, so simulator tuning can never alter emitted G-code.
+  const [simSettings, setSimSettings] = useState(() => loadSimSettings())
+  const [simPanelOpen, setSimPanelOpen] = useState(false)
 
   const workingRef = useRef(null)
   const viewerRef = useRef(null)
@@ -455,6 +461,18 @@ export function AppStateProvider({ children }) {
     setGcodeSettings((prev) => ({ ...prev, [key]: value }))
   }
 
+  /** Update one playback preference and persist it immediately. */
+  const updateSimSettings = useCallback((patch) => {
+    setSimSettings((prev) => {
+      const next = { ...prev, ...patch }
+      saveSimSettings(patch)
+      return next
+    })
+  }, [])
+
+  const openSimPanel = useCallback(() => setSimPanelOpen(true), [])
+  const closeSimPanel = useCallback(() => setSimPanelOpen(false), [])
+
   const handleStockChange = (key, value) => {
     setStock((prev) => ({ ...prev, [key]: value }))
   }
@@ -692,6 +710,11 @@ export function AppStateProvider({ children }) {
     setSimActive,
     simPlaying,
     setSimPlaying,
+    simSettings,
+    updateSimSettings,
+    simPanelOpen,
+    openSimPanel,
+    closeSimPanel,
     handleMeshTransformChange,
     saveModelStage,
     saveToolpathStage,

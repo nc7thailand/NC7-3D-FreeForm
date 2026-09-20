@@ -14,8 +14,6 @@ function ToolpathNavCenter({ onOpenSetup }) {
     thetaDeg,
     simActive,
     setSimActive,
-    simPlaying,
-    setSimPlaying,
   } = useAppState()
 
   const clampN = (n) => Math.min(64, Math.max(3, n))
@@ -78,17 +76,8 @@ function ToolpathNavCenter({ onOpenSetup }) {
       >
         Sim
       </button>
-      <button
-        type="button"
-        className={`cut-nav-btn sim-play-btn${simPlaying ? ' is-active' : ''}`}
-        disabled={!simActive}
-        onClick={() => setSimPlaying((v) => !v)}
-        aria-pressed={simPlaying}
-        aria-label="Play wire animation"
-        title="Play"
-      >
-        {simPlaying ? 'Pause' : 'Play'}
-      </button>
+      {/* Play/pause moved into the wire simulator bar (WSB), which appears while
+          Sim mode is on. Keeping a second control here would duplicate state. */}
     </div>
   )
 }

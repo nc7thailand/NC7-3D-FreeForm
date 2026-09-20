@@ -842,21 +842,6 @@ body {
   background: #34699f;
 }
 
-.sim-play-btn {
-  min-width: 62px;
-}
-
-.sim-play-btn.is-active {
-  background: #2b6cb0;
-  border-color: #3f6fa0;
-  color: #eaf2fb;
-}
-
-.sim-play-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 /* ---------- Sim module: live data label + track log ---------- */
 .sim-data-label {
   position: absolute;
@@ -1938,3 +1923,364 @@ button:hover {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Wire Simulator Bar (WSB) — floating 2-row playback bar for the 2D panel.
+   Ported from the Pathfinder reference, with classes renamed to the `wsb-`
+   prefix: the reference used `sim-*`, which this project's 2D panel already
+   owns (`.sim-data-label`, `.sim-log-*`, `.silhouette-*`).
+   --------------------------------------------------------------------------- */
+
+.wsb-bar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(18, 18, 22, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  border-radius: 12px;
+  padding: 10px 18px;
+  z-index: 100;
+  width: min(820px, calc(100% - 32px));
+}
+
+.wsb-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.wsb-row-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 270px;
+  min-width: 260px;
+}
+
+.wsb-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #27272a;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s, border-color 0.15s;
+}
+
+.wsb-btn:hover {
+  background: #3f3f46;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.wsb-btn:active {
+  transform: scale(0.95);
+}
+
+.wsb-gear-btn { color: #a1a1aa; }
+.wsb-gear-btn:hover { color: #fff; }
+
+.wsb-stop-btn { color: #f87171; }
+.wsb-stop-btn:hover { background: #dc2626; color: #fff; border-color: #ef4444; }
+
+.wsb-play-btn { background: #3b82f6; }
+.wsb-play-btn:hover { background: #2563eb; }
+
+.wsb-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #a1a1aa;
+  letter-spacing: 0.5px;
+}
+
+.wsb-badge.is-cutting {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.wsb-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: #a1a1aa;
+}
+
+.wsb-metric-pct {
+  font-weight: 700;
+  color: #38bdf8;
+  min-width: 38px;
+}
+
+.wsb-metric-detail {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.wsb-row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.wsb-label-tag {
+  flex: 0 0 82px;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.wsb-speed-label strong {
+  color: #00f5d4;
+  font-family: monospace;
+  font-size: 0.8rem;
+  min-width: 24px;
+  display: inline-block;
+}
+
+.wsb-scrub-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #38bdf8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.wsb-slider-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.wsb-slider-wrap input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #3f3f46;
+  outline: none;
+  cursor: pointer;
+}
+
+.wsb-slider-wrap input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.wsb-slider-wrap input[type="range"]::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.wsb-speed-slider::-webkit-slider-thumb {
+  background: #00f5d4;
+  box-shadow: 0 0 8px rgba(0, 245, 212, 0.6);
+}
+.wsb-speed-slider::-moz-range-thumb {
+  background: #00f5d4;
+  box-shadow: 0 0 8px rgba(0, 245, 212, 0.6);
+}
+
+.wsb-scrub-slider::-webkit-slider-thumb {
+  background: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
+}
+.wsb-scrub-slider::-moz-range-thumb {
+  background: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
+}
+
+.wsb-slider-wrap input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* --- Simulation & G-code panel (SGP), opened by the gear button --- */
+.wsb-sgp-backdrop {
+  z-index: 230;
+}
+
+.wsb-sgp {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(340px, calc(100vw - 32px));
+  max-height: 80vh;
+  overflow-y: auto;
+  z-index: 240;
+  background: #161a21;
+  border: 1px solid #2a3340;
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.wsb-sgp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.wsb-sgp-header h2 {
+  margin: 0;
+  font-size: 15px;
+  color: #f0f5fa;
+}
+
+.wsb-sgp-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  background: #1f2530;
+  color: #9fb0c0;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.wsb-sgp-close:hover {
+  background: #2a3340;
+  color: #fff;
+}
+
+.wsb-sgp-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wsb-sgp-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b788a;
+  min-width: 72px;
+}
+
+.wsb-sgp-field input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #e6edf5;
+  background: #1f2530;
+  border: 1px solid #2a3340;
+  border-radius: 5px;
+}
+
+.wsb-sgp-unit {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #e6edf5;
+  background: #1f2530;
+  border: 1px solid #2a3340;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.wsb-sgp-expander {
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #9fb0c0;
+  background: #1a1f28;
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.wsb-sgp-caret {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.wsb-sgp-caret.is-open {
+  transform: rotate(180deg);
+}
+
+.wsb-sgp-more {
+  padding: 8px 4px 0;
+}
+
+.wsb-sgp-hint {
+  margin: 0;
+  font-size: 11px;
+  color: #6b788a;
+}
+
+.wsb-sgp-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: #6b788a;
+}
+
+.wsb-sgp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.wsb-sgp-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.wsb-sgp-apply {
+  background: #2b6cb0;
+  color: #fff;
+}
+
+.wsb-sgp-apply:hover {
+  background: #2c7bd0;
+}
+
+.wsb-sgp-cancel {
+  background: #1f2530;
+  color: #9fb0c0;
+  border-color: #2a3340;
+}
+
+.wsb-sgp-cancel:hover {
+  background: #2a3340;
+  color: #fff;
+}
