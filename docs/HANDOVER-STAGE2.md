@@ -368,6 +368,135 @@ Push anything further only on explicit instruction. Do NOT merge to `main`.
 
 Priority: G01 basic pipeline. Then G93 inverse time (DevFoam-style).
 
+## 15. Sim Module Extension (2026-09-20)
+
+Commit `8302bdf` — "feat(sim): Wire Simulator Bar (WSB) + SGP + persistence"
+(branch `experiment/combined-view`).
+
+> Note: §14 does not exist — the numbering skipped from §13 to §15. Nothing is
+> missing; §15 was the next number the section author used.
+
+### 15.1 Features added
+
+- Wire Simulator Bar (WSB) — ported from Pathfinder, `.wsb-` prefix
+  (`src/components/WireSimulatorBar.jsx`)
+  - 2-row overlay, absolute bottom-center of the 2D panel
+  - Row 1: gear / stop / play-pause / reset / status badge / speed slider
+  - Row 2: percent / distance / time / progress scrub slider
+  - Status badge states: READY / CUTTING / PAUSED / DONE
+  - Rendered ONLY while `simActive` is true
+  - Rendered as a SIBLING of `.silhouette-preview-canvas-wrap`, not a child:
+    that wrap sets `overflow: hidden` (would clip the bar) and owns the
+    pan/zoom pointer handlers (presses on nested controls panned the canvas)
+- Simulation & G-code panel (SGP) — opens from the WSB gear icon
+  (`src/components/SimulationGcodePanel.jsx`)
+  - Feed rate input (default 500 mm/min)
+  - Unit selector (mm/min | inches/min), canonical storage always mm/min
+  - Collapsible "more options" placeholder (empty)
+  - Apply / Cancel, closes on ✕, backdrop click, and Escape
+- localStorage persistence (`src/lib/simSettings.js`)
+  - key: `nc7-3dfreefoam-sim-settings`
+  - persists `simFeedRate`, `simFeedRateUnit`, `simSpeedMultiplier`
+  - multiplier writes on slider change; feed rate + unit write on Apply
+  - corrupt/absent entry falls back to defaults silently
+
+### 15.2 Timing model (Pathfinder-aligned)
+
+Model A — real machine speed at 1x:
+
+- `baseSpeed_mm_per_sec = stock.simFeedRate / 60`
+- `visualSpeed = baseSpeed × simSpeedMultiplier`
+- Default `simFeedRate` = 500 mm/min → base 8.33 mm/s
+- Default multiplier = 10 → visual 83.3 mm/s
+- At 100x → 833 mm/s
+
+Time readout formula (multiplier deliberately NOT applied):
+
+```
+elapsed = distance / (simFeedRate / 60)
+total   = length   / (simFeedRate / 60)
+```
+
+This gives honest machine time independent of playback speed — the readout
+answers "how far into the actual job are we", which is the point of Model A.
+
+Motion is integrated frame-to-frame (`+= dt × base × multiplier`), not derived
+from absolute elapsed time. That makes a mid-play speed change alter the rate
+without moving the marker, and lets pause/resume continue from where it stopped
+rather than restarting at 0.
+
+### 15.3 Decoupling (critical)
+
+- `gcodeSettings.feedRate` — reserved for G-code export only. Default 700,
+  **unchanged**. Never written by the Sim/WSB/SGP flow.
+- `stock.simFeedRate` — simulation engine + estimated-time display only.
+  Default 500.
+- The two are NOT linked. Sim changes never touch G-code output.
+- **G-code SHA must remain identical** (`dae3c735…`), verified at every step of
+  this work.
+
+### 15.4 Scope decisions confirmed
+
+- G93 inverse-time feed mode is OUT of this project. Reserved for a future
+  4-axis airplane-wing project.
+- Use G1/G94 (feed per minute) exclusively.
+- Golden reference (`StackedCut2`) uses G93; the PL will rewrite it as G1/G94
+  for shape comparison.
+
+### 15.5 State management notes
+
+- `simActive`, `simPlaying`, `simSettings` (and `simPanelOpen`) live in
+  `AppState` — shared between the WSB and the animation loop.
+- `simDistRef` (current distance) stays a `useRef` inside
+  `SilhouettePreviewPanel`: per-frame updates must not trigger React
+  re-renders. Distance is published to the WSB at 10 Hz, not per frame.
+- Trail uses slice()-based sampling (Pathfinder-confirmed safe at 100x).
+- Play/pause control lives in the WSB only; the old `PageNav` Play button was
+  removed to avoid duplicating state.
+
+### 15.6 Bug patterns encountered (for future reference)
+
+1. **State-lift refactor bug:** `setSimPlaying` stayed referenced in the old
+   component after the state moved to `AppState`, throwing a `ReferenceError`
+   at render. When lifting state, update every consumer's props/destructuring,
+   including dependency arrays and inline JSX handlers.
+2. **TDZ error:** a reset guard placed in the render body referenced
+   `wireLengthMM` before its declaration. Keep such reads inside `useEffect`,
+   or order declarations before use. Note `npm run build` does NOT catch this.
+3. **Pointer propagation:** WSB slider drags were caught by the 2D panel's pan
+   handler, which called `setPointerCapture` and both panned the canvas and
+   swallowed the control's click. Fix: skip in the pan handler when the event
+   target is inside `.wsb-bar` (`e.target?.closest?.('.wsb-bar')`), applied to
+   wheel, pointerdown, touchstart and dblclick.
+4. **NaN in `createRadialGradient`:** marker position could be non-finite when
+   the path array was corrupt. Guarded with `isFinite` checks, and
+   `pointAtDistance` returns `null` for a poisoned polyline.
+
+**Meta-note:** bugs 1 and 2 both shipped behind a green `npm run build`.
+Rollup does not resolve identifiers inside nested closures or JSX handlers, so
+a clean build is not evidence that a component renders. Load the page.
+
+### 15.7 Open items (from earlier sessions, still pending)
+
+- K point + turntable rotation concept (draft notes exist)
+- Combined view Left → Right mode polish (deferred)
+- Issue A — Safe Points (still pending)
+- Issue B — G-code header (spec now: G94 throughout, no G93)
+- Issue C — Coordinate mirror (deferred)
+- Issue D — F values (spec now: constant feed rate, no G93)
+
+## 16. Cross-Project Collaboration Note
+
+Pathfinder coder provided:
+
+- Simulation engine reference (distance-based, cumulative distance array +
+  binary search, slice-based trail)
+- WSB HTML/CSS (ported, with `.sim-` → `.wsb-` class rename to avoid collision
+  with this project's existing `.sim-*` panel classes)
+- Design guidance on feed rate decoupling (Model A confirmed)
+
+Same owner for both projects — code and design can flow freely.
+
 
 
 
