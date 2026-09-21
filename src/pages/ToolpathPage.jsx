@@ -15,8 +15,12 @@ import {
   shouldAutoOpenToolpathSetup,
 } from '../lib/navigationLoad'
 
-// Toolpath only — defer WebGL + Three viewer until Combined view is chosen.
-const Viewer3D = lazy(() => import('../components/Viewer3D'))
+// Toolpath 3D policy (field / tablet RAM):
+//   2D  → Viewer3D unmounted (WebGL disposed — no hide-and-keep hybrid).
+//   Combined → lazy mount; unmount again when back to 2D.
+// Optional idle prefetch warms the JS chunk only — still zero WebGL until Combined.
+const viewer3DImport = () => import('../components/Viewer3D')
+const Viewer3D = lazy(viewer3DImport)
 
 function Viewport3DLoading() {
   return (
@@ -183,6 +187,18 @@ export default function ToolpathPage() {
   useEffect(() => {
     saveToolpathViewMode(viewMode)
   }, [viewMode])
+
+  // Warm Viewer3D chunk while user works in 2D — faster first Combined open, no GPU cost.
+  useEffect(() => {
+    if (viewMode !== '2d' || !geometry) return undefined
+    const prefetch = () => { viewer3DImport().catch(() => {}) }
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(prefetch, { timeout: 4000 })
+      return () => cancelIdleCallback(id)
+    }
+    const t = setTimeout(prefetch, 2000)
+    return () => clearTimeout(t)
+  }, [viewMode, geometry])
 
   // Auto-open Toolpath Setup only on the first Toolpath visit in a tab session
   // (never on refresh — reload restores committed state without forcing the panel).
