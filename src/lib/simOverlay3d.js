@@ -4,8 +4,13 @@ import * as THREE from 'three'
 import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
-import { effectiveCutCount } from './cutJob.js'
-import { projectedBlockWidth, blockCenterU } from './cutOverlay.js'
+import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from './cutJob.js'
+import {
+  OVERLAY_COLORS,
+  buildOverlayData,
+  projectedBlockWidth,
+  blockCenterU,
+} from './cutOverlay.js'
 
 export const WIRE_BLINK_PERIOD = 0.45
 export const WIRE_GLOW_COLOR = 0xff4500
@@ -70,16 +75,40 @@ export function createGlowCoreLines(u, v, halfLen, coreWidth, resolution) {
   return { line, mat, geo }
 }
 
-export function nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex, thetaDeg }) {
+/**
+ * K point (simDot) — start of the next cut, drawn in the current view.
+ *
+ * Left-only: always the next cut's left entry (BO line, outside block).
+ * Left-to-right: odd next cut → left start; even next cut → right start
+ * (matches green marker parity in buildOverlayAnnotations).
+ */
+export function nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex }) {
   const count = effectiveCutCount(rotationN ?? 0, { mode: cutMode })
   if (!geometry || !count || cutIndex >= count - 1) return null
-  const thetaNext = thetaDeg + 360 / count
-  const uCenterNext = blockCenterU(geometry, thetaNext)
-  const projectedNext = projectedBlockWidth(thetaNext, stock)
-  return {
-    u: uCenterNext - projectedNext / 2 - (stock?.boMargin ?? 20),
-    v: stock?.bo ?? 0,
+
+  const nextCutIndex = cutIndex + 1
+  const thetaNext = (nextCutIndex * 360) / count
+
+  if (cutMode === CUT_MODE_LEFT_ONLY) {
+    const uCenterNext = blockCenterU(geometry, thetaNext)
+    const projectedNext = projectedBlockWidth(thetaNext, stock)
+    const margin = stock?.boMargin ?? 20
+    return {
+      u: uCenterNext - projectedNext / 2 - margin,
+      v: stock?.bo ?? 0,
+    }
   }
+
+  const { markers } = buildOverlayData({
+    geometry,
+    thetaDeg: thetaNext,
+    stock,
+    cutMode,
+    cutIndex: nextCutIndex,
+  })
+  const green = markers.find((m) => m.color === OVERLAY_COLORS.green)
+  if (!green || !Number.isFinite(green.u) || !Number.isFinite(green.v)) return null
+  return { u: green.u, v: green.v }
 }
 
 export function createNextDotGroup(overlayScale) {

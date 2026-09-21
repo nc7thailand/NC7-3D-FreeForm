@@ -17,9 +17,8 @@ import {
   buildCutPath,
   extractOverlayContour,
   buildOverlayAnnotations,
-  projectedBlockWidth,
-  blockCenterU,
 } from '../lib/cutOverlay'
+import { nextSimDot } from '../lib/simOverlay3d'
 
 // Quality is fixed at High (600 grid bins) for the Stage 1 preview.
 const GRID_BINS = OVERLAY_GRID_BINS
@@ -284,16 +283,14 @@ export default function SilhouettePreviewPanel({
   // in both cut modes. Suppressed on the last rotation — there is no next.
   const simDot = useMemo(() => {
     if (!simActive || !geometry) return null
-    const count = effectiveCutCount(rotationN ?? 0, { mode: cutMode })
-    if (!count || cutIndex >= count - 1) return null
-    const thetaNext = thetaDeg + 360 / count
-    const uCenterNext = blockCenterU(geometry, thetaNext)
-    const projectedNext = projectedBlockWidth(thetaNext, stock)
-    return {
-      u: uCenterNext - projectedNext / 2 - (stock?.boMargin ?? 20),
-      v: stock?.bo ?? 0,
-    }
-  }, [simActive, geometry, rotationN, cutMode, cutIndex, activeThetaDeg, stock])
+    return nextSimDot({
+      geometry,
+      stock,
+      rotationN,
+      cutMode,
+      cutIndex,
+    })
+  }, [simActive, geometry, rotationN, cutMode, cutIndex, stock])
 
   useEffect(() => {
     const canvas = canvasRef.current
