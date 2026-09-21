@@ -6,7 +6,13 @@ import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
-import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
+import {
+  buildSectionProfile,
+  buildFullSilhouettePreview,
+  modelBBoxBottomY,
+  planePointFromStock,
+  silhouetteOptsFromStock,
+} from '../lib/toolpath'
 import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 import { attachIndexSafetyToJob } from '../lib/indexSafety'
 import { wirePathFromProfile } from '../lib/wirePath'
@@ -546,7 +552,7 @@ export function AppStateProvider({ children }) {
       mode,
       onProgress,
     })
-    job.stock = { ...s }
+    job.stock = { ...s, bo: modelBBoxBottomY(geo) }
     for (const cut of job.cuts) {
       cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
     }
@@ -598,6 +604,7 @@ export function AppStateProvider({ children }) {
     geo.userData = { ...workingRef.current.userData, nc7CentroidApplied: true }
     workingRef.current = geo
     setGeometry(geo)
+    setStock((prev) => ({ ...prev, bo: modelBBoxBottomY(geo) }))
     updateStatsOnly(geo)
     setToolpathTick((t) => t + 1)
     setProfile(null)

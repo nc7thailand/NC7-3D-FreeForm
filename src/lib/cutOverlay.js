@@ -11,7 +11,7 @@
 // This module is pure arithmetic — no canvas, no THREE, no rendering.
 
 import { extractFullSilhouette } from './silhouette.js'
-import { cuttingPlane, planePointMiddleFromStock } from './toolpath.js'
+import { cuttingPlane, planePointMiddleFromStock, resolveBo } from './toolpath.js'
 import { CUT_MODE_LEFT_ONLY } from './cutJob.js'
 
 // Quality is fixed at High (600 grid bins) for the preview overlay.
@@ -199,7 +199,7 @@ export function blockCenterU(geometry, thetaDeg) {
  * }}
  */
 export function buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geometry, thetaDeg }) {
-  const boV = stock?.bo ?? 0
+  const boV = resolveBo(stock, geometry)
   const projectedW = projectedBlockWidth(thetaDeg, stock)
   const uCenter = blockCenterU(geometry, thetaDeg)
   const block = {
@@ -284,9 +284,10 @@ export function buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geo
  */
 export function buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex }) {
   const contour = extractOverlayContour(geometry, thetaDeg)
-  const cutPath = buildCutPath(contour, stock?.bo ?? 0, cutMode === CUT_MODE_LEFT_ONLY)
+  const cutBoV = resolveBo(stock, geometry)
+  const cutPath = buildCutPath(contour, cutBoV, cutMode === CUT_MODE_LEFT_ONLY)
   const annotations = buildOverlayAnnotations({
     cutPath, cutMode, stock, cutIndex, geometry, thetaDeg,
   })
-  return { contour, cutPath, ...annotations }
+  return { contour, cutPath, cutBoV, ...annotations }
 }

@@ -96,8 +96,8 @@ export function processWireProfile(rawPolyline, stock, thetaDeg) {
  * @param {object} stock
  * @param {number} thetaDeg
  */
-export function bottomRetractY(stock, thetaDeg) {
-  return -effectiveBottomSafeOffset(thetaDeg, stock)
+export function bottomRetractY(stock, thetaDeg, geometry) {
+  return -effectiveBottomSafeOffset(thetaDeg, stock, geometry)
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   blockSectionHalfWidth,
   blockBottomExtent,
   effectiveBottomSafeOffset,
+  resolveBo,
 } from '../lib/toolpath'
 import { topSafeY, wirePathFromProfile } from '../lib/wirePath'
 
@@ -23,7 +24,7 @@ const MAX_ZOOM = 24
  * Coordinate mapping: X = u (distance along the cutting plane, through the
  * block centre), Y = height above the block base (base on the machine table).
  */
-export default function PathPreviewCanvas({ stock, thetaDeg, profile }) {
+export default function PathPreviewCanvas({ stock, thetaDeg, profile, geometry }) {
   const wireProfile = useMemo(() => {
     if (!profile?.polylines?.length) return null
     const path = wirePathFromProfile(profile, stock, thetaDeg)
@@ -54,8 +55,8 @@ export default function PathPreviewCanvas({ stock, thetaDeg, profile }) {
     canvas.style.height = `${h}px`
     const ctx = canvas.getContext('2d')
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    render(ctx, w, h, stock, thetaDeg, profile, wireProfile, viewRef.current, fitRef)
-  }, [stock, thetaDeg, profile, wireProfile])
+    render(ctx, w, h, stock, thetaDeg, profile, wireProfile, viewRef.current, fitRef, geometry)
+  }, [stock, thetaDeg, profile, wireProfile, geometry])
 
   const zoomAt = useCallback((clientX, clientY, factor) => {
     const wrap = wrapRef.current
@@ -95,7 +96,7 @@ export default function PathPreviewCanvas({ stock, thetaDeg, profile }) {
       cancelAnimationFrame(raf)
       clearTimeout(t)
     }
-  }, [stock.w, stock.t, stock.h, stock.lo, stock.bo, stock.kerf, stock.topOffset, stock.boAuto, stock.boMargin, resetView, requestDraw])
+  }, [stock.w, stock.t, stock.h, stock.lo, stock.kerf, stock.topOffset, stock.boAuto, stock.boMargin, geometry, resetView, requestDraw])
 
   useEffect(() => {
     requestDraw()
@@ -263,16 +264,17 @@ export default function PathPreviewCanvas({ stock, thetaDeg, profile }) {
   )
 }
 
-function render(ctx, width, height, stock, thetaDeg, profile, wireProfile, view, fitRef) {
+function render(ctx, width, height, stock, thetaDeg, profile, wireProfile, view, fitRef, geometry) {
   ctx.clearRect(0, 0, width, height)
   ctx.fillStyle = '#10141b'
   ctx.fillRect(0, 0, width, height)
 
-  const { w: W, t: T, h: H, lo: LO, bo: BO } = stock
+  const { w: W, t: T, h: H, lo: LO } = stock
+  const BO = resolveBo(stock, geometry)
 
   const halfW = blockSectionHalfWidth(thetaDeg, { w: W, t: T })
   const bbExtent = blockBottomExtent(thetaDeg, { w: W, t: T, lo: LO })
-  const lb = effectiveBottomSafeOffset(thetaDeg, { w: W, t: T, lo: LO, bo: BO, boAuto: stock.boAuto, boMargin: stock.boMargin })
+  const lb = effectiveBottomSafeOffset(thetaDeg, { w: W, t: T, lo: LO, bo: BO, boAuto: stock.boAuto, boMargin: stock.boMargin }, geometry)
 
   const topY = topSafeY(stock)
   // Fit window: cap depth below base so auto-LB does not zoom everything out on mobile

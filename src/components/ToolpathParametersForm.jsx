@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react'
 import { useAppState } from '../context/AppState'
 import { measureModelBlockOffset } from '../lib/modelBlockOffset'
+import { modelBBoxBottomY } from '../lib/toolpath'
 
 /**
  * DevFoam-style toolpath parameters (foam block + wire offsets).
@@ -77,15 +78,14 @@ export default function ToolpathParametersForm({
       <label>LO (wire clearance)
         <input type="number" min="0" step="0.5" value={s.lo} onChange={(e) => change('lo', +e.target.value)} />
       </label>
-      <label>BO (bottom offset)
+      <label>BO (model bbox bottom)
         <input
-          type="number"
-          min="0"
-          step="0.5"
-          value={s.bo}
-          disabled={s.boAuto !== false}
-          onChange={(e) => change('bo', +e.target.value)}
+          type="text"
+          readOnly
+          value={geometry ? modelBBoxBottomY(geometry).toFixed(2) : '—'}
+          className="readonly-field"
         />
+        <span className="field-hint">Derived from model · moves with offset</span>
       </label>
       <label>Profile accuracy (1–10)
         <input

@@ -21,6 +21,7 @@ import {
   wireSpeedMmPerSec,
 } from '../lib/turntablePhysics'
 import { wireFoamCollision } from '../lib/wireCollision'
+import { resolveBo } from '../lib/toolpath'
 
 const SIM_SAMPLE_MS = 100
 
@@ -99,8 +100,8 @@ export function useSimPlayback({
   phaseRef.current = phase
 
   const simJobCacheKey = useMemo(
-    () => `${rotationN}|${cutMode}|${stock?.w}|${stock?.t}|${stock?.h}|${stock?.bo}|${stock?.boMargin}|${geometry?.uuid ?? ''}`,
-    [rotationN, cutMode, stock?.w, stock?.t, stock?.h, stock?.bo, stock?.boMargin, geometry?.uuid],
+    () => `${rotationN}|${cutMode}|${stock?.w}|${stock?.t}|${stock?.h}|${resolveBo(stock, geometry)}|${stock?.boMargin}|${geometry?.uuid ?? ''}`,
+    [rotationN, cutMode, stock, stock?.w, stock?.t, stock?.h, stock?.boMargin, geometry],
   )
 
   const getCurrentCut = useCallback(() => {

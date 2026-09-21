@@ -10,6 +10,9 @@
 // Dynamic BB / LB formulas (from CONCEPT.md §3.2):
 //   Block_Bottom_Extent(θ) = |(W/2)·sin θ| + |(T/2)·cos θ| + LO
 //   LB(θ)                  = Block_Bottom_Extent(θ) + BO
+//
+// BO (experimental): bottom of the model axis-aligned bounding box (world Y),
+// not a separate user margin. stock.bo is synced from geometry on Apply.
 
 import * as THREE from 'three'
 import { extractLeftSilhouette, extractFullSilhouette, silhouetteOptsFromStock } from './silhouette.js'
@@ -86,6 +89,32 @@ export function blockBottomExtent(thetaDeg, { w, t, lo }) {
 }
 
 /**
+ * BO — bottom of the model axis-aligned bbox in foam-block space (Y=0 floor).
+ *
+ * @param {THREE.BufferGeometry|null|undefined} geometry
+ * @returns {number}
+ */
+export function modelBBoxBottomY(geometry) {
+  if (!geometry) return 0
+  geometry.computeBoundingBox()
+  const bb = geometry.boundingBox
+  if (!bb || bb.isEmpty()) return 0
+  return bb.min.y
+}
+
+/**
+ * Resolve BO for overlay / LB. Prefers live geometry; falls back to stock.bo
+ * snapshot (saved cut jobs).
+ *
+ * @param {object} [stock]
+ * @param {THREE.BufferGeometry|null|undefined} geometry
+ */
+export function resolveBo(stock, geometry) {
+  if (geometry) return modelBBoxBottomY(geometry)
+  return stock?.bo ?? 0
+}
+
+/**
  * LB(θ) — the dynamic bottom safe point: lowest wire travel required below
  * the rotation axis, from CONCEPT.md.
  *
@@ -113,11 +142,12 @@ export function defaultBottomSafeTotal(stock) {
  * @param {number} thetaDeg
  * @param {object} stock
  */
-export function effectiveBottomSafeOffset(thetaDeg, stock) {
+export function effectiveBottomSafeOffset(thetaDeg, stock, geometry) {
+  const bo = resolveBo(stock, geometry)
   if (stock.boAuto !== false) {
     return defaultBottomSafeTotal(stock)
   }
-  return bottomSafeOffset(thetaDeg, stock)
+  return bottomSafeOffset(thetaDeg, { w: stock.w, t: stock.t, lo: stock.lo, bo })
 }
 
 /**

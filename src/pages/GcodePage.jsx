@@ -3,15 +3,15 @@ import PageNav from '../components/PageNav'
 import { useAppState } from '../context/AppState'
 import { generateGcode, downloadGcode, defaultGcodeFilename } from '../lib/gcode'
 import { topSafeY } from '../lib/wirePath'
-import { effectiveBottomSafeOffset } from '../lib/toolpath'
+import { effectiveBottomSafeOffset, resolveBo } from '../lib/toolpath'
 
 export default function GcodePage() {
-  const { cutJob, stock, modelName, gcodeSettings, handleGcodeSettingsChange } = useAppState()
+  const { cutJob, stock, modelName, gcodeSettings, geometry, handleGcodeSettingsChange } = useAppState()
   const { feedRate, indexFeed, spindle } = gcodeSettings
 
   const jobStock = cutJob?.stock ?? stock
   const profileCount = cutJob?.cuts?.filter((c) => c.profile.polylines.length > 0).length ?? 0
-  const lb0 = effectiveBottomSafeOffset(0, jobStock)
+  const lb0 = effectiveBottomSafeOffset(0, jobStock, geometry)
 
   const gcodeResult = useMemo(() => {
     if (!cutJob) return null
@@ -68,7 +68,7 @@ export default function GcodePage() {
                     <li>Top safe Y = {topSafeY(jobStock).toFixed(1)} mm</li>
                     <li>
                       Bottom safe LB = {lb0.toFixed(1)} mm
-                      {jobStock.boAuto !== false ? ' (auto)' : ` (BO ${jobStock.bo})`}
+                      {jobStock.boAuto !== false ? ' (auto)' : ` (BO ${resolveBo(jobStock, geometry).toFixed(1)})`}
                     </li>
                     {gcodeResult && (
                       <li><strong>{gcodeResult.lineCount}</strong> G-code lines</li>
