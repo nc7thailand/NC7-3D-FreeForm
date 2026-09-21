@@ -7,6 +7,7 @@ import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
+import { attachIndexSafetyToJob } from '../lib/indexSafety'
 import { wirePathFromProfile } from '../lib/wirePath'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
@@ -545,6 +546,7 @@ export function AppStateProvider({ children }) {
     for (const cut of job.cuts) {
       cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
     }
+    attachIndexSafetyToJob(job, geo, s, mode)
     return job
   }, [rotationN, cutMode, stock])
 

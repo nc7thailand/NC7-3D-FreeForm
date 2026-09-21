@@ -209,7 +209,11 @@ export default function ToolpathPage() {
   const simStatus = useMemo(() => {
     if (playback.jobTotalMM <= 0) return 'READY'
     if (!simPlaying && playback.simGlobalDistance >= playback.jobTotalMM - 1e-3) return 'DONE'
-    if (playback.phase === 'indexing') return 'INDEXING'
+    if (playback.phase === 'indexing') {
+      if (playback.indexSubPhase === 'pre-k') return 'INDEX → K'
+      if (playback.indexSubPhase === 'post-i') return 'INDEX → I'
+      return playback.colliding ? 'COLLISION' : 'INDEXING'
+    }
     if (simPlaying) return playback.colliding ? 'COLLISION' : 'CUTTING'
     return playback.simGlobalDistance > 0 ? 'PAUSED' : 'READY'
   }, [playback, simPlaying])

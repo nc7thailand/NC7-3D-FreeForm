@@ -7,6 +7,8 @@ import * as THREE from 'three'
 import { orientGeometryUp } from '../src/lib/stl.js'
 import { planePointFromStock } from '../src/lib/toolpath.js'
 import { buildCutJob, CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../src/lib/cutJob.js'
+import { wirePathFromProfile } from '../src/lib/wirePath.js'
+import { attachIndexSafetyToJob } from '../src/lib/indexSafety.js'
 import { generateGcode, DEFAULT_GCODE_SETTINGS } from '../src/lib/gcode.js'
 
 const STL = 'Example/DevFoamExample/Preview.stl'
@@ -59,6 +61,11 @@ for (const [label, mode] of [
     mode,
     silhouetteOpts: { profileAccuracy: 5 },
   })
+  job.stock = { ...STOCK }
+  for (const cut of job.cuts) {
+    cut.wirePath = wirePathFromProfile(cut.profile, STOCK, cut.thetaDeg)
+  }
+  attachIndexSafetyToJob(job, geo, STOCK, mode)
   const program = generateGcode({ ...job, stock: STOCK }, DEFAULT_GCODE_SETTINGS)
   out[label] = {
     cutCount: job.cutCount,

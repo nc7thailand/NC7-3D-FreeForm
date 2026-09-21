@@ -1,5 +1,6 @@
 // Method 1 G-code post-processor — G90 G21, G93 inverse time, X/Y wire + Z rotary.
 
+import { assessIndexSafety } from './indexSafety.js'
 import { extendX, topSafeY, wirePathFromProfile } from './wirePath.js'
 
 const DEFAULT_SETTINGS = {
@@ -68,7 +69,8 @@ function appendMoves(lines, moves, pos, feedRate) {
 /**
  * Generate Method 1 G-code for a saved cut job.
  *
- * Per cut: lead-in → profile (top→bottom) → top safe Y↑ → retract X → Z index.
+ * Per cut: lead-in → profile (top→bottom) → top safe Y↑ → retract X →
+ * optional index-safety XY moves → Z index → optional post-index XY → next cut.
  *
  * @param {object} cutJob
  * @param {object} [settings]
@@ -121,8 +123,28 @@ export function generateGcode(cutJob, settings = {}) {
     appendMoves(lines, [{ x: retractX }], pos, cfg.feedRate)
 
     if (i < cuts.length - 1) {
+      let safety = cut.indexSafety
+      if (!safety && cutJob.geometry) {
+        safety = assessIndexSafety({
+          geometry: cutJob.geometry,
+          stock,
+          rotationN: cutJob.rotationN,
+          cutMode: cutJob.mode,
+          cutIndex: cut.index,
+          thetaDeg: cut.thetaDeg,
+        })
+      }
+
+      if (safety?.needed) {
+        appendMoves(lines, [{ x: safety.k.u, y: safety.k.v }], pos, cfg.feedRate)
+      }
+
       const nextZ = cuts[i + 1].index * stepZ
       appendMoves(lines, [{ z: nextZ, f: cfg.indexFeed }], pos, cfg.feedRate)
+
+      if (safety?.needed) {
+        appendMoves(lines, [{ x: safety.i.u, y: safety.i.v }], pos, cfg.feedRate)
+      }
     }
   }
 

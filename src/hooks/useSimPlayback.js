@@ -9,6 +9,7 @@ import {
   pointAtDistance,
   seekGlobal,
 } from '../lib/simJob'
+import { assessIndexSafety, stepTowardU } from '../lib/indexSafety'
 import { indexSpeedDegPerSec, wireSpeedMmPerSec } from '../lib/turntablePhysics'
 import { wireFoamCollision } from '../lib/wireCollision'
 
@@ -59,6 +60,8 @@ export function useSimPlayback({
   const simSeekingRef = useRef(false)
   const simRafRef = useRef(null)
   const indexTargetCutRef = useRef(-1)
+  const indexSubPhaseRef = useRef(null)
+  const indexPlanRef = useRef(null)
   const wireAtIndexRef = useRef(null)
   const phaseRef = useRef('idle')
   const displayThetaRef = useRef(thetaDeg)
@@ -71,6 +74,7 @@ export function useSimPlayback({
   simPlayingRef.current = simPlaying
 
   const [phase, setPhase] = useState('idle')
+  const [indexSubPhase, setIndexSubPhase] = useState(null)
   const [displayThetaDeg, setDisplayThetaDeg] = useState(thetaDeg)
   const [simDistance, setSimDistance] = useState(0)
   const [simGlobalDistance, setSimGlobalDistance] = useState(0)
@@ -229,6 +233,9 @@ export function useSimPlayback({
     simLastSampleRef.current = -Infinity
     completedLengthRef.current = 0
     indexTargetCutRef.current = -1
+    indexSubPhaseRef.current = null
+    indexPlanRef.current = null
+    setIndexSubPhase(null)
     wireAtIndexRef.current = null
     setSimDistance(0)
     setSimGlobalDistance(0)
@@ -263,13 +270,47 @@ export function useSimPlayback({
       const nextCut = job?.cuts?.find((c) => c.cutIndex === nextCutIndex)
       if (!nextCut) return false
       indexTargetCutRef.current = nextCutIndex
-      wireAtIndexRef.current = endPt ? { u: endPt.u, v: endPt.v } : wireAtIndexRef.current
+      wireAtIndexRef.current = endPt
+        ? { u: endPt.u, v: endPt.v }
+        : wireAtIndexRef.current
+
+      const plan = geometry
+        ? assessIndexSafety({
+          geometry,
+          stock,
+          rotationN,
+          cutMode,
+          cutIndex: cutIndexRef.current,
+          thetaDeg: displayThetaRef.current,
+        })
+        : null
+      indexPlanRef.current = plan
+      const sub = plan?.needed ? 'pre-k' : 'rotate'
+      indexSubPhaseRef.current = sub
+      setIndexSubPhase(sub)
+
       phaseRef.current = 'indexing'
       setPhase('indexing')
       setColliding(false)
       simTrailRef.current = []
       publishWireState(wireAtIndexRef.current, [])
       return true
+    }
+
+    const finishIndexing = (targetTheta) => {
+      simAutoAdvanceRef.current = true
+      advanceSimCut(indexTargetCutRef.current)
+      cutIndexRef.current = indexTargetCutRef.current
+      displayThetaRef.current = targetTheta
+      setDisplayThetaDeg(targetTheta)
+      simDistRef.current = 0
+      phaseRef.current = 'cutting'
+      setPhase('cutting')
+      indexSubPhaseRef.current = null
+      indexPlanRef.current = null
+      setIndexSubPhase(null)
+      setColliding(false)
+      setPathVersion((v) => v + 1)
     }
 
     const step = (now) => {
@@ -290,45 +331,68 @@ export function useSimPlayback({
         const job = simJobRef.current
         const targetCut = job?.cuts?.find((c) => c.cutIndex === indexTargetCutRef.current)
         const targetTheta = targetCut?.thetaDeg ?? displayThetaRef.current
-        const currentTheta = displayThetaRef.current
-        const delta = targetTheta - currentTheta
-        const stepDeg = Math.sign(delta || 1) * indexSpeed * dt
-        let nextTheta = currentTheta
-        if (Math.abs(delta) <= Math.abs(stepDeg) + 1e-6) {
-          nextTheta = targetTheta
-        } else {
-          nextTheta = currentTheta + stepDeg
-        }
-        displayThetaRef.current = nextTheta
-        setDisplayThetaDeg(nextTheta)
-
+        const plan = indexPlanRef.current
+        const sub = indexSubPhaseRef.current
         const wirePt = wireAtIndexRef.current
-        if (wirePt && geometry) {
-          const hit = wireFoamCollision({
-            wireU: wirePt.u,
-            wireV: wirePt.v,
-            geometry,
-            stock,
-            cutMode,
-            cutIndex: cutIndexRef.current,
-            thetaDeg: nextTheta,
-          })
-          setColliding(hit)
+
+        if (sub === 'pre-k' && plan?.needed && wirePt) {
+          const reached = stepTowardU(wirePt, plan.k.u, wireSpeed, dt)
+          setColliding(false)
           publishWireState(wirePt, [])
+          if (reached) {
+            indexSubPhaseRef.current = 'rotate'
+            setIndexSubPhase('rotate')
+          }
+          simRafRef.current = requestAnimationFrame(step)
+          return
         }
 
-        if (Math.abs(targetTheta - nextTheta) < 1e-3) {
-          simAutoAdvanceRef.current = true
-          advanceSimCut(indexTargetCutRef.current)
-          cutIndexRef.current = indexTargetCutRef.current
-          displayThetaRef.current = targetTheta
-          setDisplayThetaDeg(targetTheta)
-          simDistRef.current = 0
-          phaseRef.current = 'cutting'
-          setPhase('cutting')
+        if (sub === 'post-i' && plan?.needed && wirePt) {
+          const reached = stepTowardU(wirePt, plan.i.u, wireSpeed, dt)
           setColliding(false)
-          setPathVersion((v) => v + 1)
+          publishWireState(wirePt, [])
+          if (reached) finishIndexing(targetTheta)
+          simRafRef.current = requestAnimationFrame(step)
+          return
         }
+
+        if (sub === 'rotate') {
+          const currentTheta = displayThetaRef.current
+          const delta = targetTheta - currentTheta
+          const stepDeg = Math.sign(delta || 1) * indexSpeed * dt
+          let nextTheta = currentTheta
+          if (Math.abs(delta) <= Math.abs(stepDeg) + 1e-6) {
+            nextTheta = targetTheta
+          } else {
+            nextTheta = currentTheta + stepDeg
+          }
+          displayThetaRef.current = nextTheta
+          setDisplayThetaDeg(nextTheta)
+
+          if (wirePt && geometry) {
+            const hit = wireFoamCollision({
+              wireU: wirePt.u,
+              wireV: wirePt.v,
+              geometry,
+              stock,
+              cutMode,
+              cutIndex: cutIndexRef.current,
+              thetaDeg: nextTheta,
+            })
+            setColliding(hit)
+            publishWireState(wirePt, [])
+          }
+
+          if (Math.abs(targetTheta - nextTheta) < 1e-3) {
+            if (plan?.needed) {
+              indexSubPhaseRef.current = 'post-i'
+              setIndexSubPhase('post-i')
+            } else {
+              finishIndexing(targetTheta)
+            }
+          }
+        }
+
         simRafRef.current = requestAnimationFrame(step)
         return
       }
@@ -411,6 +475,7 @@ export function useSimPlayback({
     geometry,
     stock,
     cutMode,
+    rotationN,
     wireFeedRate,
     indexFeedRate,
     advanceSimCut,
@@ -522,6 +587,9 @@ export function useSimPlayback({
     simPlayingRef.current = false
     phaseRef.current = 'idle'
     setPhase('idle')
+    indexSubPhaseRef.current = null
+    indexPlanRef.current = null
+    setIndexSubPhase(null)
     let simJob = job ?? simJobRef.current
     if (!simJob) {
       try { simJob = await ensureSimJob() } catch { return }
@@ -585,6 +653,7 @@ export function useSimPlayback({
 
   return {
     phase,
+    indexSubPhase,
     displayThetaDeg,
     colliding,
     wireUV: displayWireUV,
