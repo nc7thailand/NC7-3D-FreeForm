@@ -685,10 +685,9 @@ export default forwardRef(function Viewer3D(
     state.mesh = mesh
     // Position the mesh relative to the OBJ_Gizmo pivot.
     //
-    // Read-only (toolpath preview): the pivot sits at the world origin (0,0,0)
-    // = the rotary axis, and the mesh is offset so its bounding box is
-    // bottom-centred on that axis — bottom at Y=0, centre X=0, centre Z=0.
-    // This is the physically correct reference for the rotary hot-wire cut.
+    // Read-only (toolpath preview): pivot at world origin (rotary axis). Geometry
+    // Y is already in foam-block space (floor Y=0, optional modelOffsetMm lift).
+    // Centre X/Z on the axis only — do not subtract min.y or vertical offset is lost.
     //
     // Edit (Model page): the pivot sits at the centre of mass so the move/rotate
     // gizmo is centred on the model; the mesh is offset back so the model stays
@@ -699,10 +698,9 @@ export default forwardRef(function Viewer3D(
       geometry.computeBoundingBox()
       const bb = geometry.boundingBox
       const translateX = -(bb.min.x + bb.max.x) / 2
-      const translateY = -bb.min.y
       const translateZ = -(bb.min.z + bb.max.z) / 2
       objGizmo.position.set(0, 0, 0)
-      mesh.position.set(translateX, translateY, translateZ)
+      mesh.position.set(translateX, 0, translateZ)
     } else {
       objGizmo.position.copy(com)
       mesh.position.copy(com).negate()

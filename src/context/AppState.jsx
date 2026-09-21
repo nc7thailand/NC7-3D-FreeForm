@@ -583,7 +583,7 @@ export function AppStateProvider({ children }) {
     }
   }, [computeCutJob, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
 
-  /** Bake gizmo, apply foam-block vertical offset, refresh geometry. */
+  /** Bake gizmo, apply foam-block vertical offset, refresh geometry (new clone for React). */
   const applyModelBlockOffsetFromStock = useCallback((stockSnapshot = stock) => {
     if (!workingRef.current) return false
     bakeModelTransform()
@@ -594,10 +594,14 @@ export function AppStateProvider({ children }) {
       stockSnapshot.modelOffsetMm ?? 0,
     )
     viewerRef.current?.resetMeshTransform?.()
-    workingRef.current.userData.nc7CentroidApplied = true
-    setGeometry(workingRef.current)
-    updateStatsOnly(workingRef.current)
+    const geo = workingRef.current.clone()
+    geo.userData = { ...workingRef.current.userData, nc7CentroidApplied: true }
+    workingRef.current = geo
+    setGeometry(geo)
+    updateStatsOnly(geo)
     setToolpathTick((t) => t + 1)
+    setProfile(null)
+    setSilhouettePreview(null)
     return true
   }, [bakeModelTransform, stock, updateStatsOnly])
 
@@ -781,6 +785,7 @@ export function AppStateProvider({ children }) {
     saveModelStage,
     saveToolpathStage,
     applyToolpathSettings,
+    applyModelBlockOffsetFromStock,
     handleSaveProject,
     handleOpenProject,
   }

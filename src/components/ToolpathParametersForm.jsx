@@ -14,7 +14,7 @@ export default function ToolpathParametersForm({
   value,
   onChange,
 }) {
-  const { stock, handleStockChange, geometry } = useAppState()
+  const { stock, handleStockChange, geometry, applyModelBlockOffsetFromStock } = useAppState()
   const s = value ?? stock
   const change = onChange ?? handleStockChange
   const offsetType = s.modelOffsetType ?? 'bottom'
@@ -57,12 +57,20 @@ export default function ToolpathParametersForm({
             value={s.modelOffsetMm ?? 0}
             onChange={(e) => change('modelOffsetMm', +e.target.value)}
           />
+          <button
+            type="button"
+            className="model-offset-move"
+            disabled={!geometry}
+            onClick={() => applyModelBlockOffsetFromStock(s)}
+          >
+            Move
+          </button>
         </div>
         <p className="panel-hint model-offset-hint">
           {offsetType === 'top'
             ? 'Gap from model top to block top (H)'
             : 'Distance from block floor to model bottom'}
-          {' · Apply to move model'}
+          {' · Move = preview · Apply (above) = move + recompute cuts'}
         </p>
       </div>
 
