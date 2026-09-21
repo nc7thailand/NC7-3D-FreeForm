@@ -428,7 +428,9 @@ export function useSimPlayback({
           }
 
           if (Math.abs(targetTheta - nextTheta) < 1e-3) {
-            if (plan?.postMoveToI) {
+            if (plan?.indexEndsAtTurn) {
+              finishIndexing(targetTheta)
+            } else if (plan?.postMoveToI) {
               indexSubPhaseRef.current = 'post-i'
               setIndexSubPhase('post-i')
             } else if (plan?.postMoveToK) {

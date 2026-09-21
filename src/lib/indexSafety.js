@@ -1,8 +1,8 @@
 // Indexing (turntable turn) safety between cuts — shared by sim and G-code.
 //
 // Compare simDot K vs red retract I relative to x=0 (model center):
-//   K nearer center → rotate at red, then rapid to K
-//   K farther out   → rapid to K, rotate, then rapid to I
+//   K nearer center → rotate at red, then rapid to K (even N ending)
+//   K farther out   → rapid to K, rotate (odd N ends here), or + rapid to I (even N)
 
 import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from './cutJob.js'
 import { OVERLAY_COLORS, buildOverlayData } from './cutOverlay.js'
@@ -62,6 +62,8 @@ export function indexSafetyNeeded(side, kU, iU) {
  *   preMoveToK: boolean,
  *   postMoveToK: boolean,
  *   postMoveToI: boolean,
+ *   indexEndsAtTurn: boolean,
+ *   currentCutN: number,
  *   side: IndexEntrySide,
  *   k: { u: number, v: number },
  *   i: { u: number, v: number },
@@ -97,11 +99,17 @@ export function assessIndexSafety({
   const i = { u: red.u, v: red.v }
   const nearer = kNearerCenterThanRed(side, k.u, i.u)
   const farther = kFartherOutThanRed(side, k.u, i.u)
+  const currentCutN = cutIndex + 1
+  const currentCutIsOdd = currentCutN % 2 === 1
 
+  // Odd N ending (L-R): pre-K → turn → done (wire already at next entry K).
+  // Post-I and a second move to simDot only apply after even N.
   return {
     preMoveToK: farther,
     postMoveToK: nearer,
-    postMoveToI: farther,
+    postMoveToI: farther && !currentCutIsOdd,
+    indexEndsAtTurn: currentCutIsOdd && farther,
+    currentCutN,
     side,
     k,
     i,
@@ -164,6 +172,7 @@ export function stepTowardUV(point, target, speedMmPerSec, dtSec) {
  *   preMoveToK: boolean,
  *   postMoveToK: boolean,
  *   postMoveToI: boolean,
+ *   indexEndsAtTurn: boolean,
  *   side: IndexEntrySide,
  *   k: { u: number, v: number } | null,
  *   i: { u: number, v: number } | null,
@@ -199,6 +208,7 @@ export function buildIndexTransitionPlan({
       preMoveToK: false,
       postMoveToK: false,
       postMoveToI: false,
+      indexEndsAtTurn: false,
       side: indexEntrySide(cutMode, nextCutIndex),
       k: null,
       i: null,
@@ -211,6 +221,7 @@ export function buildIndexTransitionPlan({
     preMoveToK: safety.preMoveToK,
     postMoveToK: safety.postMoveToK,
     postMoveToI: safety.postMoveToI,
+    indexEndsAtTurn: safety.indexEndsAtTurn,
     side: safety.side,
     k: safety.k,
     i: safety.i,
