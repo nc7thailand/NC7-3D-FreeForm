@@ -1226,7 +1226,7 @@ export default forwardRef(function Viewer3D(
       }
     }
 
-    const kPoint = nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex })
+    const kPoint = nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex, thetaDeg })
     if (kPoint) {
       const nextDot = createNextDotGroup(overlayScale)
       nextDot.group.position.set(kPoint.u, kPoint.v, 0.02)

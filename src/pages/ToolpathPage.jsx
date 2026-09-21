@@ -214,6 +214,10 @@ export default function ToolpathPage() {
       if (playback.indexSubPhase === 'post-k') return 'INDEX → K'
       if (playback.indexSubPhase === 'post-i') return 'INDEX → I'
       if (playback.indexSubPhase === 'approach-green') return 'INDEX → START'
+      if (playback.indexSubPhase === 'lo-down-v') return 'INDEX ↓ BO'
+      if (playback.indexSubPhase === 'lo-down-h') return 'INDEX → K'
+      if (playback.indexSubPhase === 'lo-up-h') return 'INDEX → AXIS'
+      if (playback.indexSubPhase === 'lo-up-v') return 'INDEX ↑ TOP'
       return playback.colliding ? 'COLLISION' : 'INDEXING'
     }
     if (simPlaying) return playback.colliding ? 'COLLISION' : 'CUTTING'

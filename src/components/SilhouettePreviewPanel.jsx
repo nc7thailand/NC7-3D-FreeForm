@@ -288,8 +288,9 @@ export default function SilhouettePreviewPanel({
       rotationN,
       cutMode,
       cutIndex,
+      thetaDeg: activeThetaDeg,
     })
-  }, [geometry, rotationN, cutMode, cutIndex, stock])
+  }, [geometry, rotationN, cutMode, cutIndex, stock, activeThetaDeg])
 
   useEffect(() => {
     const canvas = canvasRef.current

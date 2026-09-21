@@ -9,7 +9,14 @@ import {
   pointAtDistance,
   seekGlobal,
 } from '../lib/simJob'
-import { buildIndexTransitionPlan, stepTowardUV } from '../lib/indexSafety'
+import {
+  buildIndexTransitionPlan,
+  isLeftOnlyIndexPlan,
+  stepHorizontal,
+  stepTowardUV,
+  stepVertical,
+} from '../lib/indexSafety'
+import { leftBoEntry } from '../lib/indexing/indexSequenceLeftOnly'
 import {
   indexSpeedDegPerSec,
   rapidSpeedMmPerSec,
@@ -293,11 +300,13 @@ export function useSimPlayback({
       if (!plan) return false
 
       indexPlanRef.current = plan
-      const sub = plan.preMoveToK ? 'pre-k' : 'rotate'
+      const sub = isLeftOnlyIndexPlan(plan)
+        ? 'rotate'
+        : (plan.preMoveToK ? 'pre-k' : 'rotate')
       indexSubPhaseRef.current = sub
       setIndexSubPhase(sub)
 
-      // L-R index always departs from the red retract marker.
+      // Index always departs from the red retract marker.
       if (plan.i && Number.isFinite(plan.i.u) && Number.isFinite(plan.i.v)) {
         wireAtIndexRef.current = { u: plan.i.u, v: plan.i.v }
       }
@@ -360,6 +369,54 @@ export function useSimPlayback({
         const plan = indexPlanRef.current
         const sub = indexSubPhaseRef.current
         const wirePt = wireAtIndexRef.current
+
+        if (isLeftOnlyIndexPlan(plan) && wirePt) {
+          if (sub === 'lo-down-v') {
+            const reached = stepVertical(wirePt, plan.axisBo.v, rapidSpeed, dt)
+            setColliding(false)
+            publishWireState(wirePt, [])
+            if (reached) {
+              indexSubPhaseRef.current = 'lo-down-h'
+              setIndexSubPhase('lo-down-h')
+            }
+            simRafRef.current = requestAnimationFrame(step)
+            return
+          }
+
+          if (sub === 'lo-down-h') {
+            const kTarget = leftBoEntry(geometry, stock, targetTheta) ?? plan.k
+            const reached = stepHorizontal(wirePt, kTarget.u, rapidSpeed, dt)
+            setColliding(false)
+            publishWireState(wirePt, [])
+            if (reached) {
+              indexSubPhaseRef.current = 'lo-up-h'
+              setIndexSubPhase('lo-up-h')
+            }
+            simRafRef.current = requestAnimationFrame(step)
+            return
+          }
+
+          if (sub === 'lo-up-h') {
+            const reached = stepHorizontal(wirePt, plan.axisBo.u, rapidSpeed, dt)
+            setColliding(false)
+            publishWireState(wirePt, [])
+            if (reached) {
+              indexSubPhaseRef.current = 'lo-up-v'
+              setIndexSubPhase('lo-up-v')
+            }
+            simRafRef.current = requestAnimationFrame(step)
+            return
+          }
+
+          if (sub === 'lo-up-v') {
+            const reached = stepVertical(wirePt, plan.top.v, rapidSpeed, dt)
+            setColliding(false)
+            publishWireState(wirePt, [])
+            if (reached) finishIndexing(targetTheta)
+            simRafRef.current = requestAnimationFrame(step)
+            return
+          }
+        }
 
         if (sub === 'pre-k' && plan?.preMoveToK && plan.k && wirePt) {
           const reached = stepTowardUV(wirePt, plan.k, rapidSpeed, dt)
@@ -428,7 +485,14 @@ export function useSimPlayback({
           }
 
           if (Math.abs(targetTheta - nextTheta) < 1e-3) {
-            if (plan?.indexEndsAtTurn) {
+            if (isLeftOnlyIndexPlan(plan)) {
+              if (plan.afterRotate === 'finish') {
+                finishIndexing(targetTheta)
+              } else {
+                indexSubPhaseRef.current = 'lo-down-v'
+                setIndexSubPhase('lo-down-v')
+              }
+            } else if (plan?.indexEndsAtTurn) {
               finishIndexing(targetTheta)
             } else if (plan?.postMoveToI) {
               indexSubPhaseRef.current = 'post-i'
