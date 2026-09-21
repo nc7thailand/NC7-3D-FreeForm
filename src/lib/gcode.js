@@ -135,15 +135,17 @@ export function generateGcode(cutJob, settings = {}) {
         })
       }
 
-      if (safety?.needed) {
+      if (safety?.preMoveToK) {
         appendMoves(lines, [{ x: safety.k.u, y: safety.k.v }], pos, cfg.feedRate)
       }
 
       const nextZ = cuts[i + 1].index * stepZ
       appendMoves(lines, [{ z: nextZ, f: cfg.indexFeed }], pos, cfg.feedRate)
 
-      if (safety?.needed) {
+      if (safety?.postMoveToI) {
         appendMoves(lines, [{ x: safety.i.u, y: safety.i.v }], pos, cfg.feedRate)
+      } else if (safety?.postMoveToK) {
+        appendMoves(lines, [{ x: safety.k.u, y: safety.k.v }], pos, cfg.feedRate)
       }
     }
   }

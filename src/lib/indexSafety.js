@@ -1,14 +1,16 @@
 // Indexing (turntable turn) safety between cuts — shared by sim and G-code.
 //
-// When the next cut's entry K and the current cut's retract I are ordered the
-// wrong way for the entry side, the wire must G0 to K before the table turns,
-// then to I at the new angle, or it will slice through the foam during index.
+// Compare simDot K vs red retract I relative to x=0 (model center):
+//   K nearer center → rotate at red, then rapid to K
+//   K farther out   → rapid to K, rotate, then rapid to I
 
-import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT, effectiveCutCount } from './cutJob.js'
+import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from './cutJob.js'
 import { OVERLAY_COLORS, buildOverlayData } from './cutOverlay.js'
 import { nextSimDot } from './simOverlay3d.js'
 
 /** @typedef {'left' | 'right'} IndexEntrySide */
+
+const U_MATCH_TOL = 1e-3
 
 /**
  * Which side the next cut enters from (L-R parity; left-only is always left).
@@ -23,23 +25,43 @@ export function indexEntrySide(cutMode, nextCutIndex) {
 }
 
 /**
- * True when a pre-index wire reposition is required before turntable rotation.
+ * simDot K is closer to x=0 than red I (toward the model).
  *
  * @param {IndexEntrySide} side
- * @param {number} kU - simDot / next entry U
- * @param {number} iU - red retract U
+ * @param {number} kU
+ * @param {number} iU
  */
-export function indexSafetyNeeded(side, kU, iU) {
+export function kNearerCenterThanRed(side, kU, iU) {
   if (!Number.isFinite(kU) || !Number.isFinite(iU)) return false
   if (side === 'left') return kU > iU
   return kU < iU
 }
 
 /**
- * Assess index safety for the transition from cutIndex → cutIndex + 1.
+ * simDot K is farther from x=0 than red I (more outside).
+ *
+ * @param {IndexEntrySide} side
+ * @param {number} kU
+ * @param {number} iU
+ */
+export function kFartherOutThanRed(side, kU, iU) {
+  if (!Number.isFinite(kU) || !Number.isFinite(iU)) return false
+  if (Math.abs(kU - iU) <= U_MATCH_TOL) return false
+  return !kNearerCenterThanRed(side, kU, iU)
+}
+
+/** @deprecated use kFartherOutThanRed — kept for stored cutJob.indexSafety */
+export function indexSafetyNeeded(side, kU, iU) {
+  return kFartherOutThanRed(side, kU, iU)
+}
+
+/**
+ * Assess index transition geometry for cutIndex → cutIndex + 1.
  *
  * @returns {{
- *   needed: boolean,
+ *   preMoveToK: boolean,
+ *   postMoveToK: boolean,
+ *   postMoveToI: boolean,
  *   side: IndexEntrySide,
  *   k: { u: number, v: number },
  *   i: { u: number, v: number },
@@ -73,9 +95,18 @@ export function assessIndexSafety({
   if (!red || !k || !Number.isFinite(red.u) || !Number.isFinite(k.u)) return null
 
   const i = { u: red.u, v: red.v }
-  const needed = indexSafetyNeeded(side, k.u, i.u)
+  const nearer = kNearerCenterThanRed(side, k.u, i.u)
+  const farther = kFartherOutThanRed(side, k.u, i.u)
 
-  return { needed, side, k, i, nextCutIndex }
+  return {
+    preMoveToK: farther,
+    postMoveToK: nearer,
+    postMoveToI: farther,
+    side,
+    k,
+    i,
+    nextCutIndex,
+  }
 }
 
 /**
@@ -86,7 +117,7 @@ export function assessIndexSafety({
 export function stepTowardU(point, targetU, speedMmPerSec, dtSec) {
   if (!point || !Number.isFinite(targetU)) return true
   const dx = targetU - point.u
-  if (Math.abs(dx) < 1e-3) {
+  if (Math.abs(dx) < U_MATCH_TOL) {
     point.u = targetU
     return true
   }
@@ -110,7 +141,7 @@ export function stepTowardUV(point, target, speedMmPerSec, dtSec) {
   const dx = target.u - point.u
   const dy = target.v - point.v
   const dist = Math.hypot(dx, dy)
-  if (dist < 1e-3) {
+  if (dist < U_MATCH_TOL) {
     point.u = target.u
     point.v = target.v
     return true
@@ -127,11 +158,11 @@ export function stepTowardUV(point, target, speedMmPerSec, dtSec) {
 }
 
 /**
- * Full index transition plan for sim playback (safety + green approach target).
+ * Full index transition plan for sim playback.
  *
  * @returns {{
- *   needed: boolean,
  *   preMoveToK: boolean,
+ *   postMoveToK: boolean,
  *   postMoveToI: boolean,
  *   side: IndexEntrySide,
  *   k: { u: number, v: number } | null,
@@ -163,34 +194,39 @@ export function buildIndexTransitionPlan({
   })
 
   const nextCutIndex = cutIndex + 1
-  const hasK = !!(safety?.k && Number.isFinite(safety.k.u) && Number.isFinite(safety.k.v))
-  const isLeftToRight = cutMode === CUT_MODE_LEFT_TO_RIGHT
-
-  // L-R: always rapid red → simDot (K) before every turntable turn.
-  // Left-only: pre-K only when the collision condition is met.
-  const preMoveToK = isLeftToRight ? hasK : !!(safety?.needed && hasK)
+  if (!safety) {
+    return {
+      preMoveToK: false,
+      postMoveToK: false,
+      postMoveToI: false,
+      side: indexEntrySide(cutMode, nextCutIndex),
+      k: null,
+      i: null,
+      green: { u: nextCutGreen.u, v: nextCutGreen.v },
+      nextCutIndex,
+    }
+  }
 
   return {
-    needed: safety?.needed ?? false,
-    preMoveToK,
-    postMoveToI: safety?.needed ?? false,
-    side: safety?.side ?? indexEntrySide(cutMode, nextCutIndex),
-    k: safety?.k ?? null,
-    i: safety?.i ?? null,
+    preMoveToK: safety.preMoveToK,
+    postMoveToK: safety.postMoveToK,
+    postMoveToI: safety.postMoveToI,
+    side: safety.side,
+    k: safety.k,
+    i: safety.i,
     green: { u: nextCutGreen.u, v: nextCutGreen.v },
     nextCutIndex,
   }
 }
 
 /**
- * Attach `indexSafety` to every cut that has a following cut.
+ * Attach index transition flags to every cut that has a following cut.
  *
  * @param {object} job - cut job from buildCutJob
  * @param {import('three').BufferGeometry} geometry
  * @param {object} stock
  * @param {string} cutMode
  */
-
 export function attachIndexSafetyToJob(job, geometry, stock, cutMode) {
   if (!job?.cuts?.length || !geometry) return
   for (let i = 0; i < job.cuts.length - 1; i++) {

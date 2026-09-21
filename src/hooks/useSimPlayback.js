@@ -373,6 +373,15 @@ export function useSimPlayback({
           return
         }
 
+        if (sub === 'post-k' && plan?.postMoveToK && plan.k && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.k, rapidSpeed, dt)
+          setColliding(false)
+          publishWireState(wirePt, [])
+          if (reached) goApproachGreen()
+          simRafRef.current = requestAnimationFrame(step)
+          return
+        }
+
         if (sub === 'post-i' && plan?.postMoveToI && plan.i && wirePt) {
           const reached = stepTowardUV(wirePt, plan.i, rapidSpeed, dt)
           setColliding(false)
@@ -422,6 +431,9 @@ export function useSimPlayback({
             if (plan?.postMoveToI) {
               indexSubPhaseRef.current = 'post-i'
               setIndexSubPhase('post-i')
+            } else if (plan?.postMoveToK) {
+              indexSubPhaseRef.current = 'post-k'
+              setIndexSubPhase('post-k')
             } else {
               goApproachGreen()
             }
