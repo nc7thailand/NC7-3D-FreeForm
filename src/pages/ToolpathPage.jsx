@@ -212,6 +212,7 @@ export default function ToolpathPage() {
     if (playback.phase === 'indexing') {
       if (playback.indexSubPhase === 'pre-k') return 'INDEX → K'
       if (playback.indexSubPhase === 'post-i') return 'INDEX → I'
+      if (playback.indexSubPhase === 'approach-green') return 'INDEX → START'
       return playback.colliding ? 'COLLISION' : 'INDEXING'
     }
     if (simPlaying) return playback.colliding ? 'COLLISION' : 'CUTTING'

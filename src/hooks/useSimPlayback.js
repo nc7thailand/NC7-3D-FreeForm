@@ -9,7 +9,7 @@ import {
   pointAtDistance,
   seekGlobal,
 } from '../lib/simJob'
-import { assessIndexSafety, stepTowardU } from '../lib/indexSafety'
+import { buildIndexTransitionPlan, stepTowardUV } from '../lib/indexSafety'
 import { indexSpeedDegPerSec, wireSpeedMmPerSec } from '../lib/turntablePhysics'
 import { wireFoamCollision } from '../lib/wireCollision'
 
@@ -274,18 +274,22 @@ export function useSimPlayback({
         ? { u: endPt.u, v: endPt.v }
         : wireAtIndexRef.current
 
-      const plan = geometry
-        ? assessIndexSafety({
-          geometry,
-          stock,
-          rotationN,
-          cutMode,
-          cutIndex: cutIndexRef.current,
-          thetaDeg: displayThetaRef.current,
-        })
-        : null
+      const green = nextCut.fullWirePath?.[0]
+      if (!green) return false
+
+      const plan = buildIndexTransitionPlan({
+        geometry,
+        stock,
+        rotationN,
+        cutMode,
+        cutIndex: cutIndexRef.current,
+        thetaDeg: displayThetaRef.current,
+        nextCutGreen: green,
+      })
+      if (!plan) return false
+
       indexPlanRef.current = plan
-      const sub = plan?.needed ? 'pre-k' : 'rotate'
+      const sub = plan.needed ? 'pre-k' : 'rotate'
       indexSubPhaseRef.current = sub
       setIndexSubPhase(sub)
 
@@ -298,19 +302,31 @@ export function useSimPlayback({
     }
 
     const finishIndexing = (targetTheta) => {
+      const startPt = wireAtIndexRef.current
+        ? { u: wireAtIndexRef.current.u, v: wireAtIndexRef.current.v }
+        : indexPlanRef.current?.green ?? null
+
       simAutoAdvanceRef.current = true
       advanceSimCut(indexTargetCutRef.current)
       cutIndexRef.current = indexTargetCutRef.current
       displayThetaRef.current = targetTheta
       setDisplayThetaDeg(targetTheta)
       simDistRef.current = 0
+      simTrailRef.current = []
       phaseRef.current = 'cutting'
       setPhase('cutting')
       indexSubPhaseRef.current = null
       indexPlanRef.current = null
       setIndexSubPhase(null)
+      wireAtIndexRef.current = null
       setColliding(false)
       setPathVersion((v) => v + 1)
+      if (startPt) publishWireState(startPt, [])
+    }
+
+    const goApproachGreen = () => {
+      indexSubPhaseRef.current = 'approach-green'
+      setIndexSubPhase('approach-green')
     }
 
     const step = (now) => {
@@ -335,8 +351,8 @@ export function useSimPlayback({
         const sub = indexSubPhaseRef.current
         const wirePt = wireAtIndexRef.current
 
-        if (sub === 'pre-k' && plan?.needed && wirePt) {
-          const reached = stepTowardU(wirePt, plan.k.u, wireSpeed, dt)
+        if (sub === 'pre-k' && plan?.needed && plan.k && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.k, wireSpeed, dt)
           setColliding(false)
           publishWireState(wirePt, [])
           if (reached) {
@@ -347,8 +363,17 @@ export function useSimPlayback({
           return
         }
 
-        if (sub === 'post-i' && plan?.needed && wirePt) {
-          const reached = stepTowardU(wirePt, plan.i.u, wireSpeed, dt)
+        if (sub === 'post-i' && plan?.needed && plan.i && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.i, wireSpeed, dt)
+          setColliding(false)
+          publishWireState(wirePt, [])
+          if (reached) goApproachGreen()
+          simRafRef.current = requestAnimationFrame(step)
+          return
+        }
+
+        if (sub === 'approach-green' && plan?.green && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.green, wireSpeed, dt)
           setColliding(false)
           publishWireState(wirePt, [])
           if (reached) finishIndexing(targetTheta)
@@ -388,7 +413,7 @@ export function useSimPlayback({
               indexSubPhaseRef.current = 'post-i'
               setIndexSubPhase('post-i')
             } else {
-              finishIndexing(targetTheta)
+              goApproachGreen()
             }
           }
         }
@@ -497,15 +522,19 @@ export function useSimPlayback({
       simSeekingRef.current = false
       return
     }
+    if (autoAdvance) {
+      simAutoAdvanceRef.current = false
+      simDistRef.current = 0
+      simTrailRef.current = []
+      return
+    }
     simDistRef.current = 0
     simTrailRef.current = []
-    if (!autoAdvance) {
-      completedLengthRef.current = 0
-      setSimDistance(0)
-      setSimGlobalDistance(0)
-      setSimLabel(null)
-      setSimLogTick(0)
-    }
+    completedLengthRef.current = 0
+    setSimDistance(0)
+    setSimGlobalDistance(0)
+    setSimLabel(null)
+    setSimLogTick(0)
     syncWireMarkerPosition(0)
   }, [cutIndex, syncWireMarkerPosition, simAutoAdvanceRef])
 

@@ -79,14 +79,6 @@ export function assessIndexSafety({
 }
 
 /**
- * Attach `indexSafety` to every cut that has a following cut.
- *
- * @param {object} job - cut job from buildCutJob
- * @param {import('three').BufferGeometry} geometry
- * @param {object} stock
- * @param {string} cutMode
- */
-/**
  * Animate wire U toward a target (rapid move). Mutates `point.u`.
  *
  * @returns {boolean} true when target reached
@@ -106,6 +98,87 @@ export function stepTowardU(point, targetU, speedMmPerSec, dtSec) {
   point.u += step
   return false
 }
+
+/**
+ * Animate wire (u,v) toward a target point. Mutates `point`.
+ *
+ * @returns {boolean} true when target reached
+ */
+export function stepTowardUV(point, target, speedMmPerSec, dtSec) {
+  if (!point || !target) return true
+  if (!Number.isFinite(target.u) || !Number.isFinite(target.v)) return true
+  const dx = target.u - point.u
+  const dy = target.v - point.v
+  const dist = Math.hypot(dx, dy)
+  if (dist < 1e-3) {
+    point.u = target.u
+    point.v = target.v
+    return true
+  }
+  const step = speedMmPerSec * dtSec
+  if (dist <= step) {
+    point.u = target.u
+    point.v = target.v
+    return true
+  }
+  point.u += (dx / dist) * step
+  point.v += (dy / dist) * step
+  return false
+}
+
+/**
+ * Full index transition plan for sim playback (safety + green approach target).
+ *
+ * @returns {{
+ *   needed: boolean,
+ *   side: IndexEntrySide,
+ *   k: { u: number, v: number } | null,
+ *   i: { u: number, v: number } | null,
+ *   green: { u: number, v: number },
+ *   nextCutIndex: number,
+ * } | null}
+ */
+export function buildIndexTransitionPlan({
+  geometry,
+  stock,
+  rotationN,
+  cutMode,
+  cutIndex,
+  thetaDeg,
+  nextCutGreen,
+}) {
+  if (!nextCutGreen || !Number.isFinite(nextCutGreen.u) || !Number.isFinite(nextCutGreen.v)) {
+    return null
+  }
+
+  const safety = assessIndexSafety({
+    geometry,
+    stock,
+    rotationN,
+    cutMode,
+    cutIndex,
+    thetaDeg,
+  })
+
+  const nextCutIndex = cutIndex + 1
+  return {
+    needed: safety?.needed ?? false,
+    side: safety?.side ?? indexEntrySide(cutMode, nextCutIndex),
+    k: safety?.k ?? null,
+    i: safety?.i ?? null,
+    green: { u: nextCutGreen.u, v: nextCutGreen.v },
+    nextCutIndex,
+  }
+}
+
+/**
+ * Attach `indexSafety` to every cut that has a following cut.
+ *
+ * @param {object} job - cut job from buildCutJob
+ * @param {import('three').BufferGeometry} geometry
+ * @param {object} stock
+ * @param {string} cutMode
+ */
 
 export function attachIndexSafetyToJob(job, geometry, stock, cutMode) {
   if (!job?.cuts?.length || !geometry) return
