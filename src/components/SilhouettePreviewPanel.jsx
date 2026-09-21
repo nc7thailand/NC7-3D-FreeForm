@@ -278,9 +278,8 @@ export default function SilhouettePreviewPanel({
       : null)
     ?? (simActive && fullWirePath[0] ? fullWirePath[0] : null)
 
-  // Experimental Sim: the next rotation's cut-entry point, drawn in the current
-  // view. The step is one full cutCount revolution step, so it is 360/cutCount
-  // in both cut modes. Suppressed on the last rotation — there is no next.
+  // K point (simDot): next cut's wire entry — always visible on Toolpath.
+  // Suppressed on the last rotation — there is no next cut.
   const simDot = useMemo(() => {
     if (!geometry) return null
     return nextSimDot({
