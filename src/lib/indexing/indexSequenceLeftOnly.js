@@ -21,7 +21,10 @@ export function leftOnlyNeedsIndexRapids(completedCutN) {
 }
 
 /**
- * Odd→Even index order from I.u vs next-Even-start (K).u.
+ * Odd→Even index order: compare caller I.u vs next-Even-start K.u.
+ * K farther left (smaller u) → G0 to K, then turn.
+ * Otherwise → turn, then G0 to K.
+ *
  * @returns {{ preMoveToK: boolean, postMoveToK: boolean }}
  */
 export function leftOnlyOddIndexOrder(iU, kU) {
@@ -29,9 +32,9 @@ export function leftOnlyOddIndexOrder(iU, kU) {
     return { preMoveToK: false, postMoveToK: false }
   }
   if (Math.abs(iU - kU) <= U_MATCH_TOL) {
-    return { preMoveToK: false, postMoveToK: false }
+    return { preMoveToK: false, postMoveToK: true }
   }
-  if (iU < kU) {
+  if (kU < iU) {
     return { preMoveToK: true, postMoveToK: false }
   }
   return { preMoveToK: false, postMoveToK: true }

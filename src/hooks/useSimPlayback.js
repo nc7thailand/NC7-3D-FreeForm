@@ -369,13 +369,15 @@ export function useSimPlayback({
         const wirePt = wireAtIndexRef.current
 
         if (sub === 'lo-to-k' && isLeftOnlyIndexPlan(plan) && wirePt) {
-          const kTarget = leftOnlySimDot({
-            geometry,
-            stock,
-            rotationN,
-            cutIndex: cutIndexRef.current,
-            thetaDeg: targetTheta,
-          }) ?? plan.k
+          const kTarget = plan.preMoveToK
+            ? plan.k
+            : (leftOnlySimDot({
+              geometry,
+              stock,
+              rotationN,
+              cutIndex: cutIndexRef.current,
+              thetaDeg: targetTheta,
+            }) ?? plan.k)
           if (!kTarget) {
             simRafRef.current = requestAnimationFrame(step)
             return
