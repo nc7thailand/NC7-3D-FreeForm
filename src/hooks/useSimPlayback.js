@@ -520,7 +520,6 @@ export function useSimPlayback({
     }
   }, [
     simPlaying,
-    pathVersion,
     geometry,
     stock,
     cutMode,
@@ -547,7 +546,8 @@ export function useSimPlayback({
       return
     }
     if (autoAdvance) {
-      simAutoAdvanceRef.current = false
+      // AppState owns clearing simAutoAdvanceRef — do not reset here or its
+      // cutIndex effect runs second and pauses playback between cuts.
       simDistRef.current = 0
       simTrailRef.current = []
       return
