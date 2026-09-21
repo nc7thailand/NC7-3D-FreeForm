@@ -5,14 +5,13 @@
 // Even N: lower-left → TOP (toolpath). End and simDot K coincide at TOP.
 //         Even→Odd index: turn only — no rapids.
 
-import { effectiveCutCount } from '../cutJob.js'
+import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from '../cutJob.js'
 import {
   OVERLAY_COLORS,
   blockCenterU,
   buildOverlayData,
   projectedBlockWidth,
 } from '../cutOverlay.js'
-import { nextSimDot } from '../simOverlay3d.js'
 import { topSafeY } from '../wirePath.js'
 
 /** Index rapids only after Odd N (Odd→Even). Even→Odd is rotate-only. */
@@ -35,6 +34,46 @@ export function leftBoEntry(geometry, stock, thetaDeg) {
 /** TOP entry on the rotation axis (odd-cut green / even-cut red). */
 export function leftOnlyTopEntry(stock) {
   return { u: 0, v: topSafeY(stock) }
+}
+
+/**
+ * Left-only simDot (K):
+ *   Odd N  → next Even start (green @ lower-left BO, next cut θ)
+ *   Even N → this Even end   (red @ TOP, current θ)
+ */
+export function leftOnlySimDot({ geometry, stock, rotationN, cutIndex, thetaDeg }) {
+  const count = effectiveCutCount(rotationN ?? 0, { mode: CUT_MODE_LEFT_ONLY })
+  if (!geometry || !count || cutIndex >= count - 1) return null
+
+  const currentCutN = cutIndex + 1
+  const isOdd = currentCutN % 2 === 1
+
+  if (isOdd) {
+    const nextCutIndex = cutIndex + 1
+    const thetaNext = (nextCutIndex * 360) / count
+    const { markers } = buildOverlayData({
+      geometry,
+      thetaDeg: thetaNext,
+      stock,
+      cutMode: CUT_MODE_LEFT_ONLY,
+      cutIndex: nextCutIndex,
+    })
+    const green = markers.find((m) => m.color === OVERLAY_COLORS.green)
+    if (!green || !Number.isFinite(green.u) || !Number.isFinite(green.v)) return null
+    return { u: green.u, v: green.v }
+  }
+
+  const theta = Number.isFinite(thetaDeg) ? thetaDeg : (cutIndex * 360) / count
+  const { markers } = buildOverlayData({
+    geometry,
+    thetaDeg: theta,
+    stock,
+    cutMode: CUT_MODE_LEFT_ONLY,
+    cutIndex,
+  })
+  const red = markers.find((m) => m.color === OVERLAY_COLORS.red)
+  if (!red || !Number.isFinite(red.u) || !Number.isFinite(red.v)) return null
+  return { u: red.u, v: red.v }
 }
 
 /**
@@ -67,7 +106,7 @@ export function buildLeftOnlyIndexPlan({
     cutIndex,
   })
   const red = markers.find((m) => m.color === OVERLAY_COLORS.red)
-  const k = nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex, thetaDeg })
+  const k = leftOnlySimDot({ geometry, stock, rotationN, cutIndex, thetaDeg })
 
   if (!red || !k || !Number.isFinite(red.u) || !Number.isFinite(k.u)) return null
 

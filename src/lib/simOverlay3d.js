@@ -5,7 +5,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from './cutJob.js'
-import { leftBoEntry } from './indexing/indexSequenceLeftOnly.js'
+import { leftOnlySimDot } from './indexing/indexSequenceLeftOnly.js'
 import { OVERLAY_COLORS, buildOverlayData } from './cutOverlay.js'
 
 export const WIRE_BLINK_PERIOD = 0.45
@@ -74,7 +74,7 @@ export function createGlowCoreLines(u, v, halfLen, coreWidth, resolution) {
 /**
  * K point (simDot) — start of the next cut, drawn in the current view.
  *
- * Left-only: always the next cut's left entry (BO line, outside block).
+ * Left-only: Odd N → next Even start; Even N → this Even end (TOP).
  * Left-to-right: odd next cut → left start; even next cut → right start
  * (matches green marker parity in buildOverlayAnnotations).
  */
@@ -86,8 +86,7 @@ export function nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex, thet
   const thetaNext = (nextCutIndex * 360) / count
 
   if (cutMode === CUT_MODE_LEFT_ONLY) {
-    const theta = Number.isFinite(thetaDeg) ? thetaDeg : thetaNext
-    return leftBoEntry(geometry, stock, theta)
+    return leftOnlySimDot({ geometry, stock, rotationN, cutIndex, thetaDeg })
   }
 
   const { markers } = buildOverlayData({
