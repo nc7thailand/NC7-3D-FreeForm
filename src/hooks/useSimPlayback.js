@@ -10,7 +10,11 @@ import {
   seekGlobal,
 } from '../lib/simJob'
 import { buildIndexTransitionPlan, stepTowardUV } from '../lib/indexSafety'
-import { indexSpeedDegPerSec, wireSpeedMmPerSec } from '../lib/turntablePhysics'
+import {
+  indexSpeedDegPerSec,
+  rapidSpeedMmPerSec,
+  wireSpeedMmPerSec,
+} from '../lib/turntablePhysics'
 import { wireFoamCollision } from '../lib/wireCollision'
 
 const SIM_SAMPLE_MS = 100
@@ -289,9 +293,14 @@ export function useSimPlayback({
       if (!plan) return false
 
       indexPlanRef.current = plan
-      const sub = plan.needed ? 'pre-k' : 'rotate'
+      const sub = plan.preMoveToK ? 'pre-k' : 'rotate'
       indexSubPhaseRef.current = sub
       setIndexSubPhase(sub)
+
+      // L-R index always departs from the red retract marker.
+      if (plan.i && Number.isFinite(plan.i.u) && Number.isFinite(plan.i.v)) {
+        wireAtIndexRef.current = { u: plan.i.u, v: plan.i.v }
+      }
 
       phaseRef.current = 'indexing'
       setPhase('indexing')
@@ -341,6 +350,7 @@ export function useSimPlayback({
 
       const speedMult = simSpeedRef.current
       const wireSpeed = wireSpeedMmPerSec(wireFeedRate, speedMult)
+      const rapidSpeed = rapidSpeedMmPerSec(undefined, speedMult)
       const indexSpeed = indexSpeedDegPerSec(indexFeedRate, speedMult)
 
       if (phaseRef.current === 'indexing') {
@@ -351,8 +361,8 @@ export function useSimPlayback({
         const sub = indexSubPhaseRef.current
         const wirePt = wireAtIndexRef.current
 
-        if (sub === 'pre-k' && plan?.needed && plan.k && wirePt) {
-          const reached = stepTowardUV(wirePt, plan.k, wireSpeed, dt)
+        if (sub === 'pre-k' && plan?.preMoveToK && plan.k && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.k, rapidSpeed, dt)
           setColliding(false)
           publishWireState(wirePt, [])
           if (reached) {
@@ -363,8 +373,8 @@ export function useSimPlayback({
           return
         }
 
-        if (sub === 'post-i' && plan?.needed && plan.i && wirePt) {
-          const reached = stepTowardUV(wirePt, plan.i, wireSpeed, dt)
+        if (sub === 'post-i' && plan?.postMoveToI && plan.i && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.i, rapidSpeed, dt)
           setColliding(false)
           publishWireState(wirePt, [])
           if (reached) goApproachGreen()
@@ -373,7 +383,7 @@ export function useSimPlayback({
         }
 
         if (sub === 'approach-green' && plan?.green && wirePt) {
-          const reached = stepTowardUV(wirePt, plan.green, wireSpeed, dt)
+          const reached = stepTowardUV(wirePt, plan.green, rapidSpeed, dt)
           setColliding(false)
           publishWireState(wirePt, [])
           if (reached) finishIndexing(targetTheta)
@@ -409,7 +419,7 @@ export function useSimPlayback({
           }
 
           if (Math.abs(targetTheta - nextTheta) < 1e-3) {
-            if (plan?.needed) {
+            if (plan?.postMoveToI) {
               indexSubPhaseRef.current = 'post-i'
               setIndexSubPhase('post-i')
             } else {

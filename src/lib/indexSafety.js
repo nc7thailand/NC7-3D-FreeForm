@@ -4,7 +4,7 @@
 // wrong way for the entry side, the wire must G0 to K before the table turns,
 // then to I at the new angle, or it will slice through the foam during index.
 
-import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from './cutJob.js'
+import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT, effectiveCutCount } from './cutJob.js'
 import { OVERLAY_COLORS, buildOverlayData } from './cutOverlay.js'
 import { nextSimDot } from './simOverlay3d.js'
 
@@ -131,6 +131,8 @@ export function stepTowardUV(point, target, speedMmPerSec, dtSec) {
  *
  * @returns {{
  *   needed: boolean,
+ *   preMoveToK: boolean,
+ *   postMoveToI: boolean,
  *   side: IndexEntrySide,
  *   k: { u: number, v: number } | null,
  *   i: { u: number, v: number } | null,
@@ -161,8 +163,17 @@ export function buildIndexTransitionPlan({
   })
 
   const nextCutIndex = cutIndex + 1
+  const hasK = !!(safety?.k && Number.isFinite(safety.k.u) && Number.isFinite(safety.k.v))
+  const isLeftToRight = cutMode === CUT_MODE_LEFT_TO_RIGHT
+
+  // L-R: always rapid red → simDot (K) before every turntable turn.
+  // Left-only: pre-K only when the collision condition is met.
+  const preMoveToK = isLeftToRight ? hasK : !!(safety?.needed && hasK)
+
   return {
     needed: safety?.needed ?? false,
+    preMoveToK,
+    postMoveToI: safety?.needed ?? false,
     side: safety?.side ?? indexEntrySide(cutMode, nextCutIndex),
     k: safety?.k ?? null,
     i: safety?.i ?? null,

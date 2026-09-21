@@ -33,6 +33,9 @@ export function turntableDegPerStep() {
   return 360 / turntableStepsPerRev()
 }
 
+/** G0 rapid traverse for index reposition moves (mm/min). */
+export const RAPID_FEED_MM_MIN = 500
+
 /**
  * Simulation speed multiplier shared by wire travel and turntable indexing.
  *
@@ -41,6 +44,12 @@ export function turntableDegPerStep() {
  */
 export function simSpeedMultiplier(speedMultiplier = 1) {
   return Math.max(1, Number(speedMultiplier) || 1)
+}
+
+/** Rapid traverse speed for index G0 moves in sim (mm/s). */
+export function rapidSpeedMmPerSec(feedMmMin = RAPID_FEED_MM_MIN, speedMultiplier = 1) {
+  const mult = simSpeedMultiplier(speedMultiplier)
+  return (Math.max(0, Number(feedMmMin) || 0) / 60) * mult
 }
 
 /**
