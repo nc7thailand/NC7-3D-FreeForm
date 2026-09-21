@@ -27,7 +27,6 @@ import { buildLeftOnlyIndexPlan } from './indexSequenceLeftOnly.js'
  * @property {{ u: number, v: number }} k
  * @property {{ u: number, v: number }} i
  * @property {{ u: number, v: number }} top
- * @property {{ u: number, v: number }} axisBo
  * @property {{ u: number, v: number }} green
  * @property {'finish'|'down-to-bo-then-top'} afterRotate
  */

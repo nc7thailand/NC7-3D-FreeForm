@@ -1,4 +1,4 @@
-// Left-Only Index Sequence — vertical top↔down on u=0, BO anchor at left margin.
+// Left-Only Index Sequence — orthogonal moves along toolpath margins (outside foam).
 
 import { effectiveCutCount } from '../cutJob.js'
 import {
@@ -9,7 +9,7 @@ import {
 } from '../cutOverlay.js'
 import { topSafeY } from '../wirePath.js'
 
-/** Left BO entry (simDot / K) at a given θ — always v = BO. */
+/** Lower-left BO entry (simDot / K) at a given θ — always v = BO. */
 export function leftBoEntry(geometry, stock, thetaDeg) {
   if (!geometry) return null
   const projectedW = projectedBlockWidth(thetaDeg, stock)
@@ -22,14 +22,16 @@ export function leftBoEntry(geometry, stock, thetaDeg) {
   }
 }
 
-/** Top safe on the rotation axis. */
-export function leftOnlyTopEntry(stock) {
-  return { u: 0, v: topSafeY(stock) }
+/** Top of the left toolpath margin column at θ (same u as K). */
+export function leftMarginTop(geometry, stock, thetaDeg) {
+  const k = leftBoEntry(geometry, stock, thetaDeg)
+  if (!k) return null
+  return { u: k.u, v: topSafeY(stock) }
 }
 
-/** u=0 at BO — end of the vertical leg before horizontal to left BO. */
-export function leftOnlyAxisAtBo(stock) {
-  return { u: 0, v: stock?.bo ?? 0 }
+/** Top safe on the rotation axis (odd-cut entry). */
+export function leftOnlyTopEntry(stock) {
+  return { u: 0, v: topSafeY(stock) }
 }
 
 /**
@@ -64,14 +66,13 @@ export function buildLeftOnlyIndexPlan({
   const red = markers.find((m) => m.color === OVERLAY_COLORS.red)
   const k = leftBoEntry(geometry, stock, thetaDeg)
   const top = leftOnlyTopEntry(stock)
-  const axisBo = leftOnlyAxisAtBo(stock)
 
   if (!red || !k || !Number.isFinite(red.u) || !Number.isFinite(k.u)) return null
 
   const i = { u: red.u, v: red.v }
 
-  // Odd N ending: wire + K at BO → turn → next even starts at BO.
-  // Even N ending: wire at TOP → turn → down (u=0) → horizontal to K → up to TOP.
+  // Odd N ending: wire + K at lower-left BO → turn → next even starts at BO.
+  // Even N ending: turn at TOP → margin-top → down to K → up margin → back to TOP.
   return {
     mode: 'left-only',
     currentCutN,
@@ -80,7 +81,6 @@ export function buildLeftOnlyIndexPlan({
     k,
     i,
     top,
-    axisBo,
     green: { u: nextCutGreen.u, v: nextCutGreen.v },
     /** @type {'finish' | 'down-to-bo-then-top'} */
     afterRotate: currentCutIsOdd ? 'finish' : 'down-to-bo-then-top',
