@@ -1074,7 +1074,7 @@ export default forwardRef(function Viewer3D(
     if (!combinedView || !geometry) return
 
     const data = buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex })
-    const { contour, cutPath, markers, links, block } = data
+    const { contour, cutPath, markers, links, block, cutBoV } = data
     if (!contour.length) return
 
     const group = new THREE.Group()
@@ -1158,7 +1158,7 @@ export default forwardRef(function Viewer3D(
       group.add(line)
     }
 
-    const boV = stock?.bo ?? 0
+    const boV = cutBoV ?? 0
     addLine(
       [{ u: 0, v: boV - stock?.h * 2 }, { u: 0, v: boV + stock?.h * 2 }],
       '#ff0000',

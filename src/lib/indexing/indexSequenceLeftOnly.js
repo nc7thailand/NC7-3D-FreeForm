@@ -11,6 +11,7 @@ import {
   buildOverlayData,
   projectedBlockWidth,
 } from '../cutOverlay.js'
+import { cutBoV } from '../toolpath.js'
 import { topSafeY } from '../wirePath.js'
 
 const U_MATCH_TOL = 1e-3
@@ -48,7 +49,7 @@ export function leftBoEntry(geometry, stock, thetaDeg) {
   const margin = stock?.boMargin ?? 20
   return {
     u: uCenter - projectedW / 2 - margin,
-    v: stock?.bo ?? 0,
+    v: cutBoV(stock, geometry),
   }
 }
 

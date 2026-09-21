@@ -77,15 +77,15 @@ export default function ToolpathParametersForm({
       <label>LO (wire clearance)
         <input type="number" min="0" step="0.5" value={s.lo} onChange={(e) => change('lo', +e.target.value)} />
       </label>
-      <label>BO (bottom offset)
+      <label>BO (above model bottom)
         <input
           type="number"
           min="0"
           step="0.5"
           value={s.bo}
-          disabled={s.boAuto !== false}
           onChange={(e) => change('bo', +e.target.value)}
         />
+        <span className="field-hint">Cut line = model bottom + BO · LB uses BO only when auto off</span>
       </label>
       <label>Profile accuracy (1–10)
         <input

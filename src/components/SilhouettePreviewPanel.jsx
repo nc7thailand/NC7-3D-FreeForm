@@ -18,6 +18,7 @@ import {
   extractOverlayContour,
   buildOverlayAnnotations,
 } from '../lib/cutOverlay'
+import { cutBoV } from '../lib/toolpath'
 import { nextSimDot } from '../lib/simOverlay3d'
 
 // Quality is fixed at High (600 grid bins) for the Stage 1 preview.
@@ -156,8 +157,8 @@ export default function SilhouettePreviewPanel({
   const baseSpeedMMPerSec = playback ? (playback.wireFeedRate / 60) : (500 / 60)
 
   const simJobCacheKey = useMemo(
-    () => `${rotationN}|${cutMode}|${stock?.w}|${stock?.t}|${stock?.h}|${stock?.bo}|${stock?.boMargin}|${geometry?.uuid ?? ''}`,
-    [rotationN, cutMode, stock?.w, stock?.t, stock?.h, stock?.bo, stock?.boMargin, geometry?.uuid],
+    () => `${rotationN}|${cutMode}|${stock?.w}|${stock?.t}|${stock?.h}|${cutBoV(stock, geometry)}|${stock?.boMargin}|${geometry?.uuid ?? ''}`,
+    [rotationN, cutMode, stock, geometry, stock?.w, stock?.t, stock?.h, stock?.boMargin],
   )
 
   useEffect(() => {
@@ -247,14 +248,21 @@ export default function SilhouettePreviewPanel({
     [geometry, activeThetaDeg],
   )
 
+  const boV = useMemo(
+    () => cutBoV(stock, geometry),
+    [stock, geometry],
+  )
+
   const cutPath = useMemo(
-    () => buildCutPath(contour, stock?.bo ?? 0, cutMode === CUT_MODE_LEFT_ONLY),
-    [contour, stock?.bo, cutMode],
+    () => buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY),
+    [contour, boV, cutMode],
   )
 
   const annotations = useMemo(
-    () => buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geometry, thetaDeg: activeThetaDeg }),
-    [cutPath, cutMode, stock, cutIndex, geometry, activeThetaDeg],
+    () => buildOverlayAnnotations({
+      cutPath, cutMode, stock, cutIndex, geometry, thetaDeg: activeThetaDeg, boV,
+    }),
+    [cutPath, cutMode, stock, cutIndex, geometry, activeThetaDeg, boV],
   )
 
   // Experimental Sim — the full wire travel for this rotation, used only by the
@@ -335,7 +343,7 @@ export default function SilhouettePreviewPanel({
       const Y = (v) => h * 0.8 - v * scale + pn.y
 
       // Reference axes — world origin guides, drawn behind the silhouette.
-      const boV = stock?.bo ?? 0
+      // boV from outer scope — model bbox bottom + BO margin
       const axisX = X(0)
       ctx.setLineDash([6, 5])
       ctx.lineWidth = 1
@@ -505,7 +513,7 @@ export default function SilhouettePreviewPanel({
     ro.observe(wrap)
 
     return () => ro.disconnect()
-  }, [contour, cutPath, fullWirePath, wireCum, annotations, stock, cutIndex, cutMode, activeThetaDeg, zoom, pan, simDot, simActive, useSharedPlayback, drawTrail, drawWireUV, drawSimDistance, playback?.simDistance, playback?.colliding])
+  }, [contour, cutPath, boV, fullWirePath, wireCum, annotations, stock, cutIndex, cutMode, activeThetaDeg, zoom, pan, simDot, simActive, useSharedPlayback, drawTrail, drawWireUV, drawSimDistance, playback?.simDistance, playback?.colliding])
 
   // Repaint the canvas while sim is active so the wire marker keeps blinking
   // during pause (not only while the playback loop is running).

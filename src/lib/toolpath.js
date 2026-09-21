@@ -86,6 +86,31 @@ export function blockBottomExtent(thetaDeg, { w, t, lo }) {
 }
 
 /**
+ * World-Y of the model axis-aligned bbox bottom (foam-block space, floor Y=0).
+ *
+ * @param {THREE.BufferGeometry|null|undefined} geometry
+ * @returns {number}
+ */
+export function modelBBoxBottomY(geometry) {
+  if (!geometry) return 0
+  geometry.computeBoundingBox()
+  const bb = geometry.boundingBox
+  if (!bb || bb.isEmpty()) return 0
+  return bb.min.y
+}
+
+/**
+ * Overlay cut-stop height: model bbox bottom + BO margin (mm above model base).
+ * LB / machine retract still uses stock.bo in the block-floor formula.
+ *
+ * @param {object} [stock]
+ * @param {THREE.BufferGeometry|null|undefined} geometry
+ */
+export function cutBoV(stock, geometry) {
+  return modelBBoxBottomY(geometry) + (stock?.bo ?? 0)
+}
+
+/**
  * LB(θ) — the dynamic bottom safe point: lowest wire travel required below
  * the rotation axis, from CONCEPT.md.
  *
