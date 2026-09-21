@@ -1101,6 +1101,38 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.model-offset-block {
+  margin: 8px 0 10px;
+  padding-top: 4px;
+  border-top: 1px solid #2a3340;
+}
+.model-offset-heading {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #9fb0c0;
+}
+.model-offset-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.model-offset-row select {
+  flex: 1;
+  background: #0f1115;
+  border: 1px solid #2a3340;
+  color: #e6edf3;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.model-offset-row input[type="number"] {
+  width: 90px;
+}
+.model-offset-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+
 button {
   width: 100%;
   margin-top: 6px;

@@ -1,5 +1,6 @@
-import React from 'react'
+import React, { useCallback } from 'react'
 import { useAppState } from '../context/AppState'
+import { measureModelBlockOffset } from '../lib/modelBlockOffset'
 
 /**
  * DevFoam-style toolpath parameters (foam block + wire offsets).
@@ -13,9 +14,18 @@ export default function ToolpathParametersForm({
   value,
   onChange,
 }) {
-  const { stock, handleStockChange } = useAppState()
+  const { stock, handleStockChange, geometry } = useAppState()
   const s = value ?? stock
   const change = onChange ?? handleStockChange
+  const offsetType = s.modelOffsetType ?? 'bottom'
+
+  const handleOffsetTypeChange = useCallback((nextType) => {
+    change('modelOffsetType', nextType)
+    if (geometry) {
+      const measured = measureModelBlockOffset(geometry, s, nextType)
+      change('modelOffsetMm', +measured.toFixed(2))
+    }
+  }, [change, geometry, s])
 
   return (
     <div className={`inputs${compact ? ' inputs--compact' : ''}`}>
@@ -28,6 +38,34 @@ export default function ToolpathParametersForm({
       <label>Height (H)
         <input type="number" min="1" value={s.h} onChange={(e) => change('h', +e.target.value)} />
       </label>
+
+      <div className="model-offset-block">
+        <p className="model-offset-heading">Model offset from foam block</p>
+        <div className="model-offset-row">
+          <select
+            id="offsetType"
+            value={offsetType}
+            onChange={(e) => handleOffsetTypeChange(e.target.value)}
+          >
+            <option value="top">top</option>
+            <option value="bottom">bottom</option>
+          </select>
+          <input
+            id="offsetDis"
+            type="number"
+            step="0.1"
+            value={s.modelOffsetMm ?? 0}
+            onChange={(e) => change('modelOffsetMm', +e.target.value)}
+          />
+        </div>
+        <p className="panel-hint model-offset-hint">
+          {offsetType === 'top'
+            ? 'Gap from model top to block top (H)'
+            : 'Distance from block floor to model bottom'}
+          {' · Apply to move model'}
+        </p>
+      </div>
+
       <label>LO (wire clearance)
         <input type="number" min="0" step="0.5" value={s.lo} onChange={(e) => change('lo', +e.target.value)} />
       </label>

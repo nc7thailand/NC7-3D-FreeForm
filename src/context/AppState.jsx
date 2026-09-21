@@ -4,6 +4,7 @@ import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
+import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
@@ -37,6 +38,9 @@ const DEFAULT_STOCK = {
   // Lives in `stock` so it inherits the existing persistence; the G-code
   // pipeline reads only its known fields and ignores this one.
   overlayThickness: 3,
+  /** Anchor for vertical model placement in the foam block (Apply on Toolpath). */
+  modelOffsetType: 'bottom',
+  modelOffsetMm: 0,
 }
 const DEFAULT_ROTATION_N = 16
 
@@ -579,15 +583,34 @@ export function AppStateProvider({ children }) {
     }
   }, [computeCutJob, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
 
+  /** Bake gizmo, apply foam-block vertical offset, refresh geometry. */
+  const applyModelBlockOffsetFromStock = useCallback((stockSnapshot = stock) => {
+    if (!workingRef.current) return false
+    bakeModelTransform()
+    applyModelBlockOffset(
+      workingRef.current,
+      stockSnapshot,
+      stockSnapshot.modelOffsetType ?? 'bottom',
+      stockSnapshot.modelOffsetMm ?? 0,
+    )
+    viewerRef.current?.resetMeshTransform?.()
+    workingRef.current.userData.nc7CentroidApplied = true
+    setGeometry(workingRef.current)
+    updateStatsOnly(workingRef.current)
+    setToolpathTick((t) => t + 1)
+    return true
+  }, [bakeModelTransform, stock, updateStatsOnly])
+
   /**
    * Toolpath page Apply button. Recomputes every cut for the current settings
    * and resets the preview to the first cut.
    */
   const applyToolpathSettings = useCallback(async () => {
+    applyModelBlockOffsetFromStock()
     const ok = await saveToolpathStage()
     if (ok) setCutIndex(0)
     return ok
-  }, [saveToolpathStage])
+  }, [applyModelBlockOffsetFromStock, saveToolpathStage])
 
   /**
    * Commit draft toolpath settings (stock + cut mode) and recompute. Used by
@@ -599,10 +622,11 @@ export function AppStateProvider({ children }) {
   const commitToolpathSettings = useCallback(async ({ stock: newStock, cutMode: newCutMode }) => {
     setStock({ ...newStock })
     setCutMode(newCutMode)
+    applyModelBlockOffsetFromStock(newStock)
     const ok = await saveToolpathStage(newStock, newCutMode)
     if (ok) setCutIndex(0)
     return ok
-  }, [saveToolpathStage])
+  }, [applyModelBlockOffsetFromStock, saveToolpathStage])
 
   const openToolpathSetup = useCallback(() => setToolpathSetupOpen(true), [])
   const closeToolpathSetup = useCallback(() => setToolpathSetupOpen(false), [])
