@@ -1,9 +1,8 @@
 // Left-Only Index Sequence
 //
-// Odd N:  TOP → lower-left (toolpath). End (red) and simDot K both lower-left, different coords.
-//         Odd→Even index: rapid I→K along linkage, then turn.
-// Even N: lower-left → TOP (toolpath). End and simDot K coincide at TOP.
-//         Even→Odd index: turn only — no rapids.
+// Odd N:  TOP → lower-left (toolpath). I (red end) and K (next Even start) lower-left.
+//         if I.u < K.u → rapid to K, then turn; else turn, then rapid to K.
+// Even N: lower-left → TOP. simDot = Even end at TOP — turn only, no rapids.
 
 import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from '../cutJob.js'
 import {
@@ -14,9 +13,28 @@ import {
 } from '../cutOverlay.js'
 import { topSafeY } from '../wirePath.js'
 
+const U_MATCH_TOL = 1e-3
+
 /** Index rapids only after Odd N (Odd→Even). Even→Odd is rotate-only. */
 export function leftOnlyNeedsIndexRapids(completedCutN) {
   return completedCutN % 2 === 1
+}
+
+/**
+ * Odd→Even index order from I.u vs next-Even-start (K).u.
+ * @returns {{ preMoveToK: boolean, postMoveToK: boolean }}
+ */
+export function leftOnlyOddIndexOrder(iU, kU) {
+  if (!Number.isFinite(iU) || !Number.isFinite(kU)) {
+    return { preMoveToK: false, postMoveToK: false }
+  }
+  if (Math.abs(iU - kU) <= U_MATCH_TOL) {
+    return { preMoveToK: false, postMoveToK: false }
+  }
+  if (iU < kU) {
+    return { preMoveToK: true, postMoveToK: false }
+  }
+  return { preMoveToK: false, postMoveToK: true }
 }
 
 /** Lower-left BO anchor (simDot / K) at θ. */
@@ -96,7 +114,7 @@ export function buildLeftOnlyIndexPlan({
 
   const nextCutIndex = cutIndex + 1
   const currentCutN = cutIndex + 1
-  const needsRapids = leftOnlyNeedsIndexRapids(currentCutN)
+  const isOdd = leftOnlyNeedsIndexRapids(currentCutN)
 
   const { markers } = buildOverlayData({
     geometry,
@@ -110,14 +128,20 @@ export function buildLeftOnlyIndexPlan({
 
   if (!red || !k || !Number.isFinite(red.u) || !Number.isFinite(k.u)) return null
 
+  const i = { u: red.u, v: red.v }
+  const { preMoveToK, postMoveToK } = isOdd
+    ? leftOnlyOddIndexOrder(i.u, k.u)
+    : { preMoveToK: false, postMoveToK: false }
+
   return {
     mode: 'left-only',
     currentCutN,
-    currentCutIsOdd: needsRapids,
-    needsRapids,
+    currentCutIsOdd: isOdd,
+    preMoveToK,
+    postMoveToK,
     nextCutIndex,
     k,
-    i: { u: red.u, v: red.v },
+    i,
     top: leftOnlyTopEntry(stock),
     green: { u: nextCutGreen.u, v: nextCutGreen.v },
     afterRotate: 'finish',

@@ -14,6 +14,7 @@ import {
   isLeftOnlyIndexPlan,
   stepTowardUV,
 } from '../lib/indexSafety'
+import { leftOnlySimDot } from '../lib/indexing/indexSequenceLeftOnly'
 import {
   indexSpeedDegPerSec,
   rapidSpeedMmPerSec,
@@ -298,7 +299,7 @@ export function useSimPlayback({
 
       indexPlanRef.current = plan
       const sub = isLeftOnlyIndexPlan(plan)
-        ? (plan.needsRapids ? 'lo-to-k' : 'rotate')
+        ? (plan.preMoveToK ? 'lo-to-k' : 'rotate')
         : (plan.preMoveToK ? 'pre-k' : 'rotate')
       indexSubPhaseRef.current = sub
       setIndexSubPhase(sub)
@@ -367,13 +368,28 @@ export function useSimPlayback({
         const sub = indexSubPhaseRef.current
         const wirePt = wireAtIndexRef.current
 
-        if (sub === 'lo-to-k' && isLeftOnlyIndexPlan(plan) && plan.k && wirePt) {
-          const reached = stepTowardUV(wirePt, plan.k, rapidSpeed, dt)
+        if (sub === 'lo-to-k' && isLeftOnlyIndexPlan(plan) && wirePt) {
+          const kTarget = leftOnlySimDot({
+            geometry,
+            stock,
+            rotationN,
+            cutIndex: cutIndexRef.current,
+            thetaDeg: targetTheta,
+          }) ?? plan.k
+          if (!kTarget) {
+            simRafRef.current = requestAnimationFrame(step)
+            return
+          }
+          const reached = stepTowardUV(wirePt, kTarget, rapidSpeed, dt)
           setColliding(false)
           publishWireState(wirePt, [])
           if (reached) {
-            indexSubPhaseRef.current = 'rotate'
-            setIndexSubPhase('rotate')
+            if (plan.preMoveToK) {
+              indexSubPhaseRef.current = 'rotate'
+              setIndexSubPhase('rotate')
+            } else {
+              finishIndexing(targetTheta)
+            }
           }
           simRafRef.current = requestAnimationFrame(step)
           return
@@ -447,7 +463,12 @@ export function useSimPlayback({
 
           if (Math.abs(targetTheta - nextTheta) < 1e-3) {
             if (isLeftOnlyIndexPlan(plan)) {
-              finishIndexing(targetTheta)
+              if (plan.postMoveToK) {
+                indexSubPhaseRef.current = 'lo-to-k'
+                setIndexSubPhase('lo-to-k')
+              } else {
+                finishIndexing(targetTheta)
+              }
             } else if (plan?.indexEndsAtTurn) {
               finishIndexing(targetTheta)
             } else if (plan?.postMoveToI) {

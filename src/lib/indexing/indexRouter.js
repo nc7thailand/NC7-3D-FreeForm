@@ -23,7 +23,8 @@ import { buildLeftOnlyIndexPlan } from './indexSequenceLeftOnly.js'
  * @property {'left-only'} mode
  * @property {number} currentCutN
  * @property {boolean} currentCutIsOdd
- * @property {boolean} needsRapids
+ * @property {boolean} preMoveToK
+ * @property {boolean} postMoveToK
  * @property {number} nextCutIndex
  * @property {{ u: number, v: number }} k
  * @property {{ u: number, v: number }} i
