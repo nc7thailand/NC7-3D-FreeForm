@@ -67,11 +67,11 @@ export function markToolpathAutoSetupShown() {
   window.sessionStorage.setItem(SESSION_TOOLPATH_AUTO_SETUP_KEY, '1')
 }
 
-/** Restore toolpath view mode (combined / 2d) across reloads within a tab. */
+/** Restore toolpath view mode (combined / 2d) across reloads within a tab. Default 2D. */
 export function loadToolpathViewMode() {
-  if (typeof window === 'undefined' || !window.sessionStorage) return 'combined'
+  if (typeof window === 'undefined' || !window.sessionStorage) return '2d'
   const v = window.sessionStorage.getItem(SESSION_TOOLPATH_VIEW_KEY)
-  return v === '2d' ? '2d' : 'combined'
+  return v === 'combined' ? 'combined' : '2d'
 }
 
 export function saveToolpathViewMode(mode) {

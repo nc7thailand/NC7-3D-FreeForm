@@ -1,5 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react'
-import Viewer3D from '../components/Viewer3D'
+import React, { lazy, Suspense, useMemo, useState, useEffect, useCallback } from 'react'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import SimulationGcodePanel from '../components/SimulationGcodePanel'
 import WireSimulatorBar from '../components/WireSimulatorBar'
@@ -15,6 +14,18 @@ import {
   saveToolpathViewMode,
   shouldAutoOpenToolpathSetup,
 } from '../lib/navigationLoad'
+
+// Toolpath only — defer WebGL + Three viewer until Combined view is chosen.
+const Viewer3D = lazy(() => import('../components/Viewer3D'))
+
+function Viewport3DLoading() {
+  return (
+    <div className="viewport-3d-loading" role="status" aria-live="polite">
+      <div className="loading-spinner" aria-hidden="true" />
+      <span>Loading 3D view…</span>
+    </div>
+  )
+}
 
 function ToolpathPanel() {
   const {
@@ -165,10 +176,8 @@ export default function ToolpathPage() {
     gcodeSettings,
   })
 
-  // View mode: 'combined' shows the 3D viewport with the 2D cut drawing
-  // overlaid on the fixed wire plane; '2d' keeps its existing behaviour.
-  // The plain 3D view is not offered on this page — Combined supersedes it.
-  // Combined is the default.
+  // View mode: '2d' (default) — canvas only, no WebGL. 'combined' lazy-loads
+  // Viewer3D with the 2D overlay on the fixed wire plane.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
 
   useEffect(() => {
@@ -272,24 +281,26 @@ export default function ToolpathPage() {
             )}
             {show3d && (
               <section className="model-viewport-section">
-                <Viewer3D
-                  ref={viewerRef}
-                  geometry={geometry}
-                  resetKey={resetKey}
-                  thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
-                  cutIndex={cutIndex}
-                  stock={stock}
-                  profile={profile}
-                  silhouettePreview={silhouettePreview}
-                  cutMode={cutMode}
-                  readOnly
-                  showToolpathOverlay
-                  showModelBBox={false}
-                  combinedView={isCombined}
-                  simActive={simActive}
-                  simPlayback={simActive ? playback : null}
-                  rotationN={rotationN}
-                />
+                <Suspense fallback={<Viewport3DLoading />}>
+                  <Viewer3D
+                    ref={viewerRef}
+                    geometry={geometry}
+                    resetKey={resetKey}
+                    thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
+                    cutIndex={cutIndex}
+                    stock={stock}
+                    profile={profile}
+                    silhouettePreview={silhouettePreview}
+                    cutMode={cutMode}
+                    readOnly
+                    showToolpathOverlay
+                    showModelBBox={false}
+                    combinedView={isCombined}
+                    simActive={simActive}
+                    simPlayback={simActive ? playback : null}
+                    rotationN={rotationN}
+                  />
+                </Suspense>
               </section>
             )}
           </div>
