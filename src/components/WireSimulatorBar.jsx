@@ -20,11 +20,14 @@ export default function WireSimulatorBar({
   playing,
   distanceMM,
   lengthMM,
+  jobDistanceMM = null,
+  jobLengthMM = null,
   pct,
   elapsedLabel,
   totalLabel,
   speedMultiplier,
   scrubMax = 1000,
+  cutReadout = null,
   onGear,
   onStop,
   onTogglePlay,
@@ -32,8 +35,16 @@ export default function WireSimulatorBar({
   onSpeedChange,
   onScrub,
 }) {
-  const scrubValue = lengthMM > 0
-    ? Math.round(Math.min(1, Math.max(0, distanceMM / lengthMM)) * scrubMax)
+  const displayDistance = jobDistanceMM ?? distanceMM
+  const displayLength = jobLengthMM ?? lengthMM
+  const scrubDistance = jobLengthMM != null && jobLengthMM > 0
+    ? (jobDistanceMM ?? 0)
+    : distanceMM
+  const scrubLength = jobLengthMM != null && jobLengthMM > 0
+    ? jobLengthMM
+    : lengthMM
+  const scrubValue = scrubLength > 0
+    ? Math.round(Math.min(1, Math.max(0, scrubDistance / scrubLength)) * scrubMax)
     : 0
 
   return (
@@ -102,10 +113,17 @@ export default function WireSimulatorBar({
             </svg>
           </button>
 
-          <div className={`wsb-badge${status === 'CUTTING' ? ' is-cutting' : ''}`}>{status}</div>
+          <div className="wsb-status-group">
+            <div className={`wsb-badge${status === 'CUTTING' ? ' is-cutting' : ''}`}>
+              {status}
+            </div>
+            {cutReadout && (
+              <span className="wsb-cut-readout">Cut {cutReadout}</span>
+            )}
+          </div>
         </div>
 
-        <div className="wsb-row-right">
+        <div className="wsb-row-right wsb-row-speed">
           <div className="wsb-label-tag">
             <span className="wsb-speed-label">
               Speed: <strong>{speedMultiplier}x</strong>
@@ -132,12 +150,12 @@ export default function WireSimulatorBar({
         <div className="wsb-row-left wsb-metrics">
           <span className="wsb-metric-pct">{pct}</span>
           <span className="wsb-metric-detail">
-            {distanceMM.toFixed(1)} / {lengthMM.toFixed(1)} mm
+            {displayDistance.toFixed(1)} / {displayLength.toFixed(1)} mm
           </span>
           <span className="wsb-metric-detail">{elapsedLabel} / {totalLabel}</span>
         </div>
 
-        <div className="wsb-row-right">
+        <div className="wsb-row-right wsb-row-scrub">
           <div className="wsb-label-tag">
             <span className="wsb-scrub-label">Progress</span>
           </div>

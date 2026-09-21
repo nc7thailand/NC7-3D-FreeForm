@@ -1,6 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from '../lib/cutJob'
 import WireSimulatorBar from './WireSimulatorBar'
+import { useAppState } from '../context/AppState'
+import {
+  buildFullWirePath,
+  buildSimJob,
+  cumulativeLengths,
+  firstPlayableCut,
+  nextPlayableCut,
+  pointAtDistance,
+  seekGlobal,
+} from '../lib/simJob'
 import {
   OVERLAY_GRID_BINS,
   OVERLAY_COLORS,
@@ -46,109 +56,6 @@ const TRAIL_WIDTH = 1.5
 const MARKER_SIZE = 7
 
 /**
- * Cumulative arc length at each vertex of a polyline, in mm.
- * `cum[0]` is 0 and `cum[last]` is the total travel length.
- *
- * @param {{u:number,v:number}[]} pts
- * @returns {number[]}
- */
-function cumulativeLengths(pts) {
-  const cum = [0]
-  for (let i = 1; i < pts.length; i++) {
-    cum.push(cum[i - 1] + Math.hypot(pts[i].u - pts[i - 1].u, pts[i].v - pts[i - 1].v))
-  }
-  return cum
-}
-
-/**
- * Point at absolute arc length `distance` (mm) along a polyline, with the
- * cumulative-length table supplied by the caller so playback does not rebuild
- * it every frame.
- *
- * Interpolates within the containing segment — it never snaps to a vertex, and
- * it never leaves the polyline, so a sampled position cannot overshoot the
- * travel's extent. `distance` is clamped to [0, total].
- *
- * @param {{u:number,v:number}[]} pts
- * @param {number[]} cum - cumulative lengths, same length as `pts`
- * @param {number} distance - mm along the polyline
- */
-function pointAtDistance(pts, cum, distance) {
-  if (!pts?.length) return null
-  if (pts.length === 1) return { u: pts[0].u, v: pts[0].v }
-  const total = cum[cum.length - 1]
-  // Bail out rather than returning a vertex: a non-finite total means the
-  // polyline itself is poisoned, and handing back coordinates here is what fed
-  // NaN into createRadialGradient.
-  if (!isFinite(total) || !(total > 0)) return null
-  if (!isFinite(distance)) return null
-
-  const d = Math.min(total, Math.max(0, distance))
-  // Advance while the next vertex is nearer than our target. Linear from the
-  // end: the tables are a few hundred entries, so a scan is cheaper than a
-  // binary search at 60 fps.
-  let i = 0
-  while (i < cum.length - 2 && cum[i + 1] < d) i++
-  const segLen = cum[i + 1] - cum[i]
-  if (!(segLen > 0)) return { u: pts[i].u, v: pts[i].v }
-  const t = (d - cum[i]) / segLen
-  return {
-    u: pts[i].u + t * (pts[i + 1].u - pts[i].u),
-    v: pts[i].v + t * (pts[i + 1].v - pts[i].v),
-  }
-}
-
-/**
- * The wire's full travel for one rotation, as one MONOTONE polyline:
- * green marker → cut path → red marker.
- *
- * The marker squares come straight from `markers` (coloured by parity), and the
- * cut path is oriented so its first point is the end nearer the green marker.
- * Assembling it from the link endpoints instead produced an out-and-back
- * excursion: one link endpoint always lies exactly ON a cut-path end, so
- * walking `[link.from, link.to, ...cut]` visited the far marker and returned.
- *
- * @param {{u:number,v:number}[]} cutPath
- * @param {{u:number,v:number,color:string}[]} markers
- * @param {{green:string, red:string}} colors
- */
-function buildFullWirePath(cutPath, markers, colors) {
-  if (!cutPath?.length) return []
-  const greenMarker = markers?.find((m) => m.color === colors.green)
-  const redMarker = markers?.find((m) => m.color === colors.red)
-  // Guard on the *coordinates*, not just on the find(): a wrong-shaped argument
-  // (e.g. the link objects, which carry a color but no u/v) matches by colour
-  // and then yields undefined coordinates, which poisons every downstream
-  // position with NaN instead of failing loudly.
-  if (!isFinite(greenMarker?.u) || !isFinite(greenMarker?.v)
-    || !isFinite(redMarker?.u) || !isFinite(redMarker?.v)) {
-    console.warn(
-      '[sim] wire-path marker lookup failed — expected marker squares with '
-      + `finite u/v for ${colors.green} and ${colors.red}. Got: `
-      + JSON.stringify(greenMarker) + ' / ' + JSON.stringify(redMarker),
-    )
-    return cutPath
-  }
-
-  const last = cutPath[cutPath.length - 1]
-  const distStart = Math.hypot(cutPath[0].u - greenMarker.u, cutPath[0].v - greenMarker.v)
-  const distEnd = Math.hypot(last.u - greenMarker.u, last.v - greenMarker.v)
-  const cut = distStart <= distEnd ? cutPath : [...cutPath].reverse()
-
-  const full = [
-    { u: greenMarker.u, v: greenMarker.v },
-    ...cut,
-    { u: redMarker.u, v: redMarker.v },
-  ]
-
-  // Drop consecutive duplicates — zero-length segments would make the
-  // arc-length sampler divide by zero and stall the animation.
-  return full.filter((p, i) => i === 0 || Math.hypot(
-    p.u - full[i - 1].u, p.v - full[i - 1].v,
-  ) > 1e-6)
-}
-
-/**
  * Stage 1 two-dimensional silhouette preview — DevFoam-style, synced to the
  * app's shared rotation state.
  *
@@ -174,25 +81,32 @@ export default function SilhouettePreviewPanel({
   cutMode,
   stock,
   simActive = false,
-  simPlaying = false,
-  setSimPlaying,
+  playback = null,
   rotationN,
-  simSettings,
-  updateSimSettings,
   onOpenSimPanel,
-  onStopSim,
 }) {
+  const useSharedPlayback = !!playback
+  const {
+    beginBusy,
+    endBusy,
+    yieldToPaint,
+    setBusyProgress,
+    advanceSimCut,
+    setCutIndexForSimStart,
+    simAutoAdvanceRef,
+    setSimActive,
+    simSettings,
+    updateSimSettings,
+  } = useAppState()
+
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
-
-  // Simulator playback preferences (feed rate + speed multiplier). Owned by
-  // AppState so the WSB and this loop cannot drift apart; persisted to
-  // localStorage, never to the project manifest or gcodeSettings.
-  const simFeedRate = simSettings?.simFeedRate ?? 500
-  const speedMultiplier = simSettings?.simSpeedMultiplier ?? 10
-  // Model A: the base rate IS the machine feed rate, so the time readout is
-  // real job time. Visual speed = base × multiplier.
-  const baseSpeedMMPerSec = simFeedRate / 60
+  const simJobRef = useRef(null)
+  const simJobKeyRef = useRef('')
+  const completedLengthRef = useRef(0)
+  const simSeekingRef = useRef(false)
+  const cutCount = effectiveCutCount(rotationN ?? 0, { mode: cutMode })
+  const activeThetaDeg = playback?.displayThetaDeg ?? thetaDeg
 
   // Zoom/pan transform state. Pan is in screen pixels; zoom is a linear scale.
   const [zoom, setZoom] = useState(1)
@@ -210,8 +124,7 @@ export default function SilhouettePreviewPanel({
   // moving the marker — an absolute-time model could not do that without a jump.
   // Mirrors `speedMultiplier` from AppState so the animation loop reads it
   // without re-subscribing (and without a new render per slider tick).
-  const simSpeedRef = useRef(speedMultiplier)
-  simSpeedRef.current = speedMultiplier
+  const simSpeedRef = useRef(10)
   const simDrawRef = useRef(() => {})
   const simRafRef = useRef(null)
   // Sim trail (points the marker has passed through) and the 10 Hz data log.
@@ -227,6 +140,96 @@ export default function SilhouettePreviewPanel({
   // Published to the WSB at 10 Hz (see publishDistance). Distinct from
   // simDistRef, which is the per-frame source of truth for the canvas.
   const [simDistance, setSimDistance] = useState(0)
+  const [simGlobalDistance, setSimGlobalDistance] = useState(0)
+  const [jobTotalLengthMM, setJobTotalLengthMM] = useState(0)
+  const [simPlaying, setSimPlaying] = useState(false)
+  const speedMultiplier = simSettings?.simSpeedMultiplier ?? 10
+
+  useEffect(() => {
+    simSpeedRef.current = speedMultiplier
+  }, [speedMultiplier])
+
+  const drawSimLabel = playback?.simLabel ?? simLabel
+  const drawTrail = playback?.trailUV ?? simTrailRef.current
+  const drawSimDistance = playback?.simDistance ?? simDistance
+  const drawJobTotalMM = playback?.jobTotalMM ?? jobTotalLengthMM
+  const drawSimGlobalDistance = playback?.simGlobalDistance ?? simGlobalDistance
+  const baseSpeedMMPerSec = playback ? (playback.wireFeedRate / 60) : (500 / 60)
+
+  const simJobCacheKey = useMemo(
+    () => `${rotationN}|${cutMode}|${stock?.w}|${stock?.t}|${stock?.h}|${stock?.bo}|${stock?.boMargin}|${geometry?.uuid ?? ''}`,
+    [rotationN, cutMode, stock?.w, stock?.t, stock?.h, stock?.bo, stock?.boMargin, geometry?.uuid],
+  )
+
+  useEffect(() => {
+    if (useSharedPlayback) return
+    simJobRef.current = null
+    simJobKeyRef.current = ''
+    setJobTotalLengthMM(0)
+  }, [simJobCacheKey, useSharedPlayback])
+
+  // Precompute job paths in the background when Sim mode opens so the global
+  // progress bar has jobTotalLength before the user presses Play.
+  useEffect(() => {
+    if (useSharedPlayback) return undefined
+    if (!simActive || !geometry) return undefined
+    if (simJobRef.current && simJobKeyRef.current === simJobCacheKey) return undefined
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const job = await buildSimJob({ geometry, stock, cutMode, rotationN })
+        if (!cancelled) {
+          simJobRef.current = job
+          simJobKeyRef.current = simJobCacheKey
+          setJobTotalLengthMM(job.jobTotalLengthMM)
+        }
+      } catch (err) {
+        console.warn('[sim] background job precompute failed:', err)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [simActive, geometry, stock, cutMode, rotationN, simJobCacheKey])
+
+  const ensureSimJob = useCallback(async () => {
+    if (simJobRef.current && simJobKeyRef.current === simJobCacheKey) {
+      return simJobRef.current
+    }
+    beginBusy('Preparing simulation…', { done: 0, total: cutCount })
+    await yieldToPaint()
+    try {
+      const job = await buildSimJob({
+        geometry,
+        stock,
+        cutMode,
+        rotationN,
+        onProgress: async (done, total) => {
+          setBusyProgress(done, total)
+          await yieldToPaint()
+        },
+      })
+      simJobRef.current = job
+      simJobKeyRef.current = simJobCacheKey
+      setJobTotalLengthMM(job.jobTotalLengthMM)
+      return job
+    } finally {
+      await endBusy()
+    }
+  }, [
+    beginBusy,
+    cutCount,
+    cutMode,
+    endBusy,
+    geometry,
+    rotationN,
+    setBusyProgress,
+    simJobCacheKey,
+    stock,
+    yieldToPaint,
+  ])
 
   const setTransform = useCallback((nextZoom, nextPan) => {
     const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
@@ -241,8 +244,8 @@ export default function SilhouettePreviewPanel({
   }, [setTransform])
 
   const contour = useMemo(
-    () => extractOverlayContour(geometry, thetaDeg),
-    [geometry, thetaDeg],
+    () => extractOverlayContour(geometry, activeThetaDeg),
+    [geometry, activeThetaDeg],
   )
 
   const cutPath = useMemo(
@@ -251,8 +254,8 @@ export default function SilhouettePreviewPanel({
   )
 
   const annotations = useMemo(
-    () => buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geometry, thetaDeg }),
-    [cutPath, cutMode, stock, cutIndex, geometry, thetaDeg],
+    () => buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geometry, thetaDeg: activeThetaDeg }),
+    [cutPath, cutMode, stock, cutIndex, geometry, activeThetaDeg],
   )
 
   // Experimental Sim — the full wire travel for this rotation, used only by the
@@ -270,6 +273,12 @@ export default function SilhouettePreviewPanel({
   const wireCum = useMemo(() => cumulativeLengths(fullWirePath), [fullWirePath])
   const wireLengthMM = wireCum.length ? wireCum[wireCum.length - 1] : 0
 
+  const drawWireUV = playback?.wireUV
+    ?? (simActive && fullWirePath.length >= 2
+      ? pointAtDistance(fullWirePath, wireCum, drawSimDistance)
+      : null)
+    ?? (simActive && fullWirePath[0] ? fullWirePath[0] : null)
+
   // Experimental Sim: the next rotation's cut-entry point, drawn in the current
   // view. The step is one full cutCount revolution step, so it is 360/cutCount
   // in both cut modes. Suppressed on the last rotation — there is no next.
@@ -284,7 +293,7 @@ export default function SilhouettePreviewPanel({
       u: uCenterNext - projectedNext / 2 - (stock?.boMargin ?? 20),
       v: stock?.bo ?? 0,
     }
-  }, [simActive, geometry, rotationN, cutMode, cutIndex, thetaDeg, stock])
+  }, [simActive, geometry, rotationN, cutMode, cutIndex, activeThetaDeg, stock])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -437,27 +446,24 @@ export default function SilhouettePreviewPanel({
 
       // Experimental Sim — trail of the ground the marker has already covered.
       // Drawn above the overlay drawing but below the marker itself.
-      if (simActive && simTrailRef.current.length >= 2) {
+      const trailPoints = useSharedPlayback ? drawTrail : simTrailRef.current
+      if (simActive && trailPoints.length >= 2) {
         ctx.strokeStyle = TRAIL_COLOR
         ctx.lineWidth = TRAIL_WIDTH
         ctx.lineJoin = 'round'
         ctx.lineCap = 'round'
         ctx.setLineDash([])
         ctx.beginPath()
-        ctx.moveTo(X(simTrailRef.current[0].u), Y(simTrailRef.current[0].v))
-        for (let i = 1; i < simTrailRef.current.length; i++) {
-          ctx.lineTo(X(simTrailRef.current[i].u), Y(simTrailRef.current[i].v))
+        ctx.moveTo(X(trailPoints[0].u), Y(trailPoints[0].v))
+        for (let i = 1; i < trailPoints.length; i++) {
+          ctx.lineTo(X(trailPoints[i].u), Y(trailPoints[i].v))
         }
         ctx.stroke()
       }
 
-      // Experimental Sim — the hot wire tip travelling the current rotation's
-      // full travel: green safe point → lead-in → cut path → lead-out → red
-      // safe point, as one continuous motion. Screen-space radii (does not
-      // scale with zoom). The blink is driven off wall-clock time so it stays
-      // steady regardless of frame rate.
       if (simActive && fullWirePath.length >= 2) {
-        const wirePt = pointAtDistance(fullWirePath, wireCum, simDistRef.current)
+        const wirePt = drawWireUV
+          ?? pointAtDistance(fullWirePath, wireCum, simDistRef.current)
         if (wirePt) {
           const wx = X(wirePt.u)
           const wy = Y(wirePt.v)
@@ -467,11 +473,13 @@ export default function SilhouettePreviewPanel({
             const t = (Date.now() / 1000) % WIRE_BLINK_PERIOD
             const phase = Math.sin((t / WIRE_BLINK_PERIOD) * Math.PI * 2)
             const opacity = 0.5 + 0.45 * phase
+            const colliding = playback?.colliding ?? false
+            const glowColor = colliding ? '#ff2222' : WIRE_GLOW_COLOR
 
             // Soft halo — a radial gradient standing in for a drop shadow.
             const halo = ctx.createRadialGradient(wx, wy, 0, wx, wy, WIRE_GLOW_R * 2)
-            halo.addColorStop(0, WIRE_GLOW_COLOR)
-            halo.addColorStop(1, 'rgba(255, 69, 0, 0)')
+            halo.addColorStop(0, glowColor)
+            halo.addColorStop(1, colliding ? 'rgba(255, 34, 34, 0)' : 'rgba(255, 69, 0, 0)')
             ctx.globalAlpha = Math.max(0, opacity * 0.45)
             ctx.fillStyle = halo
             ctx.beginPath()
@@ -479,7 +487,7 @@ export default function SilhouettePreviewPanel({
             ctx.fill()
 
             ctx.globalAlpha = Math.max(0, opacity)
-            ctx.fillStyle = WIRE_GLOW_COLOR
+            ctx.fillStyle = glowColor
             ctx.beginPath()
             ctx.arc(wx, wy, WIRE_GLOW_R, 0, Math.PI * 2)
             ctx.fill()
@@ -500,31 +508,32 @@ export default function SilhouettePreviewPanel({
     ro.observe(wrap)
 
     return () => ro.disconnect()
-  }, [contour, cutPath, fullWirePath, annotations, stock, cutIndex, cutMode, thetaDeg, zoom, pan, simDot, simActive])
+  }, [contour, cutPath, fullWirePath, wireCum, annotations, stock, cutIndex, cutMode, activeThetaDeg, zoom, pan, simDot, simActive, useSharedPlayback, drawTrail, drawWireUV, drawSimDistance, playback?.simDistance, playback?.colliding])
 
-  // Sim playback: advance the wire along the travel at a constant feedrate
-  // (SIM_SPEED_MM_PER_SEC × simSpeedRef), accumulating a trail and logging a
-  // data row every SIM_SAMPLE_MS. Distance is INTEGRATED frame to frame, not
-  // derived from absolute elapsed time:
-  //   - changing speed mid-play alters the rate without moving the marker
-  //   - pausing and resuming continues from where it stopped, instead of
-  //     restarting from 0 (an absolute `elapsed × speed` model could not, since
-  //     `start` is re-created every time this effect re-runs)
-  // Only this loop repaints; the rest of the panel redraws on state change.
+  // Repaint the canvas while sim is active so the wire marker keeps blinking
+  // during pause (not only while the playback loop is running).
   useEffect(() => {
+    if (!simActive) return undefined
+    let rafId = 0
+    const tick = () => {
+      simDrawRef.current?.()
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [simActive])
+
+  // Full-job sim playback: integrate distance along the current cut, then auto-
+  // advance to the next playable cut until the job is done.
+  useEffect(() => {
+    if (useSharedPlayback) return undefined
     if (!simPlaying || fullWirePath.length < 2 || !(wireLengthMM > 0)) return undefined
     let lastFrameAt = null
     let lastLabelAt = -Infinity
-    // Restart only when there is genuinely nothing to resume: at the end of the
-    // travel, or before the first frame ever ran.
-    if (!(simDistRef.current > 0) || simDistRef.current >= wireLengthMM) {
+    if (simDistRef.current >= wireLengthMM) {
       simDistRef.current = 0
-      simTrailRef.current = []
-      simLogRef.current = []
-      simLastSampleRef.current = -Infinity
     }
     const step = (now) => {
-      // First frame after a start/resume: no elapsed time to integrate yet.
       if (lastFrameAt == null) lastFrameAt = now
       const dt = Math.max(0, (now - lastFrameAt) / 1000)
       lastFrameAt = now
@@ -544,14 +553,15 @@ export default function SilhouettePreviewPanel({
         }
       }
 
-      // 10 Hz data log, independent of frame rate.
+      const globalDist = completedLengthRef.current + distance
+
       if (now - simLastSampleRef.current >= SIM_SAMPLE_MS && pt) {
         simLastSampleRef.current = now
         simLogRef.current.push({
           n: (cutIndex ?? 0) + 1,
           u: +pt.u.toFixed(2),
           v: +pt.v.toFixed(2),
-          distance: +distance.toFixed(1),
+          distance: +globalDist.toFixed(1),
         })
         setSimLogTick(simLogRef.current.length)
       }
@@ -560,72 +570,134 @@ export default function SilhouettePreviewPanel({
         n: (cutIndex ?? 0) + 1,
         u: pt?.u ?? 0,
         v: pt?.v ?? 0,
-        distance,
+        distance: globalDist,
       }
-      // Re-render for the label at 10 Hz, not every frame.
       if (now - lastLabelAt >= SIM_SAMPLE_MS) {
         lastLabelAt = now
         setSimLabel(label)
         setSimDistance(distance)
+        setSimGlobalDistance(globalDist)
       }
 
       simDrawRef.current()
       if (distance >= wireLengthMM) {
+        completedLengthRef.current += wireLengthMM
+        const job = simJobRef.current
+        const next = job ? nextPlayableCut(job.cuts, cutIndex) : -1
+        if (next >= 0) {
+          setSimGlobalDistance(completedLengthRef.current)
+          simDistRef.current = 0
+          simTrailRef.current = []
+          advanceSimCut(next)
+          simRafRef.current = null
+          return
+        }
+        const jobTotal = job?.jobTotalLengthMM ?? completedLengthRef.current
+        setSimGlobalDistance(jobTotal)
+        setSimLabel({ ...label, distance: jobTotal })
+        setSimPlaying(false)
         simRafRef.current = null
-        setSimLabel(label)
-      } else {
-        simRafRef.current = requestAnimationFrame(step)
+        return
       }
+      simRafRef.current = requestAnimationFrame(step)
     }
     simRafRef.current = requestAnimationFrame(step)
     return () => {
       if (simRafRef.current) cancelAnimationFrame(simRafRef.current)
       simRafRef.current = null
     }
-  }, [simPlaying, fullWirePath, wireCum, wireLengthMM, cutIndex, baseSpeedMMPerSec])
+  }, [simPlaying, fullWirePath, wireCum, wireLengthMM, cutIndex, baseSpeedMMPerSec, advanceSimCut, setSimPlaying])
 
   useEffect(() => {
-    // Park the marker at the travel's start (green.from) whenever the path
-    // changes. Reset before the repaint so no frame can show the new path with
-    // the previous cut's distance still in the ref.
-    simDistRef.current = 0
-    simTrailRef.current = []
-    simLogRef.current = []
-    simLastSampleRef.current = -Infinity
-    setSimLabel(null)
-    setSimLogTick(0)
-    setSimDistance(0)
+    if (useSharedPlayback) return
+    const autoAdvance = simAutoAdvanceRef.current
+    const seeking = simSeekingRef.current
+
+    if (seeking) {
+      simSeekingRef.current = false
+    } else {
+      simDistRef.current = 0
+      simTrailRef.current = []
+      if (!autoAdvance) {
+        simLogRef.current = []
+        simLastSampleRef.current = -Infinity
+        completedLengthRef.current = 0
+        setSimLabel(null)
+        setSimLogTick(0)
+        setSimDistance(0)
+        setSimGlobalDistance(0)
+      }
+    }
     simDrawRef.current()
-  }, [fullWirePath, wireCum, cutIndex, simActive])
+  }, [fullWirePath, wireCum, cutIndex, simActive, simAutoAdvanceRef])
+
+  useEffect(() => {
+    if (useSharedPlayback) return
+    if (!simActive) {
+      completedLengthRef.current = 0
+    }
+  }, [simActive, useSharedPlayback])
+
+  const applyLocalSeek = useCallback((path, cum, localDist) => {
+    const d = Math.max(0, localDist)
+    simDistRef.current = d
+    let i = 0
+    while (i < cum.length - 2 && cum[i + 1] < d) i++
+    const head = path.slice(0, i + 1)
+    const pt = pointAtDistance(path, cum, d)
+    simTrailRef.current = pt ? [...head, { u: pt.u, v: pt.v }] : head
+    setSimDistance(d)
+  }, [])
 
   /**
-   * Scrub to an absolute distance (mm) along the travel. Stops playback — a
-   * seek during play would fight the integrator — and re-derives the trail by
-   * slicing the path up to the seek index, so the drawn trail always
-   * corresponds to the new position instead of accumulating across the jump.
+   * Scrub to a job-level distance (mm). Jumps to the correct cut and local
+   * position so the progress bar runs 0 → jobTotal continuously.
    */
-  const seekTo = useCallback((distance) => {
-    const total = wireLengthMM
-    if (!(total > 0)) return
-    const d = Math.min(total, Math.max(0, distance))
+  const seekToGlobal = useCallback(async (globalDist, job = null) => {
     setSimPlaying(false)
-    simDistRef.current = d
+    let simJob = job ?? simJobRef.current
+    if (!simJob) {
+      try {
+        simJob = await ensureSimJob()
+      } catch {
+        return
+      }
+    }
+    const hit = seekGlobal(simJob.cuts, globalDist)
+    if (!hit) return
 
-    // Trail = the path up to the containing vertex, plus the interpolated
-    // point, so it matches the polyline rather than chording across it.
-    let i = 0
-    while (i < wireCum.length - 2 && wireCum[i + 1] < d) i++
-    const head = fullWirePath.slice(0, i + 1)
-    const pt = pointAtDistance(fullWirePath, wireCum, d)
-    simTrailRef.current = pt ? [...head, { u: pt.u, v: pt.v }] : head
+    const cut = simJob.cuts.find((c) => c.cutIndex === hit.cutIndex)
+    if (!cut?.playable) return
 
-    // The log is a monotonic event trace of a run; a seek invalidates it.
+    completedLengthRef.current = hit.completedLength
+    const global = hit.completedLength + hit.localDist
+    setSimGlobalDistance(global)
     simLogRef.current = []
     simLastSampleRef.current = -Infinity
     setSimLogTick(0)
-    setSimDistance(d)
-    simDrawRef.current()
-  }, [fullWirePath, wireCum, wireLengthMM, setSimPlaying])
+
+    applyLocalSeek(cut.fullWirePath, cut.wireCum, hit.localDist)
+    const pt = pointAtDistance(cut.fullWirePath, cut.wireCum, hit.localDist)
+    setSimLabel({
+      n: hit.cutIndex + 1,
+      u: pt?.u ?? 0,
+      v: pt?.v ?? 0,
+      distance: global,
+    })
+
+    if (hit.cutIndex !== cutIndex) {
+      simSeekingRef.current = true
+      setCutIndexForSimStart(hit.cutIndex)
+    } else {
+      simDrawRef.current()
+    }
+  }, [
+    applyLocalSeek,
+    cutIndex,
+    ensureSimJob,
+    setCutIndexForSimStart,
+    setSimPlaying,
+  ])
 
   // Zoom / pan interaction handlers (wheel, pointer drag, pinch).
   useEffect(() => {
@@ -767,16 +839,15 @@ export default function SilhouettePreviewPanel({
   // --- WSB-facing derived values -------------------------------------------
   // Status names the run, not the motion: CUTTING means the playhead is
   // advancing, DONE means it reached the end.
-  const simStatus = useMemo(() => {
-    if (wireLengthMM <= 0) return 'READY'
-    if (simDistance >= wireLengthMM) return 'DONE'
-    if (simPlaying) return 'CUTTING'
-    return simDistance > 0 ? 'PAUSED' : 'READY'
-  }, [simDistance, wireLengthMM, simPlaying])
+  const jobTotalMM = jobTotalLengthMM > 0 ? jobTotalLengthMM : wireLengthMM
 
-  // Real machine time, deliberately WITHOUT the speed multiplier: the readout
-  // answers "how far into the actual job are we", which is the point of tying
-  // the base rate to the feed rate. Faster playback does not shorten the job.
+  const simStatus = useMemo(() => {
+    if (jobTotalMM <= 0) return 'READY'
+    if (!simPlaying && simGlobalDistance >= jobTotalMM - 1e-3) return 'DONE'
+    if (simPlaying) return 'CUTTING'
+    return simGlobalDistance > 0 ? 'PAUSED' : 'READY'
+  }, [simGlobalDistance, jobTotalMM, simPlaying])
+
   const mmss = (seconds) => {
     if (!Number.isFinite(seconds) || seconds < 0) return '00:00'
     const total = Math.round(seconds)
@@ -784,9 +855,11 @@ export default function SilhouettePreviewPanel({
     const s = total % 60
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   }
-  const simTimeElapsed = mmss(baseSpeedMMPerSec > 0 ? simDistance / baseSpeedMMPerSec : 0)
-  const simTimeTotal = mmss(baseSpeedMMPerSec > 0 ? wireLengthMM / baseSpeedMMPerSec : 0)
-  const simPct = wireLengthMM > 0 ? `${((simDistance / wireLengthMM) * 100).toFixed(1)}%` : '0.0%'
+  const simTimeElapsed = mmss(baseSpeedMMPerSec > 0 ? simGlobalDistance / baseSpeedMMPerSec : 0)
+  const simTimeTotal = mmss(baseSpeedMMPerSec > 0 ? jobTotalMM / baseSpeedMMPerSec : 0)
+  const simPct = jobTotalMM > 0
+    ? `${((simGlobalDistance / jobTotalMM) * 100).toFixed(1)}%`
+    : '0.0%'
 
   // --- WSB handlers ---------------------------------------------------------
   // Stop leaves Sim mode entirely, so the bar unmounts and distance resets.
@@ -796,24 +869,79 @@ export default function SilhouettePreviewPanel({
     simTrailRef.current = []
     simLogRef.current = []
     simLastSampleRef.current = -Infinity
+    completedLengthRef.current = 0
     setSimDistance(0)
+    setSimGlobalDistance(0)
     setSimLabel(null)
     setSimLogTick(0)
-    onStopSim?.()
-  }, [onStopSim, setSimPlaying])
+    setSimActive(false)
+  }, [setSimActive, setSimPlaying])
 
-  // Reset rewinds the current run but stays in Sim mode.
   const handleSimReset = useCallback(() => {
     setSimPlaying(false)
     simDistRef.current = 0
     simTrailRef.current = []
     simLogRef.current = []
     simLastSampleRef.current = -Infinity
+    completedLengthRef.current = 0
     setSimDistance(0)
+    setSimGlobalDistance(0)
     setSimLabel(null)
     setSimLogTick(0)
+    setCutIndexForSimStart(0)
     simDrawRef.current()
-  }, [setSimPlaying])
+  }, [setCutIndexForSimStart, setSimPlaying])
+
+  const handleTogglePlay = useCallback(async () => {
+    if (simPlaying) {
+      setSimPlaying(false)
+      return
+    }
+    if (!geometry) return
+
+    const total = jobTotalLengthMM > 0 ? jobTotalLengthMM : wireLengthMM
+    const atJobEnd = total > 0 && simGlobalDistance >= total - 1e-3
+    const canResume = !atJobEnd
+      && simGlobalDistance > 0
+      && wireLengthMM > 0
+      && fullWirePath.length >= 2
+    if (canResume) {
+      setSimPlaying(true)
+      return
+    }
+
+    try {
+      const job = await ensureSimJob()
+      let startCut = 0
+      if (!job.cuts[0]?.playable) {
+        startCut = firstPlayableCut(job.cuts)
+      }
+      if (startCut < 0 || !job.cuts[startCut]?.playable) return
+      simDistRef.current = 0
+      simTrailRef.current = []
+      simLogRef.current = []
+      simLastSampleRef.current = -Infinity
+      completedLengthRef.current = 0
+      setSimLogTick(0)
+      setSimDistance(0)
+      setSimGlobalDistance(0)
+      setSimLabel(null)
+      setCutIndexForSimStart(startCut)
+      setSimPlaying(true)
+    } catch (err) {
+      console.warn('[sim] job precompute failed:', err)
+    }
+  }, [
+    ensureSimJob,
+    fullWirePath.length,
+    geometry,
+    jobTotalLengthMM,
+    setCutIndexForSimStart,
+    setSimPlaying,
+    simGlobalDistance,
+    simPlaying,
+    wireLengthMM,
+  ])
 
   // Speed persists immediately — it is a playback preference, not a committed
   // edit, so there is deliberately no Apply gate on the slider.
@@ -821,9 +949,13 @@ export default function SilhouettePreviewPanel({
     updateSimSettings?.({ simSpeedMultiplier: Math.min(100, Math.max(1, Math.round(mult))) })
   }, [updateSimSettings])
 
-  const handleScrub = useCallback((value) => {
-    seekTo((value / 1000) * wireLengthMM)
-  }, [seekTo, wireLengthMM])
+  const handleScrub = useCallback(async (value) => {
+    const total = jobTotalLengthMM > 0
+      ? jobTotalLengthMM
+      : (simJobRef.current?.jobTotalLengthMM ?? wireLengthMM)
+    if (!(total > 0)) return
+    await seekToGlobal((value / 1000) * total)
+  }, [jobTotalLengthMM, seekToGlobal, wireLengthMM])
 
   const handleCopyLog = useCallback(async () => {
     const rows = simLogRef.current
@@ -846,15 +978,15 @@ export default function SilhouettePreviewPanel({
 
       <div className="preview-wrap silhouette-preview-canvas-wrap" ref={wrapRef}>
         <canvas ref={canvasRef} />
-        {simActive && simLabel && (
+        {simActive && drawSimLabel && (
           <button
             type="button"
             className="sim-data-label"
             onClick={() => setSimLogOpen(true)}
             title="Open Sim track log"
           >
-            {`N=${simLabel.n}  u=${simLabel.u.toFixed(1)}  v=${simLabel.v.toFixed(1)}  `
-              + `${(simLabel.distance ?? 0).toFixed(0)}mm`}
+            {`N=${drawSimLabel.n}  u=${drawSimLabel.u.toFixed(1)}  v=${drawSimLabel.v.toFixed(1)}  `
+              + `${(drawSimLabel.distance ?? 0).toFixed(0)}mm`}
           </button>
         )}
         <div className="silhouette-zoom-controls">
@@ -890,19 +1022,22 @@ export default function SilhouettePreviewPanel({
           `overflow: hidden`, which would clip the bar, and it is also the
           element the pan/zoom pointer handlers are bound to, so nesting the
           controls there made presses pan the canvas. */}
-      {simActive && (
+      {simActive && !useSharedPlayback && (
         <WireSimulatorBar
           status={simStatus}
           playing={simPlaying}
           distanceMM={simDistance}
           lengthMM={wireLengthMM}
+          jobDistanceMM={simGlobalDistance}
+          jobLengthMM={jobTotalMM}
           pct={simPct}
           elapsedLabel={simTimeElapsed}
           totalLabel={simTimeTotal}
           speedMultiplier={speedMultiplier}
+          cutReadout={`${cutIndex + 1}/${cutCount}`}
           onGear={onOpenSimPanel}
           onStop={handleSimStop}
-          onTogglePlay={() => setSimPlaying((v) => !v)}
+          onTogglePlay={handleTogglePlay}
           onReset={handleSimReset}
           onSpeedChange={handleSpeedChange}
           onScrub={handleScrub}

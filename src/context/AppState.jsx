@@ -103,6 +103,9 @@ export function AppStateProvider({ children }) {
   // `gcodeSettings`, so simulator tuning can never alter emitted G-code.
   const [simSettings, setSimSettings] = useState(() => loadSimSettings())
   const [simPanelOpen, setSimPanelOpen] = useState(false)
+  // Set true before programmatic cutIndex changes during full-job sim playback so
+  // the cutIndex effect does not pause simPlaying.
+  const simAutoAdvanceRef = useRef(false)
 
   const workingRef = useRef(null)
   const viewerRef = useRef(null)
@@ -205,6 +208,7 @@ export function AppStateProvider({ children }) {
     setRotationN(data.rotationN)
     setCutIndex(data.cutIndex)
     setCutJob(data.cutJob)
+    if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
     setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
     if (data.cutJob?.cuts) {
       for (const cut of data.cutJob.cuts) {
@@ -223,6 +227,11 @@ export function AppStateProvider({ children }) {
     let cancelled = false
 
     async function initSession() {
+      // Panel states default closed; never resurrect overlays after a reload.
+      setToolpathSetupOpen(false)
+      setSimPanelOpen(false)
+      setMenuOpen(false)
+
       setStatus('Restoring session…')
       try {
         const restored = await loadBrowserSession()
@@ -309,11 +318,33 @@ export function AppStateProvider({ children }) {
     setCutIndex((i) => Math.min(i, Math.max(effectiveCutCount(rotationN, { mode: cutMode }) - 1, 0)))
   }, [rotationN, cutMode, hydrating])
 
-  // Sim playback is per-rotation: any change of previewed cut restarts it, and
-  // switching the module off clears it.
-  useEffect(() => {
+  const advanceSimCut = useCallback((nextIndex) => {
+    simAutoAdvanceRef.current = true
+    setCutIndex(nextIndex)
+  }, [])
+
+  const setCutIndexForSimStart = useCallback((index) => {
+    simAutoAdvanceRef.current = true
+    setCutIndex(index)
+  }, [])
+
+  const setCutIndexManual = useCallback((updater) => {
     setSimPlaying(false)
-  }, [cutIndex, simActive])
+    setCutIndex(updater)
+  }, [])
+
+  // Manual cut stepping pauses sim; auto-advance during full-job playback does not.
+  useEffect(() => {
+    if (simAutoAdvanceRef.current) {
+      simAutoAdvanceRef.current = false
+      return
+    }
+    setSimPlaying(false)
+  }, [cutIndex])
+
+  useEffect(() => {
+    if (!simActive) setSimPlaying(false)
+  }, [simActive])
 
   // Settings changes do NOT invalidate the buffered job — it is replaced on
   // Apply. Keeping it lets the user keep browsing cuts while editing values.
@@ -632,6 +663,7 @@ export function AppStateProvider({ children }) {
       setRotationN(data.rotationN)
       setCutIndex(data.cutIndex)
       setCutJob(data.cutJob)
+      if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
       setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
       if (data.cutJob?.cuts) {
         for (const cut of data.cutJob.cuts) {
@@ -680,6 +712,10 @@ export function AppStateProvider({ children }) {
     cutCount,
     cutIndex,
     setCutIndex,
+    setCutIndexManual,
+    setCutIndexForSimStart,
+    advanceSimCut,
+    simAutoAdvanceRef,
     thetaDeg,
     profile,
     silhouettePreview,

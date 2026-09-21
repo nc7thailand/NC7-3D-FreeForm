@@ -4,9 +4,10 @@ import { useAppState } from '../context/AppState'
 import { CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 
 /**
- * Toolpath Setup modal — BLOCKING. Opens on Toolpath page entry and on gear
- * click. Draft-only: edits accumulate in `draftStock` + `draftCutMode` and take
- * effect only on Apply. Reset/✕/Escape discard the draft and close.
+ * Toolpath Setup modal — BLOCKING. Opens on the first Toolpath visit in a tab
+ * session or when the user clicks the gear icon. Never auto-opens on refresh.
+ * Draft-only: edits accumulate in `draftStock` + `draftCutMode` and take effect
+ * only on Apply. Reset/✕/Escape discard the draft and close.
  */
 export default function ToolpathSetupOverlay({ open, onClose }) {
   const {

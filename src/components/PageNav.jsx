@@ -10,7 +10,7 @@ function ToolpathNavCenter({ onOpenSetup }) {
     setRotationN,
     cutCount,
     cutIndex,
-    setCutIndex,
+    setCutIndexManual,
     thetaDeg,
     simActive,
     setSimActive,
@@ -49,7 +49,7 @@ function ToolpathNavCenter({ onOpenSetup }) {
         type="button"
         className="cut-nav-btn"
         disabled={cutIndex <= 0}
-        onClick={() => setCutIndex((i) => Math.max(0, i - 1))}
+        onClick={() => setCutIndexManual((i) => Math.max(0, i - 1))}
         aria-label="Previous cut"
       >
         ◀
@@ -61,7 +61,7 @@ function ToolpathNavCenter({ onOpenSetup }) {
         type="button"
         className="cut-nav-btn"
         disabled={cutIndex >= cutCount - 1}
-        onClick={() => setCutIndex((i) => Math.min(cutCount - 1, i + 1))}
+        onClick={() => setCutIndexManual((i) => Math.min(cutCount - 1, i + 1))}
         aria-label="Next cut"
       >
         ▶

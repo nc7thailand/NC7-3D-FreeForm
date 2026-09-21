@@ -1,12 +1,20 @@
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import Viewer3D from '../components/Viewer3D'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import SimulationGcodePanel from '../components/SimulationGcodePanel'
+import WireSimulatorBar from '../components/WireSimulatorBar'
 import PageNav from '../components/PageNav'
 import ProjectPanel from '../components/ProjectPanel'
 import ToolpathParametersForm from '../components/ToolpathParametersForm'
 import { useAppState } from '../context/AppState'
+import { useSimPlayback } from '../hooks/useSimPlayback'
 import { wirePathFromProfile } from '../lib/wirePath'
+import {
+  loadToolpathViewMode,
+  markToolpathAutoSetupShown,
+  saveToolpathViewMode,
+  shouldAutoOpenToolpathSetup,
+} from '../lib/navigationLoad'
 
 function ToolpathPanel() {
   const {
@@ -17,7 +25,7 @@ function ToolpathPanel() {
     setRotationN,
     cutCount,
     cutIndex,
-    setCutIndex,
+    setCutIndexManual,
     thetaDeg,
     profile,
     cutJob,
@@ -79,7 +87,7 @@ function ToolpathPanel() {
               type="button"
               className="cut-nav-btn"
               disabled={cutIndex <= 0}
-              onClick={() => setCutIndex((i) => Math.max(0, i - 1))}
+              onClick={() => setCutIndexManual((i) => Math.max(0, i - 1))}
             >
               ◀
             </button>
@@ -90,7 +98,7 @@ function ToolpathPanel() {
               type="button"
               className="cut-nav-btn"
               disabled={cutIndex >= cutCount - 1}
-              onClick={() => setCutIndex((i) => Math.min(cutCount - 1, i + 1))}
+              onClick={() => setCutIndexManual((i) => Math.min(cutCount - 1, i + 1))}
             >
               ▶
             </button>
@@ -139,19 +147,42 @@ export default function ToolpathPage() {
     simPanelOpen,
     openSimPanel,
     closeSimPanel,
+    gcodeSettings,
+    sessionReady,
   } = useAppState()
+
+  const playback = useSimPlayback({
+    enabled: simActive,
+    geometry,
+    stock,
+    cutMode,
+    rotationN,
+    cutIndex,
+    thetaDeg,
+    simPlaying,
+    setSimPlaying,
+    simSettings,
+    gcodeSettings,
+  })
 
   // View mode: 'combined' shows the 3D viewport with the 2D cut drawing
   // overlaid on the fixed wire plane; '2d' keeps its existing behaviour.
   // The plain 3D view is not offered on this page — Combined supersedes it.
   // Combined is the default.
-  const [viewMode, setViewMode] = useState('combined')
+  const [viewMode, setViewMode] = useState(loadToolpathViewMode)
 
-  // Open the blocking Toolpath Setup panel on every entry to this page.
   useEffect(() => {
+    saveToolpathViewMode(viewMode)
+  }, [viewMode])
+
+  // Auto-open Toolpath Setup only on the first Toolpath visit in a tab session
+  // (never on refresh — reload restores committed state without forcing the panel).
+  useEffect(() => {
+    if (!sessionReady) return
+    if (!shouldAutoOpenToolpathSetup()) return
+    markToolpathAutoSetupShown()
     openToolpathSetup()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [sessionReady, openToolpathSetup])
 
   const wirePointCount = useMemo(() => {
     if (!profile?.polylines?.length) return null
@@ -161,6 +192,36 @@ export default function ToolpathPage() {
   const isCombined = viewMode === 'combined'
   const show2d = viewMode === '2d'
   const show3d = viewMode !== '2d'
+
+  const mmss = (seconds) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '00:00'
+    const total = Math.round(seconds)
+    const m = Math.floor(total / 60)
+    const s = total % 60
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  const wireSpeed = playback.wireFeedRate / 60
+  const simTimeElapsed = mmss(wireSpeed > 0 ? playback.simGlobalDistance / wireSpeed : 0)
+  const simTimeTotal = mmss(wireSpeed > 0 ? playback.jobTotalMM / wireSpeed : 0)
+  const simPct = playback.jobTotalMM > 0
+    ? `${((playback.simGlobalDistance / playback.jobTotalMM) * 100).toFixed(1)}%`
+    : '0.0%'
+  const simStatus = useMemo(() => {
+    if (playback.jobTotalMM <= 0) return 'READY'
+    if (!simPlaying && playback.simGlobalDistance >= playback.jobTotalMM - 1e-3) return 'DONE'
+    if (playback.phase === 'indexing') return 'INDEXING'
+    if (simPlaying) return playback.colliding ? 'COLLISION' : 'CUTTING'
+    return playback.simGlobalDistance > 0 ? 'PAUSED' : 'READY'
+  }, [playback, simPlaying])
+
+  const handleScrub = useCallback(async (value) => {
+    if (!(playback.jobTotalMM > 0)) return
+    await playback.seekToGlobal((value / 1000) * playback.jobTotalMM)
+  }, [playback])
+
+  const handleSpeedChange = useCallback((mult) => {
+    updateSimSettings?.({ simSpeedMultiplier: Math.min(100, Math.max(1, Math.round(mult))) })
+  }, [updateSimSettings])
 
   return (
     <>
@@ -197,13 +258,9 @@ export default function ToolpathPage() {
                 cutMode={cutMode}
                 stock={stock}
                 simActive={simActive}
-                simPlaying={simPlaying}
-                setSimPlaying={setSimPlaying}
+                playback={simActive ? playback : null}
                 rotationN={rotationN}
-                simSettings={simSettings}
-                updateSimSettings={updateSimSettings}
                 onOpenSimPanel={openSimPanel}
-                onStopSim={() => setSimActive(false)}
               />
             )}
             {show3d && (
@@ -212,7 +269,7 @@ export default function ToolpathPage() {
                   ref={viewerRef}
                   geometry={geometry}
                   resetKey={resetKey}
-                  thetaDeg={thetaDeg}
+                  thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
                   cutIndex={cutIndex}
                   stock={stock}
                   profile={profile}
@@ -222,6 +279,9 @@ export default function ToolpathPage() {
                   showToolpathOverlay
                   showModelBBox={false}
                   combinedView={isCombined}
+                  simActive={simActive}
+                  simPlayback={simActive ? playback : null}
+                  rotationN={rotationN}
                 />
               </section>
             )}
@@ -239,10 +299,33 @@ export default function ToolpathPage() {
             </div>
           )}
         </div>
+        {simActive && (
+          <WireSimulatorBar
+            status={simStatus}
+            playing={simPlaying}
+            distanceMM={playback.simDistance}
+            lengthMM={playback.wireLengthMM}
+            jobDistanceMM={playback.simGlobalDistance}
+            jobLengthMM={playback.jobTotalMM}
+            pct={simPct}
+            elapsedLabel={simTimeElapsed}
+            totalLabel={simTimeTotal}
+            speedMultiplier={simSettings?.simSpeedMultiplier ?? 10}
+            cutReadout={`${cutIndex + 1}/${playback.cutCount}`}
+            onGear={openSimPanel}
+            onStop={() => {
+              playback.handleStop()
+              setSimActive(false)
+            }}
+            onTogglePlay={playback.handleTogglePlay}
+            onReset={playback.handleReset}
+            onSpeedChange={handleSpeedChange}
+            onScrub={handleScrub}
+          />
+        )}
         <PageNav page="toolpath" />
       </main>
 
-      {/* Simulation & G-code settings, opened by the gear in the simulator bar. */}
       <SimulationGcodePanel open={simPanelOpen} onClose={closeSimPanel} />
     </>
   )

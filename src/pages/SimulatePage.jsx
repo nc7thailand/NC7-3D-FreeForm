@@ -3,9 +3,10 @@ import PageNav from '../components/PageNav'
 import SimulateViewer from '../components/SimulateViewer'
 import { useAppState } from '../context/AppState'
 import { buildPlaybackTimeline, buildWireStack, sampleTimeline } from '../lib/simStack'
+import { wireSpeedMmPerSec } from '../lib/turntablePhysics'
 
 export default function SimulatePage() {
-  const { geometry, cutJob, resetKey } = useAppState()
+  const { geometry, cutJob, resetKey, gcodeSettings } = useAppState()
   const [wireOnly, setWireOnly] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
@@ -59,7 +60,7 @@ export default function SimulatePage() {
       const dt = (now - lastTimeRef.current) / 1000
       lastTimeRef.current = now
 
-      const mmPerSec = 80 * speed
+      const mmPerSec = wireSpeedMmPerSec(gcodeSettings?.feedRate ?? 700, speed)
       let remaining = mmPerSec * dt
       let { seg, t } = playStateRef.current
 
@@ -100,7 +101,7 @@ export default function SimulatePage() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
-  }, [playing, timeline, speed])
+  }, [playing, timeline, speed, gcodeSettings?.feedRate])
 
   const handleScrub = (e) => {
     const v = +e.target.value

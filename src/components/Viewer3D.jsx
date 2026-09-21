@@ -14,6 +14,12 @@ import {
 import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, OVERLAY_COLORS } from '../lib/cutOverlay'
+import {
+  createSimOverlayGroup,
+  disposeSimOverlay,
+  syncSimOverlay,
+  wireBlinkOpacity,
+} from '../lib/simOverlay3d'
 
 /** Rear cutting plane overlay — set false to show middle plane only. */
 const SHOW_CUTTING_PLANE = false
@@ -114,6 +120,9 @@ export default forwardRef(function Viewer3D(
     showToolpathOverlay = false,
     showModelBBox = true,
     combinedView = false,
+    simActive = false,
+    simPlayback = null,
+    rotationN = 16,
   },
   ref
 ) {
@@ -148,7 +157,32 @@ export default forwardRef(function Viewer3D(
     overlayGroup: null,
     overlaySignature: null,
     overlayMaterials: [],
+    simGroup: null,
+    simOverlay: null,
+    simWireMaterials: [],
+    simActive: false,
+    simPlayback: null,
+    simOverlayCtx: null,
   })
+
+  const simPlaybackRef = useRef(simPlayback)
+  simPlaybackRef.current = simPlayback
+  const simOverlayCtxRef = useRef({
+    geometry,
+    stock,
+    cutMode,
+    cutIndex,
+    rotationN,
+    thetaDeg,
+  })
+  simOverlayCtxRef.current = {
+    geometry,
+    stock,
+    cutMode,
+    cutIndex,
+    rotationN,
+    thetaDeg,
+  }
 
   useImperativeHandle(ref, () => ({
     getMeshWorldMatrix() {
@@ -528,6 +562,17 @@ export default forwardRef(function Viewer3D(
         viewCubeRef.current.sync(camera, state.frameInfo.center)
       }
 
+      if (state.simOverlay) {
+        const opacity = wireBlinkOpacity()
+        state.simOverlay.wireGlowMat.opacity = Math.max(0, opacity)
+        state.simOverlay.wireCoreMat.opacity = Math.max(0, opacity * 0.95)
+        state.simOverlay.trailMat.opacity = 0.35
+      }
+
+      if (state.simActive && state.simOverlay) {
+        syncSimOverlay(state.simOverlay, state.simPlayback, state.simOverlayCtx)
+      }
+
       renderer.render(scene, camera)
     }
     animate()
@@ -538,8 +583,13 @@ export default forwardRef(function Viewer3D(
     // mobile, where the viewport changes orientation often).
     const syncOverlayResolution = (w, h) => {
       const mats = state.overlayMaterials
-      if (!mats?.length) return
-      for (const m of mats) m.resolution.set(w, h)
+      if (mats?.length) {
+        for (const m of mats) m.resolution.set(w, h)
+      }
+      const simMats = state.simWireMaterials
+      if (simMats?.length) {
+        for (const m of simMats) m.resolution.set(w, h)
+      }
     }
     state.syncOverlayResolution = syncOverlayResolution
 
@@ -1024,7 +1074,7 @@ export default forwardRef(function Viewer3D(
     if (!combinedView || !geometry) return
 
     const data = buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex })
-    const { contour, cutPath, markers, links } = data
+    const { contour, cutPath, markers, links, block } = data
     if (!contour.length) return
 
     const group = new THREE.Group()
@@ -1108,10 +1158,28 @@ export default forwardRef(function Viewer3D(
       group.add(line)
     }
 
-    // Overlay contour — WHITE and dashed in Combined. The 2D panel draws it
-    // black because it sits on a light background; on the dark 3D scene white
-    // is the readable equivalent, and the dash keeps it from stealing focus
-    // from the solid blue overlay cut path. Never scaled.
+    const boV = stock?.bo ?? 0
+    addLine(
+      [{ u: 0, v: boV - stock?.h * 2 }, { u: 0, v: boV + stock?.h * 2 }],
+      '#ff0000',
+      { opacity: 0.55, dash: [2, 2], width: 1 },
+    )
+    addLine(
+      [{ u: -stock?.w * 2, v: boV }, { u: stock?.w * 2, v: boV }],
+      '#6ea8ff',
+      { opacity: 0.55, dash: [2, 2], width: 1 },
+    )
+
+    if (block) {
+      const blockPts = [
+        { u: block.leftU, v: block.bottomV },
+        { u: block.rightU, v: block.bottomV },
+        { u: block.rightU, v: block.topV },
+        { u: block.leftU, v: block.topV },
+      ]
+      addLine(blockPts, '#8a9099', { closed: true, opacity: 0.45, dash: [2, 2], width: 1 })
+    }
+
     addLine(contour, '#ffffff', { closed: true, opacity: 0.85, dash: [2.5, 2], width: 1.6 })
     // Overlay cut path — solid blue, scaled.
     addLine(cutPath, OVERLAY_COLORS.cutPath, { opacity: 1, width: 1.5, scale: true })
@@ -1163,6 +1231,58 @@ export default forwardRef(function Viewer3D(
 
     return () => disposeGroup()
   }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex])
+
+  // Combined view: dynamic sim overlay (wire marker ⊥ MP plane, trail, next-cut dot).
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.scene) return undefined
+
+    state.simActive = simActive && combinedView
+    state.simPlayback = simPlayback
+    state.simOverlayCtx = simOverlayCtxRef.current
+
+    const disposeSim = () => {
+      if (state.simOverlay) {
+        disposeSimOverlay(state.simOverlay)
+        if (state.simOverlay.group?.parent) {
+          state.simOverlay.group.parent.remove(state.simOverlay.group)
+        }
+        state.simOverlay = null
+      }
+      state.simGroup = null
+      state.simWireMaterials = []
+    }
+
+    if (!simActive || !combinedView || !geometry) {
+      disposeSim()
+      return undefined
+    }
+
+    disposeSim()
+
+    const viewSize = state.renderer
+      ? state.renderer.getSize(new THREE.Vector2())
+      : new THREE.Vector2(1, 1)
+
+    const simOverlay = createSimOverlayGroup({
+      geometry,
+      stock,
+      resolution: viewSize,
+    })
+    state.simOverlay = simOverlay
+    state.simGroup = simOverlay.group
+    state.simWireMaterials = simOverlay.simWireMaterials
+    state.scene.add(simOverlay.group)
+
+    return () => disposeSim()
+  }, [simActive, combinedView, geometry, stock?.overlayThickness, resetKey])
+
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state) return
+    state.simPlayback = simPlayback
+    state.simOverlayCtx = simOverlayCtxRef.current
+  }, [simPlayback, geometry, stock, cutMode, cutIndex, rotationN, thetaDeg])
 
   // View-only mode (Page 2): orbit with left-drag, hide gizmo toolbar
   useEffect(() => {
