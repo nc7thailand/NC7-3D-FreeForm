@@ -12,11 +12,8 @@ import {
 import {
   buildIndexTransitionPlan,
   isLeftOnlyIndexPlan,
-  stepHorizontal,
   stepTowardUV,
-  stepVertical,
 } from '../lib/indexSafety'
-import { leftBoEntry, leftMarginTop } from '../lib/indexing/indexSequenceLeftOnly'
 import {
   indexSpeedDegPerSec,
   rapidSpeedMmPerSec,
@@ -301,7 +298,7 @@ export function useSimPlayback({
 
       indexPlanRef.current = plan
       const sub = isLeftOnlyIndexPlan(plan)
-        ? 'rotate'
+        ? (plan.needsRapids ? 'lo-to-k' : 'rotate')
         : (plan.preMoveToK ? 'pre-k' : 'rotate')
       indexSubPhaseRef.current = sub
       setIndexSubPhase(sub)
@@ -370,68 +367,16 @@ export function useSimPlayback({
         const sub = indexSubPhaseRef.current
         const wirePt = wireAtIndexRef.current
 
-        if (isLeftOnlyIndexPlan(plan) && wirePt) {
-          const publishIndexWire = (theta) => {
-            const hit = geometry && wireFoamCollision({
-              wireU: wirePt.u,
-              wireV: wirePt.v,
-              geometry,
-              stock,
-              cutMode,
-              cutIndex: cutIndexRef.current,
-              thetaDeg: theta,
-            })
-            setColliding(hit)
-            publishWireState(wirePt, [])
+        if (sub === 'lo-to-k' && isLeftOnlyIndexPlan(plan) && plan.k && wirePt) {
+          const reached = stepTowardUV(wirePt, plan.k, rapidSpeed, dt)
+          setColliding(false)
+          publishWireState(wirePt, [])
+          if (reached) {
+            indexSubPhaseRef.current = 'rotate'
+            setIndexSubPhase('rotate')
           }
-
-          if (sub === 'lo-top-h') {
-            const marginTop = leftMarginTop(geometry, stock, targetTheta)
-            const reached = marginTop
-              ? stepHorizontal(wirePt, marginTop.u, rapidSpeed, dt)
-              : true
-            publishIndexWire(targetTheta)
-            if (reached) {
-              indexSubPhaseRef.current = 'lo-down-v'
-              setIndexSubPhase('lo-down-v')
-            }
-            simRafRef.current = requestAnimationFrame(step)
-            return
-          }
-
-          if (sub === 'lo-down-v') {
-            const kTarget = leftBoEntry(geometry, stock, targetTheta) ?? plan.k
-            const reached = stepVertical(wirePt, kTarget.v, rapidSpeed, dt)
-            publishIndexWire(targetTheta)
-            if (reached) {
-              indexSubPhaseRef.current = 'lo-up-v'
-              setIndexSubPhase('lo-up-v')
-            }
-            simRafRef.current = requestAnimationFrame(step)
-            return
-          }
-
-          if (sub === 'lo-up-v') {
-            const marginTop = leftMarginTop(geometry, stock, targetTheta)
-            const reached = marginTop
-              ? stepVertical(wirePt, marginTop.v, rapidSpeed, dt)
-              : true
-            publishIndexWire(targetTheta)
-            if (reached) {
-              indexSubPhaseRef.current = 'lo-axis-h'
-              setIndexSubPhase('lo-axis-h')
-            }
-            simRafRef.current = requestAnimationFrame(step)
-            return
-          }
-
-          if (sub === 'lo-axis-h') {
-            const reached = stepHorizontal(wirePt, plan.top.u, rapidSpeed, dt)
-            publishIndexWire(targetTheta)
-            if (reached) finishIndexing(targetTheta)
-            simRafRef.current = requestAnimationFrame(step)
-            return
-          }
+          simRafRef.current = requestAnimationFrame(step)
+          return
         }
 
         if (sub === 'pre-k' && plan?.preMoveToK && plan.k && wirePt) {
@@ -502,12 +447,7 @@ export function useSimPlayback({
 
           if (Math.abs(targetTheta - nextTheta) < 1e-3) {
             if (isLeftOnlyIndexPlan(plan)) {
-              if (plan.afterRotate === 'finish') {
-                finishIndexing(targetTheta)
-              } else {
-                indexSubPhaseRef.current = 'lo-top-h'
-                setIndexSubPhase('lo-top-h')
-              }
+              finishIndexing(targetTheta)
             } else if (plan?.indexEndsAtTurn) {
               finishIndexing(targetTheta)
             } else if (plan?.postMoveToI) {

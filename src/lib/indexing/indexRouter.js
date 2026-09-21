@@ -23,12 +23,13 @@ import { buildLeftOnlyIndexPlan } from './indexSequenceLeftOnly.js'
  * @property {'left-only'} mode
  * @property {number} currentCutN
  * @property {boolean} currentCutIsOdd
+ * @property {boolean} needsRapids
  * @property {number} nextCutIndex
  * @property {{ u: number, v: number }} k
  * @property {{ u: number, v: number }} i
  * @property {{ u: number, v: number }} top
  * @property {{ u: number, v: number }} green
- * @property {'finish'|'down-to-bo-then-top'} afterRotate
+ * @property {'finish'} afterRotate
  */
 
 /** @typedef {LRIndexPlan|LeftOnlyIndexPlan} IndexTransitionPlan */
