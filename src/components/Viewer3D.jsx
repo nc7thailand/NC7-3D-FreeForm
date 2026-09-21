@@ -15,8 +15,10 @@ import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, OVERLAY_COLORS } from '../lib/cutOverlay'
 import {
+  createNextDotGroup,
   createSimOverlayGroup,
   disposeSimOverlay,
+  nextSimDot,
   syncSimOverlay,
   wireBlinkOpacity,
 } from '../lib/simOverlay3d'
@@ -1224,13 +1226,22 @@ export default forwardRef(function Viewer3D(
       }
     }
 
+    const kPoint = nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex })
+    if (kPoint) {
+      const nextDot = createNextDotGroup(overlayScale)
+      nextDot.group.position.set(kPoint.u, kPoint.v, 0.02)
+      nextDot.group.visible = true
+      nextDot.group.renderOrder = 10
+      group.add(nextDot.group)
+    }
+
     group.renderOrder = 4
     state.scene.add(group)
     state.overlayGroup = group
     state.overlaySignature = thetaDeg
 
     return () => disposeGroup()
-  }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex])
+  }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex, rotationN])
 
   // Combined view: dynamic sim overlay (wire marker ⊥ MP plane, trail, next-cut dot).
   useEffect(() => {

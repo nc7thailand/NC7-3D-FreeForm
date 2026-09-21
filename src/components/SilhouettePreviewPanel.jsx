@@ -282,7 +282,7 @@ export default function SilhouettePreviewPanel({
   // view. The step is one full cutCount revolution step, so it is 360/cutCount
   // in both cut modes. Suppressed on the last rotation — there is no next.
   const simDot = useMemo(() => {
-    if (!simActive || !geometry) return null
+    if (!geometry) return null
     return nextSimDot({
       geometry,
       stock,
@@ -290,7 +290,7 @@ export default function SilhouettePreviewPanel({
       cutMode,
       cutIndex,
     })
-  }, [simActive, geometry, rotationN, cutMode, cutIndex, stock])
+  }, [geometry, rotationN, cutMode, cutIndex, stock])
 
   useEffect(() => {
     const canvas = canvasRef.current

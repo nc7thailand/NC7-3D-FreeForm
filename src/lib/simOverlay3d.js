@@ -259,13 +259,8 @@ export function syncSimOverlay(sim, playback, ctx) {
     sim.trail.visible = false
   }
 
-  const dot = nextSimDot({ geometry, stock, rotationN, cutMode, cutIndex, thetaDeg })
-  if (dot) {
-    sim.nextDotGroup.position.set(dot.u, dot.v, 0)
-    sim.nextDotGroup.visible = true
-  } else {
-    sim.nextDotGroup.visible = false
-  }
+  // K point is drawn on the static Combined overlay so it is visible without Sim.
+  sim.nextDotGroup.visible = false
 }
 
 export function disposeSimOverlay(sim) {
