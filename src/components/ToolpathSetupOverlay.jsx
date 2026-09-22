@@ -50,7 +50,7 @@ export default function ToolpathSetupOverlay({ open, onClose }) {
   }
 
   const resetDraft = () => {
-    setDraftStock({ ...stock })
+    setDraftStock({ ...stock, profileAccuracy: 10, boAuto: true })
     setDraftCutMode(cutMode)
   }
 
