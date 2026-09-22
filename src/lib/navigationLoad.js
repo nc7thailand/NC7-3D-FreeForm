@@ -67,16 +67,16 @@ export function markToolpathAutoSetupShown() {
   window.sessionStorage.setItem(SESSION_TOOLPATH_AUTO_SETUP_KEY, '1')
 }
 
-/** Restore toolpath view mode (combined / 2d) across reloads within a tab. Default 2D. */
+/** Restore toolpath view mode (3d / 2d) across reloads within a tab. Default 2D. */
 export function loadToolpathViewMode() {
   if (typeof window === 'undefined' || !window.sessionStorage) return '2d'
   const v = window.sessionStorage.getItem(SESSION_TOOLPATH_VIEW_KEY)
-  return v === 'combined' ? 'combined' : '2d'
+  if (v === '3d' || v === 'combined') return '3d'
+  return '2d'
 }
 
 export function saveToolpathViewMode(mode) {
   if (typeof window === 'undefined' || !window.sessionStorage) return
-  if (mode === '2d' || mode === 'combined') {
-    window.sessionStorage.setItem(SESSION_TOOLPATH_VIEW_KEY, mode)
-  }
+  const stored = mode === '3d' || mode === 'combined' ? '3d' : '2d'
+  window.sessionStorage.setItem(SESSION_TOOLPATH_VIEW_KEY, stored)
 }

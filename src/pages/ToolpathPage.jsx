@@ -181,15 +181,18 @@ export default function ToolpathPage() {
     gcodeSettings,
   })
 
-  // View mode: '2d' (default) — canvas only, no WebGL. 'combined' lazy-loads
-  // Viewer3D with the 2D overlay on the fixed wire plane.
+  // View mode: '2d' (default) — canvas only, no WebGL. '3d' lazy-loads Viewer3D.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
+
+  const toggleViewMode = useCallback(() => {
+    setViewMode((m) => (m === '2d' ? '3d' : '2d'))
+  }, [])
 
   useEffect(() => {
     saveToolpathViewMode(viewMode)
   }, [viewMode])
 
-  // Warm Viewer3D chunk while user works in 2D — faster first Combined open, no GPU cost.
+  // Warm Viewer3D chunk while user works in 2D — faster first 3D open, no GPU cost.
   useEffect(() => {
     if (viewMode !== '2d' || !geometry) return undefined
     const prefetch = () => { viewer3DImport().catch(() => {}) }
@@ -215,9 +218,9 @@ export default function ToolpathPage() {
     return wirePathFromProfile(profile, stock, thetaDeg).length
   }, [profile, stock, thetaDeg])
 
-  const isCombined = viewMode === 'combined'
+  const is3d = viewMode === '3d'
   const show2d = viewMode === '2d'
-  const show3d = viewMode !== '2d'
+  const show3d = is3d
 
   const mmss = (seconds) => {
     if (!Number.isFinite(seconds) || seconds < 0) return '00:00'
@@ -263,63 +266,54 @@ export default function ToolpathPage() {
       <main className="page-main page-main--toolpath">
         <div className="page-body">
           <div className={`cam-split cam-split--mode-${viewMode}`}>
-            <div className="mobile-view-toggle" role="tablist" aria-label="View toggle">
+            <div className="viewport-stage">
               <button
                 type="button"
-                role="tab"
-                aria-selected={show2d}
-                className={`mobile-view-toggle-btn${show2d ? ' is-active' : ''}`}
-                onClick={() => setViewMode('2d')}
+                className="view-hud-toggle"
+                onClick={toggleViewMode}
+                aria-label={show2d ? 'Switch to 3D view' : 'Switch to 2D view'}
+                title={show2d ? 'Switch to 3D' : 'Switch to 2D'}
               >
-                2D
+                {show2d ? '3D' : '2D'}
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={isCombined}
-                className={`mobile-view-toggle-btn${isCombined ? ' is-active' : ''}`}
-                onClick={() => setViewMode('combined')}
-              >
-                Combined
-              </button>
+              {show2d && (
+                <SilhouettePreviewPanel
+                  geometry={geometry}
+                  thetaDeg={thetaDeg}
+                  cutIndex={cutIndex}
+                  cutMode={cutMode}
+                  stock={stock}
+                  simActive={simActive}
+                  playback={simActive ? playback : null}
+                  rotationN={rotationN}
+                  onOpenSimPanel={openSimPanel}
+                />
+              )}
+              {show3d && (
+                <section className="model-viewport-section">
+                  <Suspense fallback={<Viewport3DLoading />}>
+                    <Viewer3D
+                      ref={viewerRef}
+                      geometry={geometry}
+                      resetKey={resetKey}
+                      thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
+                      cutIndex={cutIndex}
+                      stock={stock}
+                      profile={profile}
+                      silhouettePreview={silhouettePreview}
+                      cutMode={cutMode}
+                      readOnly
+                      showToolpathOverlay
+                      showModelBBox={false}
+                      combinedView={is3d}
+                      simActive={simActive}
+                      simPlayback={simActive ? playback : null}
+                      rotationN={rotationN}
+                    />
+                  </Suspense>
+                </section>
+              )}
             </div>
-            {show2d && (
-              <SilhouettePreviewPanel
-                geometry={geometry}
-                thetaDeg={thetaDeg}
-                cutIndex={cutIndex}
-                cutMode={cutMode}
-                stock={stock}
-                simActive={simActive}
-                playback={simActive ? playback : null}
-                rotationN={rotationN}
-                onOpenSimPanel={openSimPanel}
-              />
-            )}
-            {show3d && (
-              <section className="model-viewport-section">
-                <Suspense fallback={<Viewport3DLoading />}>
-                  <Viewer3D
-                    ref={viewerRef}
-                    geometry={geometry}
-                    resetKey={resetKey}
-                    thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
-                    cutIndex={cutIndex}
-                    stock={stock}
-                    profile={profile}
-                    silhouettePreview={silhouettePreview}
-                    cutMode={cutMode}
-                    readOnly
-                    showToolpathOverlay
-                    showModelBBox={false}
-                    combinedView={isCombined}
-                    simActive={simActive}
-                    simPlayback={simActive ? playback : null}
-                    rotationN={rotationN}
-                  />
-                </Suspense>
-              </section>
-            )}
           </div>
           {status && !status.startsWith('Session restored') && !status.startsWith('Model saved') && (
             <div className="status-bar status-bar--above-nav">{status}</div>
