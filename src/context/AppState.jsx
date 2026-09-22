@@ -32,7 +32,7 @@ const DEFAULT_STOCK = {
   boAuto: true,
   boMargin: 20,
   showModelBBox: true,
-  profileAccuracy: 5,
+  profileAccuracy: 10,
   // Display-only multiplier for the 2D-derived overlay elements in Combined
   // view (cut path, link lines, markers). The silhouette contour is not scaled.
   // Lives in `stock` so it inherits the existing persistence; the G-code

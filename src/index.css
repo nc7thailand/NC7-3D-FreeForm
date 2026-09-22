@@ -491,12 +491,58 @@ body {
   cursor: not-allowed;
 }
 
-.inputs--compact label {
+.toolpath-params--compact label {
   font-size: 12px;
 }
 
-.inputs--compact input[type="number"] {
+.toolpath-params--compact input[type="number"] {
   width: 72px;
+}
+
+.param-group {
+  margin-bottom: 16px;
+}
+
+.param-group:last-child {
+  margin-bottom: 0;
+}
+
+.param-group-header {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #8b9cb0;
+}
+
+.param-row-label {
+  margin: 4px 0 6px;
+  font-size: 13px;
+  color: #c8d4e0;
+}
+
+.stock-dim-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.stock-dim-row label {
+  flex: 1 1 0;
+  min-width: 72px;
+}
+
+.param-cutmethod {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.param-field-hidden {
+  display: none;
 }
 
 .section-label-sub {
@@ -1102,9 +1148,7 @@ body {
 }
 
 .model-offset-block {
-  margin: 8px 0 10px;
-  padding-top: 4px;
-  border-top: 1px solid #2a3340;
+  margin: 0 0 10px;
 }
 .model-offset-heading {
   margin: 0 0 6px;
