@@ -5,6 +5,18 @@ import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 
 const PROFILE_ACCURACY_MAX = 10
 
+function ParamField({ label, unit, children, className = '' }) {
+  return (
+    <div className={`param-field${className ? ` ${className}` : ''}`}>
+      <span className="param-field-label">{label}</span>
+      <div className="param-field-control">
+        {children}
+        {unit ? <span className="param-field-unit">{unit}</span> : null}
+      </div>
+    </div>
+  )
+}
+
 /**
  * DevFoam-style toolpath parameters (foam block + wire offsets).
  *
@@ -94,85 +106,63 @@ export default function ToolpathParametersForm({
             {' · Move = preview · Apply = move + recompute cuts'}
           </p>
         </div>
-
-        <label>BO (above model bottom)
-          <input
-            type="number"
-            min="0"
-            step="0.5"
-            value={s.bo}
-            onChange={(e) => change('bo', +e.target.value)}
-          />
-          <span className="field-hint">Cut line = model bottom + BO</span>
-        </label>
       </section>
 
       <section className="param-group">
         <h3 className="param-group-header">Toolpath</h3>
 
-        {onCutModeChange && cutMode != null && (
-          <label className="param-cutmethod">
-            Cut method
-            <select
-              id="setup-cutmode"
-              className="setup-overlay-select"
-              value={cutMode}
-              onChange={(e) => onCutModeChange(e.target.value)}
-            >
-              <option value={CUT_MODE_LEFT_ONLY}>Left only</option>
-              <option value={CUT_MODE_LEFT_TO_RIGHT}>Left → Right</option>
-            </select>
-          </label>
-        )}
+        <div className="param-fields">
+          <ParamField label="Model Bottom Cut Out" unit="mm">
+            <input type="number" min="0" step="0.5" value={s.bo} onChange={(e) => change('bo', +e.target.value)} />
+          </ParamField>
 
-        <label>LO (wire clearance)
-          <input type="number" min="0" step="0.5" value={s.lo} onChange={(e) => change('lo', +e.target.value)} />
-        </label>
-        <label>Kerf (wire Ø comp.)
-          <input type="number" min="0" step="0.1" value={s.kerf ?? 2} onChange={(e) => change('kerf', +e.target.value)} />
-        </label>
-        <label>Top safe offset
-          <input type="number" min="0" step="1" value={s.topOffset ?? 20} onChange={(e) => change('topOffset', +e.target.value)} />
-        </label>
-        <label>Bottom safe point offset (mm)
-          <input
-            type="number"
-            min="0"
-            step="1"
-            value={s.boMargin ?? 20}
-            onChange={(e) => change('boMargin', +e.target.value)}
-          />
-        </label>
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={s.showModelBBox !== false}
-            onChange={(e) => change('showModelBBox', e.target.checked)}
-          />
-          Show model bounding box
-        </label>
-        <label>Overlay thickness
-          <input
-            type="number"
-            min="1"
-            max="10"
-            step="1"
-            value={s.overlayThickness ?? 3}
-            onChange={(e) => change('overlayThickness', +e.target.value)}
-          />
-        </label>
+          {onCutModeChange && cutMode != null && (
+            <ParamField label="Cut method">
+              <select
+                id="setup-cutmode"
+                className="param-field-select"
+                value={cutMode}
+                onChange={(e) => onCutModeChange(e.target.value)}
+              >
+                <option value={CUT_MODE_LEFT_ONLY}>Left only</option>
+                <option value={CUT_MODE_LEFT_TO_RIGHT}>Left → Right</option>
+              </select>
+            </ParamField>
+          )}
+
+          <ParamField label="LO (wire clearance)" unit="mm">
+            <input type="number" min="0" step="0.5" value={s.lo} onChange={(e) => change('lo', +e.target.value)} />
+          </ParamField>
+
+          <ParamField label="Kerf (wire Ø comp.)" unit="mm">
+            <input type="number" min="0" step="0.1" value={s.kerf ?? 2} onChange={(e) => change('kerf', +e.target.value)} />
+          </ParamField>
+
+          <ParamField label="Top safe offset" unit="mm">
+            <input type="number" min="0" step="1" value={s.topOffset ?? 20} onChange={(e) => change('topOffset', +e.target.value)} />
+          </ParamField>
+
+          <ParamField label="Bottom safe point offset" unit="mm">
+            <input type="number" min="0" step="1" value={s.boMargin ?? 20} onChange={(e) => change('boMargin', +e.target.value)} />
+          </ParamField>
+
+          <ParamField label="Overlay thickness">
+            <input type="number" min="1" max="10" step="1" value={s.overlayThickness ?? 3} onChange={(e) => change('overlayThickness', +e.target.value)} />
+          </ParamField>
+
+          <label className="param-field param-field--checkbox">
+            <span className="param-field-label">Show model bounding box</span>
+            <input
+              type="checkbox"
+              checked={s.showModelBBox !== false}
+              onChange={(e) => change('showModelBBox', e.target.checked)}
+            />
+          </label>
+        </div>
 
         <div className="param-field-hidden" aria-hidden="true">
           <label>Profile accuracy (1–10)
-            <input
-              type="range"
-              min="1"
-              max="10"
-              step="1"
-              value={PROFILE_ACCURACY_MAX}
-              readOnly
-              tabIndex={-1}
-            />
+            <input type="range" min="1" max="10" step="1" value={PROFILE_ACCURACY_MAX} readOnly tabIndex={-1} />
           </label>
           <label className="checkbox-label">
             <input type="checkbox" checked readOnly tabIndex={-1} />
