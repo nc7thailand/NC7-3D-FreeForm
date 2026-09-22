@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react'
+import SmartNumberInput from '../components/SmartNumberInput'
 import PageNav from '../components/PageNav'
 import { useAppState } from '../context/AppState'
 import { generateGcode, downloadGcode, defaultGcodeFilename } from '../lib/gcode'
@@ -48,13 +49,13 @@ export default function GcodePage() {
                 <h3>Method 1 · G93</h3>
                 <div className="inputs">
                   <label>Cut feed (mm/min)
-                    <input type="number" min="1" step="10" value={feedRate} onChange={(e) => handleGcodeSettingsChange('feedRate', +e.target.value || 700)} />
+                    <SmartNumberInput min={1} step={10} emptyFallback={700} value={feedRate} onChange={(n) => handleGcodeSettingsChange('feedRate', n)} />
                   </label>
                   <label>Z index feed (G93 F)
-                    <input type="number" min="1" step="1" value={indexFeed} onChange={(e) => handleGcodeSettingsChange('indexFeed', +e.target.value || 160)} />
+                    <SmartNumberInput min={1} step={1} emptyFallback={160} value={indexFeed} onChange={(n) => handleGcodeSettingsChange('indexFeed', n)} />
                   </label>
                   <label>Spindle (S)
-                    <input type="number" min="0" step="100" value={spindle} onChange={(e) => handleGcodeSettingsChange('spindle', +e.target.value || 1000)} />
+                    <SmartNumberInput min={0} step={100} emptyFallback={1000} value={spindle} onChange={(n) => handleGcodeSettingsChange('spindle', n)} />
                   </label>
                 </div>
 

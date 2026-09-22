@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import SmartNumberInput from './SmartNumberInput'
 import { useAppState } from '../context/AppState'
 import {
   SIM_FEED_RATE_UNITS,
@@ -79,13 +80,12 @@ export default function SimulationGcodePanel({ open, onClose }) {
 
         <div className="wsb-sgp-field">
           <label htmlFor="wsb-sgp-feed">Feed rate</label>
-          <input
+          <SmartNumberInput
             id="wsb-sgp-feed"
-            type="number"
-            min="0"
+            min={0}
             step={draftUnit === 'inches/min' ? 1 : 10}
             value={draftRate}
-            onChange={(e) => setDraftRate(e.target.value)}
+            onChange={setDraftRate}
           />
           <select
             className="wsb-sgp-unit"

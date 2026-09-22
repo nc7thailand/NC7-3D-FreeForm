@@ -1,4 +1,5 @@
 import React, { lazy, Suspense, useMemo, useState, useEffect, useCallback } from 'react'
+import SmartNumberInput from '../components/SmartNumberInput'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import SimulationGcodePanel from '../components/SimulationGcodePanel'
 import WireSimulatorBar from '../components/WireSimulatorBar'
@@ -72,12 +73,12 @@ function ToolpathPanel() {
           <h2>Rotation Cuts</h2>
           <div className="inputs">
             <label>Number of cuts (N)
-              <input
-                type="number"
-                min="3"
-                max="64"
+              <SmartNumberInput
+                min={3}
+                max={64}
+                emptyFallback={16}
                 value={rotationN}
-                onChange={(e) => setRotationN(clampN(+e.target.value || 16))}
+                onChange={(n) => setRotationN(clampN(n))}
               />
             </label>
           </div>

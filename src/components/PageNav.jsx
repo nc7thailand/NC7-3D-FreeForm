@@ -1,4 +1,5 @@
 import React from 'react'
+import SmartNumberInput from './SmartNumberInput'
 import { useNavigate } from 'react-router-dom'
 import { ROUTES } from '../routes'
 import { useAppState } from '../context/AppState'
@@ -36,13 +37,13 @@ function ToolpathNavCenter({ onOpenSetup }) {
       </button>
       <label className="header-n-label">
         N
-        <input
-          type="number"
-          min="3"
-          max="64"
+        <SmartNumberInput
+          min={3}
+          max={64}
+          emptyFallback={16}
           className="header-n-input"
           value={rotationN}
-          onChange={(e) => setRotationN(clampN(+e.target.value || 16))}
+          onChange={(n) => setRotationN(clampN(n))}
         />
       </label>
       <button

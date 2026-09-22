@@ -1,4 +1,5 @@
 import React from 'react'
+import SmartNumberInput from '../components/SmartNumberInput'
 import Viewer3D from '../components/Viewer3D'
 import ProjectPanel from '../components/ProjectPanel'
 import PageNav from '../components/PageNav'
@@ -49,9 +50,9 @@ function ModelPanel() {
             <label><input type="radio" checked={unit === 'inch'} onChange={() => setUnit('inch')} /> inch</label>
           </div>
           <div className="inputs">
-            <label>X <input type="number" value={target.x} onChange={(e) => setTarget({ ...target, x: +e.target.value })} /></label>
-            <label>Y <input type="number" value={target.y} onChange={(e) => setTarget({ ...target, y: +e.target.value })} /></label>
-            <label>Z <input type="number" value={target.z} onChange={(e) => setTarget({ ...target, z: +e.target.value })} /></label>
+            <label>X <SmartNumberInput value={target.x} onChange={(x) => setTarget({ ...target, x })} /></label>
+            <label>Y <SmartNumberInput value={target.y} onChange={(y) => setTarget({ ...target, y })} /></label>
+            <label>Z <SmartNumberInput value={target.z} onChange={(z) => setTarget({ ...target, z })} /></label>
           </div>
           <button type="button" onClick={handleResize}>Apply Resize</button>
         </section>
