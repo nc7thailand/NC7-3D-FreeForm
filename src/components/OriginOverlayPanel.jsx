@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useAppState } from '../context/AppState'
+import CenteredModalOverlay from './CenteredModalOverlay'
 
 /**
- * Origin overlay — viewport HUD panel for the 2D preview.
- * Draft-only: the origin marker position commits on Apply.
+ * Origin overlay — centered modal for the 2D preview HUD button.
  */
 export default function OriginOverlayPanel({ open, onClose }) {
-  const { stock, handleStockChange } = useAppState()
+  const { stock, cutMode, commitToolpathSettings } = useAppState()
   const [draftOrigin, setDraftOrigin] = useState('bottom')
   const selectRef = useRef(null)
 
@@ -20,70 +20,56 @@ export default function OriginOverlayPanel({ open, onClose }) {
     return () => clearTimeout(t)
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
-  if (!open) return null
-
-  const handleApply = () => {
-    handleStockChange('originDisplay', draftOrigin)
+  const handleApply = async () => {
+    const applied = stock.originDisplay ?? 'bottom'
     onClose()
+    if (draftOrigin === applied) return
+    await commitToolpathSettings({
+      stock: {
+        ...stock,
+        originDisplay: draftOrigin,
+        originU: undefined,
+        originV: undefined,
+      },
+      cutMode,
+    })
   }
 
   return (
-    <>
-      <div className="backdrop setup-backdrop origin-overlay-backdrop" aria-hidden onClick={onClose} />
-      <div
-        className="origin-overlay"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Origin display"
+    <CenteredModalOverlay
+      open={open}
+      title="Origin"
+      ariaLabel="Origin display"
+      onClose={onClose}
+    >
+      <label className="centered-overlay-label" htmlFor="origin-display-select">
+        Select Origin position
+      </label>
+      <select
+        ref={selectRef}
+        id="origin-display-select"
+        className="centered-overlay-select"
+        value={draftOrigin}
+        onChange={(e) => setDraftOrigin(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            handleApply()
+          }
+        }}
       >
-        <div className="origin-overlay-header">
-          <h2>Origin</h2>
-          <button type="button" className="origin-overlay-close" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-
-        <div className="origin-overlay-row">
-          <label htmlFor="origin-display-select">Select Origin position</label>
-          <select
-            ref={selectRef}
-            id="origin-display-select"
-            className="origin-overlay-select"
-            value={draftOrigin}
-            onChange={(e) => setDraftOrigin(e.target.value)}
-          >
-            <option value="top">Foam Block Top</option>
-            <option value="bottom">Foam Block Bottom</option>
-          </select>
-        </div>
-
-        <p className="origin-overlay-hint">
-          Shows an origin marker at the middle of the foam block&apos;s{' '}
-          {draftOrigin === 'top' ? 'top' : 'bottom'} edge in the 2D view.
-        </p>
-
-        <div className="origin-overlay-actions">
-          <button
-            type="button"
-            className="origin-overlay-btn origin-overlay-apply"
-            onClick={handleApply}
-          >
-            Apply
-          </button>
-        </div>
+        <option value="top">Top of the foam block</option>
+        <option value="bottom">Bottom of the foam block</option>
+      </select>
+      <p className="centered-overlay-hint">
+        Shows an origin marker at the middle of the foam block&apos;s{' '}
+        {draftOrigin === 'top' ? 'top' : 'bottom'} edge in the 2D view.
+      </p>
+      <div className="centered-overlay-actions">
+        <button type="button" className="centered-overlay-apply" onClick={handleApply}>
+          Apply
+        </button>
       </div>
-    </>
+    </CenteredModalOverlay>
   )
 }

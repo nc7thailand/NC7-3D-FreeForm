@@ -51,6 +51,9 @@ const DEFAULT_STOCK = {
   modelOffsetMm: 0,
   /** 2D overlay origin marker: top or bottom middle of the foam block. */
   originDisplay: 'bottom',
+  /** Optional origin marker position in middle-plane X/Y (u/v). When omitted, derived from originDisplay. */
+  originU: undefined,
+  originV: undefined,
 }
 const DEFAULT_ROTATION_N = 16
 

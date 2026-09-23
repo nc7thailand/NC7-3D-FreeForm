@@ -19,10 +19,11 @@ import {
   buildSafeZoneRegions,
   modelBaseGapRect,
   modelTopGapRect,
-  originMarkerUV,
+  resolveOriginUV,
 } from '../lib/cutOverlay'
 import { drawFoamBlockDimensions, pickFoamDimensionHit } from '../lib/foamBlockDimensions'
 import DirectionMarkerOverlayPanel from './DirectionMarkerOverlayPanel'
+import OriginPositionOverlayPanel from './OriginPositionOverlayPanel'
 import Minimap2DOverlay from './Minimap2DOverlay'
 import {
   bottomMarkerU,
@@ -33,6 +34,11 @@ import {
   topMarkerV,
 } from '../lib/markerStockEdit'
 import { measureModelBlockOffset } from '../lib/modelBlockOffset'
+import {
+  OriginPointManager,
+  ORIGIN_FOCUS_BUBBLE,
+  originPulseScale,
+} from '../lib/originPointManager'
 import {
   SafeZoneController,
   SAFE_ZONE,
@@ -120,8 +126,8 @@ function buildOriginHoverTarget(originPt, w, h, stock, zoom, pan) {
       h: axisLen + ORIGIN_GIZMO.LABEL_GAP + 18 + pad,
     },
     detail: {
-      title: 'Origin Coordinate System',
-      lines: [],
+      title: 'Origin point',
+      lines: ['Click to focus · click again to edit'],
     },
   }
 }
@@ -252,7 +258,8 @@ function buildCanvasFocusState(dimHit, hoverHit, overlayCtx = null) {
     const lines = [...(hoverHit.detail.lines ?? [])]
     let bubbleTitle = hoverHit.detail.title
     if (hoverHit.kind === HOVER_KIND.ORIGIN) {
-      lines.push('Tap again to open')
+      lines.length = 0
+      lines.push(ORIGIN_FOCUS_BUBBLE)
     } else if (
       (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED)
       && hoverHit.marker
@@ -380,7 +387,7 @@ function drawArrowhead(ctx, tipX, tipY, angle, size, color) {
 }
 
 /** 2D X/Y axis gizmo — red +X right, green +Y up (screen space). */
-function drawOriginAxisGizmo(ctx, ox, oy) {
+function drawOriginAxisGizmo(ctx, ox, oy, scale = 1) {
   const { X_COLOR, Y_COLOR, LENGTH, SHAFT, ARROW, LABEL_GAP } = ORIGIN_GIZMO
   const baseLen = LENGTH / 4
   const axisLen = baseLen + baseLen * 0.5
@@ -392,6 +399,11 @@ function drawOriginAxisGizmo(ctx, ox, oy) {
   const xTip = ox + axisLen
 
   ctx.save()
+  if (scale !== 1) {
+    ctx.translate(ox, oy)
+    ctx.scale(scale, scale)
+    ctx.translate(-ox, -oy)
+  }
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.shadowColor = 'rgba(0, 0, 0, 0.18)'
@@ -514,6 +526,8 @@ export default function SilhouettePreviewPanel({
   const [bottomMarkerPanel, setBottomMarkerPanel] = useState(null)
   const [topMarkerPanel, setTopMarkerPanel] = useState(null)
   const [modelGapPanel, setModelGapPanel] = useState(null)
+  const [originPositionPanel, setOriginPositionPanel] = useState(null)
+  const [originFocused, setOriginFocused] = useState(false)
   const [canvasFocus, setCanvasFocus] = useState(null)
   const canvasFocusRef = useRef(null)
   canvasFocusRef.current = canvasFocus
@@ -562,6 +576,23 @@ export default function SilhouettePreviewPanel({
             ...stockRef.current,
             modelOffsetType: 'bottom',
             modelOffsetMm: n,
+          },
+          cutMode: cutModeRef.current,
+        })
+      },
+    })
+  }
+  const originManagerRef = useRef(null)
+  if (!originManagerRef.current) {
+    originManagerRef.current = new OriginPointManager({
+      getPosition: () => stockRef.current?.originDisplay ?? 'bottom',
+      onApplyPosition: async (display) => {
+        await commitToolpathRef.current({
+          stock: {
+            ...stockRef.current,
+            originDisplay: display,
+            originU: undefined,
+            originV: undefined,
           },
           cutMode: cutModeRef.current,
         })
@@ -728,6 +759,7 @@ export default function SilhouettePreviewPanel({
 
   const openBottomMarkerPanel = useCallback((hoverHit, role) => {
     setModelGapPanel(null)
+    setOriginPositionPanel(null)
     setTopMarkerPanel(null)
     setBottomMarkerPanel({
       key: `${hoverHit.kind}:${role}:${cutIndex}`,
@@ -748,6 +780,7 @@ export default function SilhouettePreviewPanel({
 
   const openTopMarkerPanel = useCallback((hoverHit) => {
     setModelGapPanel(null)
+    setOriginPositionPanel(null)
     setBottomMarkerPanel(null)
     setTopMarkerPanel({
       key: `${hoverHit.kind}:top:${cutIndex}`,
@@ -769,6 +802,7 @@ export default function SilhouettePreviewPanel({
   const openModelGapPanel = useCallback((zoneHit) => {
     setBottomMarkerPanel(null)
     setTopMarkerPanel(null)
+    setOriginPositionPanel(null)
     const zoneType = zoneHit.zoneType
     const offsetType = zoneType === SAFE_ZONE.TOP ? 'top' : 'bottom'
     const gapMm = Math.round(measureModelBlockOffset(geometry, stock, offsetType))
@@ -789,44 +823,9 @@ export default function SilhouettePreviewPanel({
     })
   }, [cutIndex, geometry, stock])
 
-  const markerPanelOpen = !!(bottomMarkerPanel || topMarkerPanel || modelGapPanel)
-
-  const ensureMarkerPanelVisible = useCallback((panShiftY) => {
-    if (!(panShiftY > 1)) return
-    const nextPanY = panRef.current.y + panShiftY
-    setTransform(zoomRef.current, { x: panRef.current.x, y: nextPanY })
-    setBottomMarkerPanel((prev) => {
-      if (!prev) return prev
-      const wrap = wrapRef.current
-      if (!wrap) return { ...prev, sy: prev.sy + panShiftY }
-      const w = wrap.clientWidth
-      const h = wrap.clientHeight
-      const ctx = overlayContextRef.current
-      if (prev.role === 'top') {
-        const v = topMarkerV(stock, prev.draftValue ?? 20)
-        const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, { x: panRef.current.x, y: nextPanY })
-        return { ...prev, sx: x, sy: y }
-      }
-      if (ctx.block) {
-        const u = bottomMarkerU(prev.role, ctx.block, prev.draftValue ?? 20)
-        const { x, y } = uvToScreen(u, ctx.boV, w, h, stock, zoomRef.current, { x: panRef.current.x, y: nextPanY })
-        return { ...prev, sx: x, sy: y }
-      }
-      return { ...prev, sy: prev.sy + panShiftY }
-    })
-    setTopMarkerPanel((prev) => {
-      if (!prev) return prev
-      const wrap = wrapRef.current
-      if (!wrap) return { ...prev, sy: prev.sy + panShiftY }
-      const w = wrap.clientWidth
-      const h = wrap.clientHeight
-      const v = topMarkerV(stock, prev.draftValue ?? 20)
-      const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, { x: panRef.current.x, y: nextPanY })
-      return { ...prev, sx: x, sy: y }
-    })
-    setModelGapPanel((prev) => (prev ? { ...prev, sy: prev.sy + panShiftY } : prev))
-    simDrawRef.current?.()
-  }, [setTransform, stock])
+  const markerPanelOpen = !!(
+    bottomMarkerPanel || topMarkerPanel || modelGapPanel || originPositionPanel
+  )
 
   const applySafeZoneFocusUi = useCallback((focusState, manager) => {
     if (manager?.state === SAFE_ZONE_STATE.FOCUSED) {
@@ -854,6 +853,8 @@ export default function SilhouettePreviewPanel({
     hoverHit = null,
     direct = false,
   }) => {
+    originManagerRef.current?.reset()
+    setOriginFocused(false)
     const focusKey = `safezone:${zoneType}`
     const zoneHit = safeZoneHitsRef.current.find((z) => z.zoneType === zoneType)
       ?? {
@@ -898,6 +899,8 @@ export default function SilhouettePreviewPanel({
   }, [applySafeZoneFocusUi, openModelGapPanel])
 
   const handleWireMarkerClick = useCallback((hoverHit, role, { direct = false } = {}) => {
+    originManagerRef.current?.reset()
+    setOriginFocused(false)
     const focusKey = `wire:${role}:${hoverHit.marker?.u?.toFixed(3)}:${hoverHit.marker?.v?.toFixed(3)}`
     const focusState = buildCanvasFocusState(null, hoverHit, overlayContextRef.current)
     const openPanel = () => {
@@ -937,6 +940,55 @@ export default function SilhouettePreviewPanel({
     simDrawRef.current?.()
     return true
   }, [openBottomMarkerPanel, openTopMarkerPanel])
+
+  const openOriginPositionPanel = useCallback(() => {
+    setBottomMarkerPanel(null)
+    setTopMarkerPanel(null)
+    setModelGapPanel(null)
+    const display = stock?.originDisplay ?? 'bottom'
+    setOriginPositionPanel({
+      key: `origin:${cutIndex}`,
+      draftValue: display,
+      appliedValue: display,
+    })
+  }, [cutIndex, stock?.originDisplay])
+
+  const handleOriginClick = useCallback((hoverHit, { direct = false } = {}) => {
+    modelGapControllerRef.current?.resetAll()
+    wireSafeControllerRef.current?.resetAll()
+    setCanvasFocus(null)
+
+    const openPanel = () => openOriginPositionPanel()
+    const manager = originManagerRef.current
+
+    if (direct) {
+      manager.openEditorDirect({ openPanel })
+      setOriginFocused(false)
+      setHoverBubble(null)
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      simDrawRef.current?.()
+      return true
+    }
+
+    const result = manager.handleClick({ openPanel })
+    if (result === 'focused') {
+      setOriginFocused(true)
+      wrapRef.current?.classList.add('is-canvas-focused')
+      setHoverBubble({
+        kind: HOVER_KIND.ORIGIN,
+        title: 'Origin point',
+        lines: [ORIGIN_FOCUS_BUBBLE],
+        x: hoverHit.sx,
+        y: hoverHit.sy,
+      })
+    } else if (result === 'editing') {
+      setOriginFocused(false)
+      setHoverBubble(null)
+      wrapRef.current?.classList.remove('is-canvas-focused')
+    }
+    simDrawRef.current?.()
+    return !!result
+  }, [openOriginPositionPanel])
 
   const updateBottomMarkerDraft = useCallback((rawDraft) => {
     const n = Math.max(0, Math.round(Number(rawDraft)))
@@ -1068,6 +1120,34 @@ export default function SilhouettePreviewPanel({
     simDrawRef.current?.()
   }, [])
 
+  const updateOriginPositionDraft = useCallback((value) => {
+    setOriginPositionPanel((prev) => (prev ? { ...prev, draftValue: value } : prev))
+  }, [])
+
+  const applyOriginPositionPanel = useCallback(async (display) => {
+    const unchanged = originPositionPanel?.appliedValue === display
+    setOriginPositionPanel(null)
+    setHoverBubble(null)
+    setOriginFocused(false)
+    if (unchanged) {
+      originManagerRef.current.cancelEdit()
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      return
+    }
+    await originManagerRef.current.applyNewPosition(display)
+    wrapRef.current?.classList.remove('is-canvas-focused')
+    simDrawRef.current?.()
+  }, [originPositionPanel?.appliedValue])
+
+  const closeOriginPositionPanel = useCallback(() => {
+    originManagerRef.current.cancelEdit()
+    setOriginPositionPanel(null)
+    setOriginFocused(false)
+    setHoverBubble(null)
+    wrapRef.current?.classList.remove('is-canvas-focused')
+    simDrawRef.current?.()
+  }, [])
+
   const closeBottomMarkerPanel = useCallback(() => {
     wireSafeControllerRef.current.bottom.cancelEdit()
     setBottomMarkerPanel(null)
@@ -1120,9 +1200,7 @@ export default function SilhouettePreviewPanel({
     const hoverHit = focus.hoverHit
     if (!hoverHit) return
     if (hoverHit.kind === HOVER_KIND.ORIGIN) {
-      onOpenOriginPanelRef.current?.()
-      setCanvasFocus(null)
-      setHoverBubble(null)
+      handleOriginClick(hoverHit)
       return
     }
     if (
@@ -1134,7 +1212,7 @@ export default function SilhouettePreviewPanel({
       if (!role) return
       handleWireMarkerClick(hoverHit, role)
     }
-  }, [handleWireMarkerClick])
+  }, [handleOriginClick, handleWireMarkerClick])
 
   const previewBoMargin = bottomMarkerPanel?.draftValue ?? null
   const previewTopOffset = topMarkerPanel?.draftValue ?? null
@@ -1193,8 +1271,8 @@ export default function SilhouettePreviewPanel({
   }, [geometry, rotationN, cutMode, cutIndex, stock, activeThetaDeg])
 
   const originPt = useMemo(
-    () => originMarkerUV(block, stock?.originDisplay ?? 'bottom'),
-    [block, stock?.originDisplay],
+    () => resolveOriginUV(block, stock),
+    [block, stock],
   )
 
   useEffect(() => {
@@ -1391,9 +1469,12 @@ export default function SilhouettePreviewPanel({
         drawMarkerAt(X(m.u), Y(m.v), m.color, m.dark, m.size)
       }
 
-      const originPt = originMarkerUV(block, originDisplayRef.current)
-      if (originPt) {
-        drawOriginAxisGizmo(ctx, X(originPt.u), Y(originPt.v))
+      const originPtDraw = resolveOriginUV(block, stock)
+      if (originPtDraw) {
+        const pulse = originManagerRef.current?.isFocused?.()
+          ? originPulseScale()
+          : 1
+        drawOriginAxisGizmo(ctx, X(originPtDraw.u), Y(originPtDraw.v), pulse)
       }
 
       // Experimental Sim — the next rotation's start point, drawn last so it
@@ -1497,9 +1578,10 @@ export default function SilhouettePreviewPanel({
     simDrawRef.current?.()
   }, [stock?.originDisplay])
 
-  // Repaint while sim wire blinks or a safe-zone marker is in focused (blinking) state.
+  // Repaint while sim wire blinks, origin scale-pulses, or a zone/marker is focused.
   useEffect(() => {
     const needsBlink = simActive
+      || originFocused
       || modelGapControllerRef.current?.isAnyFocused?.()
       || wireSafeControllerRef.current?.isAnyFocused?.()
     if (!needsBlink) return undefined
@@ -1510,7 +1592,7 @@ export default function SilhouettePreviewPanel({
     }
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [simActive, canvasFocus])
+  }, [simActive, canvasFocus, originFocused])
 
   // Full-job sim playback: integrate distance along the current cut, then auto-
   // advance to the next playable cut until the job is done.
@@ -1694,6 +1776,8 @@ export default function SilhouettePreviewPanel({
   handleWireMarkerClickRef.current = handleWireMarkerClick
   const handleSafeZoneInteractionRef = useRef(handleSafeZoneInteraction)
   handleSafeZoneInteractionRef.current = handleSafeZoneInteraction
+  const handleOriginClickRef = useRef(handleOriginClick)
+  handleOriginClickRef.current = handleOriginClick
 
   const trySafeZonePointer = useCallback((clientX, clientY, { direct = false } = {}) => {
     const wrap = wrapRef.current
@@ -1745,7 +1829,9 @@ export default function SilhouettePreviewPanel({
       || e.target?.closest?.('.canvas-dimension-editor')
       || e.target?.closest?.('.canvas-marker-editor')
       || e.target?.closest?.('.canvas-direction-marker-panel')
-      || e.target?.closest?.('.canvas-marker-panel-backdrop')
+      || e.target?.closest?.('.minimap-2d-widget')
+      || e.target?.closest?.('.centered-modal-backdrop')
+      || e.target?.closest?.('.centered-overlay-panel')
       || e.target?.closest?.('.canvas-hover-bubble')
     )
 
@@ -1798,6 +1884,8 @@ export default function SilhouettePreviewPanel({
       if (!dimHit && !hoverHit && !zoneHit) {
         modelGapControllerRef.current?.resetAll()
         wireSafeControllerRef.current?.resetAll()
+        originManagerRef.current?.reset()
+        setOriginFocused(false)
         setCanvasFocus(null)
         clearHover()
         wrap.classList.remove('is-canvas-focused')
@@ -1820,6 +1908,11 @@ export default function SilhouettePreviewPanel({
       ) {
         const role = classifyMarker(hoverHit.marker, overlayContextRef.current)
         if (role && handleWireMarkerClickRef.current(hoverHit, role)) return
+      }
+
+      if (hoverHit?.kind === HOVER_KIND.ORIGIN) {
+        handleOriginClickRef.current(hoverHit)
+        return
       }
 
       const nextFocus = buildCanvasFocusState(dimHit, hoverHit, overlayContextRef.current)
@@ -1847,6 +1940,7 @@ export default function SilhouettePreviewPanel({
 
     const updateHover = (e) => {
       if (isCoarsePointerRef.current) return
+      if (originManagerRef.current?.isFocused?.()) return
       if (dragRef.current?.panning) {
         setHoverBubble(null)
         wrap.classList.remove('is-dot-hover')
@@ -1978,6 +2072,10 @@ export default function SilhouettePreviewPanel({
       if (trySafeZonePointer(e.clientX, e.clientY)) return
       const { hoverHit, zoneHit } = pickCanvasTargets(e.clientX, e.clientY)
       if (zoneHit) return
+      if (hoverHit?.kind === HOVER_KIND.ORIGIN) {
+        handleOriginClickRef.current(hoverHit)
+        return
+      }
       if (
         hoverHit
         && (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED)
@@ -2094,7 +2192,7 @@ export default function SilhouettePreviewPanel({
       const hoverHit = pickHoverTarget(e.clientX, e.clientY)
       if (hoverHit?.kind === HOVER_KIND.ORIGIN) {
         e.preventDefault()
-        onOpenOriginPanelRef.current?.()
+        handleOriginClickRef.current(hoverHit, { direct: true })
         return
       }
       if (
@@ -2284,21 +2382,12 @@ export default function SilhouettePreviewPanel({
         className={`preview-wrap silhouette-preview-canvas-wrap${isCoarsePointer ? ' is-coarse-pointer' : ''}${canvasFocus ? ' is-canvas-focused' : ''}${markerPanelOpen ? ' is-marker-panel-open' : ''}`}
         ref={wrapRef}
       >
-        {markerPanelOpen && (
-          <div
-            className="canvas-marker-panel-backdrop"
-            aria-hidden="true"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          />
-        )}
         <canvas ref={canvasRef} />
         <Minimap2DOverlay
           stock={stock}
-          geometry={geometry}
           rotationN={rotationN}
-          cutMode={cutMode}
           cutIndex={cutIndex}
+          cutMode={cutMode}
         />
         {hoverBubble && (
           <div
@@ -2353,7 +2442,6 @@ export default function SilhouettePreviewPanel({
           onApply={applyBottomMarkerPanel}
           onDraftChange={updateBottomMarkerDraft}
           onNudge={nudgeBottomMarkerDraft}
-          onEnsureVisible={ensureMarkerPanelVisible}
         />
         <DirectionMarkerOverlayPanel
           panel={topMarkerPanel}
@@ -2361,7 +2449,6 @@ export default function SilhouettePreviewPanel({
           onApply={applyTopMarkerPanel}
           onDraftChange={updateTopMarkerDraft}
           onNudge={nudgeTopMarkerDraft}
-          onEnsureVisible={ensureMarkerPanelVisible}
         />
         <DirectionMarkerOverlayPanel
           panel={modelGapPanel}
@@ -2369,7 +2456,12 @@ export default function SilhouettePreviewPanel({
           onApply={applyModelGapPanel}
           onDraftChange={updateModelGapDraft}
           onNudge={nudgeModelGapDraft}
-          onEnsureVisible={ensureMarkerPanelVisible}
+        />
+        <OriginPositionOverlayPanel
+          panel={originPositionPanel}
+          onClose={closeOriginPositionPanel}
+          onApply={applyOriginPositionPanel}
+          onDraftChange={updateOriginPositionDraft}
         />
         {simActive && drawSimLabel && (
           <button

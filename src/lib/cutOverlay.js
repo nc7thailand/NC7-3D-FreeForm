@@ -361,13 +361,22 @@ export function buildOverlayAnnotations({
   return { block, markers, links }
 }
 
-/** Middle of foam block top or bottom edge in overlay (u, v) coordinates. */
-export function originMarkerUV(block, originDisplay = 'bottom') {
+/**
+ * Resolve origin marker position in overlay (u, v) coordinates.
+ * Uses stock.originU/originV when set; otherwise block centre X and top/bottom Y.
+ */
+export function resolveOriginUV(block, stock) {
   if (!block) return null
-  return {
-    u: (block.leftU + block.rightU) / 2,
-    v: originDisplay === 'top' ? block.topV : block.bottomV,
-  }
+  const u = Number.isFinite(stock?.originU) ? stock.originU : 0
+  const v = Number.isFinite(stock?.originV)
+    ? stock.originV
+    : ((stock?.originDisplay ?? 'bottom') === 'top' ? block.topV : block.bottomV)
+  return { u, v }
+}
+
+/** @deprecated use resolveOriginUV */
+export function originMarkerUV(block, stock) {
+  return resolveOriginUV(block, typeof stock === 'string' ? { originDisplay: stock } : stock)
 }
 
 /**
