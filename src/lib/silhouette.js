@@ -55,7 +55,7 @@ export function shadowGridSpec(bounds, profileAccuracy, gridBins = null) {
   // over the Profile-accuracy mapping; when omitted, accuracy maps as before.
   const vBins = gridBins != null && gridBins > 0
     ? Math.round(gridBins)
-    : Math.round(50 + clampProfileAccuracy(profileAccuracy) * 16)
+    : Math.round(50 + clampProfileAccuracy(profileAccuracy) * 24)
   const uBins = Math.round(vBins * 1.25)
   const vSpan = Math.max(bounds.vMax - bounds.vMin, 1e-6)
   const uSpan = Math.max(bounds.uMax - bounds.uMin, 1e-6)
@@ -381,6 +381,33 @@ export function extractFullSilhouette(geometry, frame, opts = {}) {
 
   const extents = projectFrontToRearExtents(geometry, frame, bbox, opts)
   return mergeFullOutline(extents)
+}
+
+/**
+ * Insert points along an open polyline so no segment exceeds maxStep (mm).
+ * @param {{ u: number, v: number }[]} points
+ * @param {number} maxStep
+ */
+export function densifyPolyline(points, maxStep) {
+  if (!points?.length || !(maxStep > 0)) return points ?? []
+  const out = [{ u: points[0].u, v: points[0].v }]
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]
+    const b = points[i]
+    const du = b.u - a.u
+    const dv = b.v - a.v
+    const len = Math.hypot(du, dv)
+    if (len <= maxStep + 1e-9) {
+      out.push({ u: b.u, v: b.v })
+      continue
+    }
+    const steps = Math.ceil(len / maxStep)
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps
+      out.push({ u: a.u + du * t, v: a.v + dv * t })
+    }
+  }
+  return out
 }
 
 /** Stock → silhouette options for toolpath builders. */

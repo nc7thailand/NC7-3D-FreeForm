@@ -10,12 +10,14 @@
 //
 // This module is pure arithmetic — no canvas, no THREE, no rendering.
 
-import { extractFullSilhouette } from './silhouette.js'
+import { densifyPolyline, extractFullSilhouette } from './silhouette.js'
 import { cuttingPlane, cutBoV, planePointMiddleFromStock } from './toolpath.js'
 import { CUT_MODE_LEFT_ONLY } from './cutJob.js'
 
-// Quality is fixed at High (600 grid bins) for the preview overlay.
-export const OVERLAY_GRID_BINS = 600
+// Quality is fixed at High (1200 grid bins) for the preview overlay.
+export const OVERLAY_GRID_BINS = 1200
+/** Max segment length when smoothing the displayed cut path (mm). */
+export const OVERLAY_CUT_PATH_STEP_MM = 0.5
 
 // Colours shared by the 2D canvas and the 3D overlay so the two views read as
 // the same drawing.
@@ -231,7 +233,6 @@ export function extractOverlayContour(geometry, thetaDeg) {
     // the 3D view at θ ≠ 0.
     const frame = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
     return extractFullSilhouette(geometry, frame, {
-      profileAccuracy: 5,
       gridBins: OVERLAY_GRID_BINS,
     })
   } catch (err) {
@@ -393,7 +394,8 @@ export function buildOverlayData({
   const storedContour = overlayContourFromCutJob(cutJob, cutIndex)
   const contour = storedContour ?? extractOverlayContour(geometry, thetaDeg)
   const boV = cutBoV(stock, geometry)
-  const cutPath = buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY)
+  const rawCutPath = buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY)
+  const cutPath = densifyPolyline(rawCutPath, OVERLAY_CUT_PATH_STEP_MM)
   const annotations = buildOverlayAnnotations({
     cutPath, cutMode, stock, cutIndex, geometry, thetaDeg, boV,
     boMarginOverride, topOffsetOverride,
