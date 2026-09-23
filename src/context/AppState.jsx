@@ -41,6 +41,8 @@ const DEFAULT_STOCK = {
   /** Anchor for vertical model placement in the foam block (Apply on Toolpath). */
   modelOffsetType: 'bottom',
   modelOffsetMm: 0,
+  /** 2D overlay origin marker: top or bottom middle of the foam block. */
+  originDisplay: 'bottom',
 }
 const DEFAULT_ROTATION_N = 16
 
@@ -50,6 +52,24 @@ const DEFAULT_ROTATION_N = 16
  * flash. Jobs slower than that are unaffected.
  */
 const BUSY_MIN_MS = 600
+const STATUS_DISMISS_MS = 3000
+
+/** Success/info toasts auto-clear; errors and in-progress messages stay until replaced. */
+function statusShouldPersist(msg) {
+  if (!msg) return true
+  if (msg.startsWith('Error:')) return true
+  if (/ error:/i.test(msg) || msg.includes(' failed:')) return true
+  if (msg.endsWith('…')) return true
+  if (msg.startsWith('Computing ')) return true
+  if (
+    msg.startsWith('Loading ')
+    || msg.startsWith('Restoring ')
+    || msg.startsWith('Saving ')
+    || msg.startsWith('Opening ')
+  ) return true
+  if (msg.startsWith('Load an STL first')) return true
+  return false
+}
 
 function prepareRawGeometry(geo) {
   if (!geo) return geo
@@ -227,6 +247,12 @@ export function AppStateProvider({ children }) {
     setResetKey((k) => k + 1)
     setToolpathTick((t) => t + 1)
   }, [updateStatsOnly])
+
+  useEffect(() => {
+    if (!status || statusShouldPersist(status)) return undefined
+    const timer = setTimeout(() => setStatus(''), STATUS_DISMISS_MS)
+    return () => clearTimeout(timer)
+  }, [status])
 
   useEffect(() => {
     let cancelled = false

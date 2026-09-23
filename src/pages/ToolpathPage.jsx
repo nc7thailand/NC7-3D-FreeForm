@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useMemo, useState, useEffect, useCallback } from
 import SmartNumberInput from '../components/SmartNumberInput'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import SimulationGcodePanel from '../components/SimulationGcodePanel'
+import OriginOverlayPanel from '../components/OriginOverlayPanel'
 import WireSimulatorBar from '../components/WireSimulatorBar'
 import PageNav from '../components/PageNav'
 import ProjectPanel from '../components/ProjectPanel'
@@ -183,6 +184,7 @@ export default function ToolpathPage() {
 
   // View mode: '2d' (default) — canvas only, no WebGL. '3d' lazy-loads Viewer3D.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
+  const [originPanelOpen, setOriginPanelOpen] = useState(false)
 
   const toggleViewMode = useCallback(() => {
     setViewMode((m) => (m === '2d' ? '3d' : '2d'))
@@ -267,15 +269,28 @@ export default function ToolpathPage() {
         <div className="page-body">
           <div className={`cam-split cam-split--mode-${viewMode}`}>
             <div className="viewport-stage">
-              <button
-                type="button"
-                className="view-hud-toggle"
-                onClick={toggleViewMode}
-                aria-label={show2d ? 'Switch to 3D view' : 'Switch to 2D view'}
-                title={show2d ? 'Switch to 3D' : 'Switch to 2D'}
-              >
-                {show2d ? '3D' : '2D'}
-              </button>
+              <div className="view-hud-stack">
+                <button
+                  type="button"
+                  className="view-hud-toggle"
+                  onClick={toggleViewMode}
+                  aria-label={show2d ? 'Switch to 3D view' : 'Switch to 2D view'}
+                  title={show2d ? 'Switch to 3D' : 'Switch to 2D'}
+                >
+                  {show2d ? '3D' : '2D'}
+                </button>
+                {show2d && (
+                  <button
+                    type="button"
+                    className="view-hud-toggle"
+                    onClick={() => setOriginPanelOpen(true)}
+                    aria-label="Origin display settings"
+                    title="Origin"
+                  >
+                    Origin
+                  </button>
+                )}
+              </div>
               {show2d && (
                 <SilhouettePreviewPanel
                   geometry={geometry}
@@ -356,6 +371,7 @@ export default function ToolpathPage() {
       </main>
 
       <SimulationGcodePanel open={simPanelOpen} onClose={closeSimPanel} />
+      <OriginOverlayPanel open={originPanelOpen} onClose={() => setOriginPanelOpen(false)} />
     </>
   )
 }

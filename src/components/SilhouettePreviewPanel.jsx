@@ -17,6 +17,7 @@ import {
   buildCutPath,
   extractOverlayContour,
   buildOverlayAnnotations,
+  originMarkerUV,
 } from '../lib/cutOverlay'
 import { cutBoV } from '../lib/toolpath'
 import { nextSimDot } from '../lib/simOverlay3d'
@@ -54,6 +55,78 @@ const TRAIL_WIDTH = 1.5
 // Matches cutOverlay.js's MARKER_SIZE so the Sim dot is the same size as the
 // green/red direction markers.
 const MARKER_SIZE = 7
+
+const ORIGIN_GIZMO = {
+  X_COLOR: '#e53935',
+  Y_COLOR: '#43a047',
+  LENGTH: 48,
+  SHAFT: 2.5,
+  ARROW: 8,
+  LABEL_GAP: 4,
+}
+
+function drawArrowhead(ctx, tipX, tipY, angle, size, color) {
+  const base = size * 0.52
+  const bx = tipX - size * Math.cos(angle)
+  const by = tipY - size * Math.sin(angle)
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.moveTo(tipX, tipY)
+  ctx.lineTo(bx + base * Math.cos(angle + Math.PI / 2), by + base * Math.sin(angle + Math.PI / 2))
+  ctx.lineTo(bx + base * Math.cos(angle - Math.PI / 2), by + base * Math.sin(angle - Math.PI / 2))
+  ctx.closePath()
+  ctx.fill()
+}
+
+/** 2D X/Y axis gizmo — red +X right, green +Y up (screen space). */
+function drawOriginAxisGizmo(ctx, ox, oy) {
+  const { X_COLOR, Y_COLOR, LENGTH, SHAFT, ARROW, LABEL_GAP } = ORIGIN_GIZMO
+  const baseLen = LENGTH / 4
+  const axisLen = baseLen + baseLen * 0.5
+  const arrowLen = Math.min(ARROW, baseLen * 0.35) * 2
+  const shaftLen = axisLen - arrowLen
+  const xMid = ox + axisLen / 2
+  const yMid = oy - axisLen / 2
+  const yTip = oy - axisLen
+  const xTip = ox + axisLen
+
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.18)'
+  ctx.shadowBlur = 5
+  ctx.shadowOffsetY = 2
+  ctx.lineWidth = SHAFT
+
+  ctx.strokeStyle = Y_COLOR
+  ctx.beginPath()
+  ctx.moveTo(ox, oy)
+  ctx.lineTo(ox, oy - shaftLen)
+  ctx.stroke()
+  drawArrowhead(ctx, ox, yTip, -Math.PI / 2, arrowLen, Y_COLOR)
+
+  ctx.strokeStyle = X_COLOR
+  ctx.beginPath()
+  ctx.moveTo(ox, oy)
+  ctx.lineTo(ox + shaftLen, oy)
+  ctx.stroke()
+  drawArrowhead(ctx, xTip, oy, 0, arrowLen, X_COLOR)
+
+  ctx.shadowBlur = 0
+  ctx.shadowOffsetY = 0
+
+  ctx.font = 'bold 12px system-ui, sans-serif'
+  ctx.fillStyle = X_COLOR
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillText('X', xMid, oy + LABEL_GAP)
+  ctx.fillStyle = Y_COLOR
+  ctx.textAlign = 'right'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('Y', ox - LABEL_GAP, yMid)
+
+  ctx.restore()
+}
 
 /**
  * Stage 1 two-dimensional silhouette preview — DevFoam-style, synced to the
@@ -113,8 +186,10 @@ export default function SilhouettePreviewPanel({
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const zoomRef = useRef(1)
   const panRef = useRef({ x: 0, y: 0 })
-  const dragRef = useRef(null) // { x, y, pointerId }
-  const pinchRef = useRef(null) // { startDist, startZoom, cx, cy }
+  const dragRef = useRef(null) // { x, y, pointerId } — middle-mouse pan only
+  const pinchRef = useRef(null) // { startDist, startZoom, lastCx, lastCy }
+  const originDisplayRef = useRef(stock?.originDisplay ?? 'bottom')
+  originDisplayRef.current = stock?.originDisplay ?? 'bottom'
   // Sim playback distance along the travel, in mm. Held in a ref (not state)
   // so the animation loop can drive the canvas without re-rendering React on
   // every frame; `simDrawRef` lets the loop call the current draw closure.
@@ -431,6 +506,11 @@ export default function SilhouettePreviewPanel({
         drawMarkerAt(X(m.u), Y(m.v), m.color, m.dark, m.size)
       }
 
+      const originPt = originMarkerUV(block, originDisplayRef.current)
+      if (originPt) {
+        drawOriginAxisGizmo(ctx, X(originPt.u), Y(originPt.v))
+      }
+
       // Experimental Sim — the next rotation's start point, drawn last so it
       // sits on top of every other element. Three strokes on a 9px square:
       // blue outer, 1px gap, yellow inner, white fill.
@@ -513,7 +593,11 @@ export default function SilhouettePreviewPanel({
     ro.observe(wrap)
 
     return () => ro.disconnect()
-  }, [contour, cutPath, boV, fullWirePath, wireCum, annotations, stock, cutIndex, cutMode, activeThetaDeg, zoom, pan, simDot, simActive, useSharedPlayback, drawTrail, drawWireUV, drawSimDistance, playback?.simDistance, playback?.colliding])
+  }, [contour, cutPath, boV, fullWirePath, wireCum, annotations, stock, stock?.originDisplay, cutIndex, cutMode, activeThetaDeg, zoom, pan, simDot, simActive, useSharedPlayback, drawTrail, drawWireUV, drawSimDistance, playback?.simDistance, playback?.colliding])
+
+  useEffect(() => {
+    simDrawRef.current?.()
+  }, [stock?.originDisplay])
 
   // Repaint the canvas while sim is active so the wire marker keeps blinking
   // during pause (not only while the playback loop is running).
@@ -730,7 +814,12 @@ export default function SilhouettePreviewPanel({
     // here, and `setPointerCapture` retargets the gesture to `wrap` — which
     // both pan the canvas and swallow the control's own click. Ignore anything
     // originating in the bar; the controls keep their normal behaviour.
-    const isFromOverlayControl = (e) => !!e.target?.closest?.('.wsb-bar')
+    const isFromOverlayControl = (e) => !!(
+      e.target?.closest?.('.wsb-bar')
+      ||       e.target?.closest?.('.view-hud-stack')
+      || e.target?.closest?.('.view-hud-stack--top-right')
+      || e.target?.closest?.('.silhouette-zoom-controls')
+    )
 
     const onWheel = (e) => {
       if (isFromOverlayControl(e)) return
@@ -741,7 +830,10 @@ export default function SilhouettePreviewPanel({
 
     const onPointerDown = (e) => {
       if (isFromOverlayControl(e)) return
-      if (e.pointerType === 'mouse' && e.button !== 0) return
+      // Left drag does nothing; pan with middle mouse only.
+      if (e.pointerType === 'mouse' && e.button !== 1) return
+      if (e.pointerType === 'touch') return
+      e.preventDefault()
       dragRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId }
       wrap.setPointerCapture(e.pointerId)
       wrap.classList.add('is-panning')
@@ -779,13 +871,15 @@ export default function SilhouettePreviewPanel({
       if (isFromOverlayControl(e)) return
       if (e.touches.length === 2) {
         e.preventDefault()
-        const rect = wrap.getBoundingClientRect()
+        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
+        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
         pinchRef.current = {
           startDist: touchDist(e.touches),
           startZoom: zoomRef.current,
-          cx: (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left,
-          cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top,
+          lastCx: cx,
+          lastCy: cy,
         }
+        wrap.classList.add('is-panning')
       }
     }
 
@@ -793,22 +887,39 @@ export default function SilhouettePreviewPanel({
       const p = pinchRef.current
       if (p && e.touches.length === 2) {
         e.preventDefault()
-        const dist = touchDist(e.touches)
-        if (p.startDist < 1) return
-        const factor = dist / p.startDist
-        const nextZ = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, p.startZoom * factor))
+        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
+        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
+        const dx = cx - p.lastCx
+        const dy = cy - p.lastCy
+        p.lastCx = cx
+        p.lastCy = cy
+
+        const rect = wrap.getBoundingClientRect()
+        const localCx = cx - rect.left
+        const localCy = cy - rect.top
+        const z = zoomRef.current
         const pn = panRef.current
-        // Keep pinch centre fixed.
-        const nextPan = {
-          x: p.cx - (p.cx - pn.x) * (nextZ / zoomRef.current),
-          y: p.cy - (p.cy - pn.y) * (nextZ / zoomRef.current),
+        let nextPan = { x: pn.x + dx, y: pn.y + dy }
+
+        const dist = touchDist(e.touches)
+        const nextZ = p.startDist >= 1
+          ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, p.startZoom * (dist / p.startDist)))
+          : z
+        if (nextZ !== z) {
+          nextPan = {
+            x: localCx - (localCx - nextPan.x) * (nextZ / z),
+            y: localCy - (localCy - nextPan.y) * (nextZ / z),
+          }
         }
         setTransform(nextZ, nextPan)
       }
     }
 
     const onTouchEnd = (e) => {
-      if (e.touches.length < 2) pinchRef.current = null
+      if (e.touches.length < 2) {
+        pinchRef.current = null
+        wrap.classList.remove('is-panning')
+      }
     }
 
     const onDoubleClick = (e) => {

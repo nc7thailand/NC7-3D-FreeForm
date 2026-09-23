@@ -278,6 +278,15 @@ export function buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geo
   return { block, markers, links }
 }
 
+/** Middle of foam block top or bottom edge in overlay (u, v) coordinates. */
+export function originMarkerUV(block, originDisplay = 'bottom') {
+  if (!block) return null
+  return {
+    u: (block.leftU + block.rightU) / 2,
+    v: originDisplay === 'top' ? block.topV : block.bottomV,
+  }
+}
+
 /**
  * One-shot bundle of everything the overlay draws at a given θ.
  * The 2D panel and the 3D Combined view both consume this.
