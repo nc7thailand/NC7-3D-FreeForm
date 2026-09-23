@@ -54,21 +54,20 @@ export default function ToolpathSetupOverlay({ open, onClose }) {
     setDraftCutMode(cutMode)
   }
 
-  const handleReset = () => {
+  const handleReset = async () => {
     resetDraft()
-    onClose()
+    await onClose()
   }
 
   const handleApply = async () => {
     if (!dirty) {
-      // No changes — just close, no recompute.
-      onClose()
+      await onClose()
       return
     }
     setApplying(true)
     try {
       await commitToolpathSettings({ stock: draftStock, cutMode: draftCutMode })
-      onClose()
+      await onClose()
     } finally {
       setApplying(false)
     }

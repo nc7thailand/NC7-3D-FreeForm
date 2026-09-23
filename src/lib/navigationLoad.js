@@ -12,6 +12,7 @@ export const NAV_LOAD_KIND = {
 
 const SESSION_TOOLPATH_AUTO_SETUP_KEY = 'nc7:toolpath-auto-setup-shown'
 const SESSION_TOOLPATH_VIEW_KEY = 'nc7:toolpath-view-mode'
+const SESSION_TOOLPATH_LO_KEY = 'nc7:toolpath-lo-display'
 
 function readNavigationLoadKind() {
   if (typeof performance === 'undefined') return NAV_LOAD_KIND.UNKNOWN
@@ -79,4 +80,18 @@ export function saveToolpathViewMode(mode) {
   if (typeof window === 'undefined' || !window.sessionStorage) return
   const stored = mode === '3d' || mode === 'combined' ? '3d' : '2d'
   window.sessionStorage.setItem(SESSION_TOOLPATH_VIEW_KEY, stored)
+}
+
+/** Lo 3D display shell — default on (low-poly). */
+export function loadToolpathLoDisplay() {
+  if (typeof window === 'undefined' || !window.sessionStorage) return true
+  const v = window.sessionStorage.getItem(SESSION_TOOLPATH_LO_KEY)
+  if (v === '0') return false
+  if (v === '1') return true
+  return true
+}
+
+export function saveToolpathLoDisplay(active) {
+  if (typeof window === 'undefined' || !window.sessionStorage) return
+  window.sessionStorage.setItem(SESSION_TOOLPATH_LO_KEY, active ? '1' : '0')
 }

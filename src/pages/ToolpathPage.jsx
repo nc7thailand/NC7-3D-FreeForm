@@ -11,8 +11,10 @@ import { useAppState } from '../context/AppState'
 import { useSimPlayback } from '../hooks/useSimPlayback'
 import { wirePathFromProfile } from '../lib/wirePath'
 import {
+  loadToolpathLoDisplay,
   loadToolpathViewMode,
   markToolpathAutoSetupShown,
+  saveToolpathLoDisplay,
   saveToolpathViewMode,
   shouldAutoOpenToolpathSetup,
 } from '../lib/navigationLoad'
@@ -188,7 +190,7 @@ export default function ToolpathPage() {
   // View mode: '2d' (default) — canvas only, no WebGL. '3d' lazy-loads Viewer3D.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
   const [originPanelOpen, setOriginPanelOpen] = useState(false)
-  const [loDisplayActive, setLoDisplayActive] = useState(true)
+  const [loDisplayActive, setLoDisplayActive] = useState(loadToolpathLoDisplay)
 
   const toggleViewMode = useCallback(() => {
     setViewMode((m) => (m === '2d' ? '3d' : '2d'))
@@ -197,6 +199,10 @@ export default function ToolpathPage() {
   useEffect(() => {
     saveToolpathViewMode(viewMode)
   }, [viewMode])
+
+  useEffect(() => {
+    saveToolpathLoDisplay(loDisplayActive)
+  }, [loDisplayActive])
 
   // Warm Viewer3D chunk while user works in 2D — faster first 3D open, no GPU cost.
   useEffect(() => {

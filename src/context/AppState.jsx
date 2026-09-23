@@ -20,7 +20,12 @@ import {
 } from '../lib/project'
 import { saveBrowserSession, loadBrowserSession, clearBrowserSession } from '../lib/session'
 import { loadSimSettings, saveSimSettings } from '../lib/simSettings'
-import { cloneStoredGeometry, cutJobNeedsRecompute } from '../lib/toolpathCompute'
+import {
+  bumpModelRevision,
+  cloneStoredGeometry,
+  cutJobNeedsRecompute,
+  modelRevisionOf,
+} from '../lib/toolpathCompute'
 import { buildToolpathDisplayProxy } from '../lib/meshProxy'
 import { shouldAutoOpenToolpathSetup } from '../lib/navigationLoad'
 import { ROUTES } from '../routes'
@@ -87,6 +92,7 @@ function prepareRawGeometry(geo) {
     geo.computeBoundingBox()
     geo.translate(0, -geo.boundingBox.min.y, 0)
     geo.userData.nc7CentroidApplied = true
+    geo.userData.nc7ModelRevision = 1
     geo.computeBoundingBox()
   }
   return geo
@@ -154,9 +160,14 @@ export function AppStateProvider({ children }) {
     highResStoredRef.current.userData.nc7CentroidApplied = true
   }, [])
 
-  const getHiResGeometryForCompute = useCallback(() => (
-    highResStoredRef.current ?? workingRef.current
-  ), [])
+  const getHiResGeometryForCompute = useCallback(() => {
+    const stored = highResStoredRef.current
+    const working = workingRef.current
+    if (!stored) return working
+    if (!working) return stored
+    if (modelRevisionOf(working) > modelRevisionOf(stored)) return working
+    return stored
+  }, [])
 
   const clearToolpathDisplayProxy = useCallback(() => {
     lowPolyDisplayRef.current?.dispose?.()
@@ -504,8 +515,11 @@ export function AppStateProvider({ children }) {
     const factor = computeFitScale(size, targetMM)
     scaleGeometry(workingRef.current, factor)
     workingRef.current.userData.nc7CentroidApplied = true
+    bumpModelRevision(workingRef.current)
+    storeHighResGeometry(workingRef.current)
     setGeometry(workingRef.current)
     updateStatsFrom(workingRef.current)
+    setCutJob(null)
     setStatus(`Scaled by factor ${factor.toFixed(4)} to fit target (${unit}).`)
   }
 
@@ -518,8 +532,11 @@ export function AppStateProvider({ children }) {
     settleGeometry(workingRef.current, { worldMatrix })
     viewerRef.current?.resetMeshTransform?.()
     workingRef.current.userData.nc7CentroidApplied = true
+    bumpModelRevision(workingRef.current)
+    storeHighResGeometry(workingRef.current)
     setGeometry(workingRef.current)
     updateStatsFrom(workingRef.current)
+    setCutJob(null)
     setStatus('Settled: lowest point of bounding box placed on floor (Y=0).')
   }
 
@@ -533,8 +550,11 @@ export function AppStateProvider({ children }) {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
     const result = simplifyGeometry(workingRef.current, { ratio })
     result.geometry.userData.nc7CentroidApplied = true
+    bumpModelRevision(result.geometry)
     workingRef.current = result.geometry
+    storeHighResGeometry(result.geometry)
     setGeometry(result.geometry)
+    setCutJob(null)
     updateStatsFrom(result.geometry)
     setStatus(`Simplified: ${result.originalTriangles} → ${result.newTriangles} triangles`)
   }
@@ -606,6 +626,7 @@ export function AppStateProvider({ children }) {
     if (workingRef.current) {
       settleGeometry(workingRef.current)
       workingRef.current.userData.nc7CentroidApplied = true
+      bumpModelRevision(workingRef.current)
       storeHighResGeometry(workingRef.current)
       setGeometry(workingRef.current)
       updateStatsFrom(workingRef.current)
@@ -642,6 +663,7 @@ export function AppStateProvider({ children }) {
     job.stock = { ...s }
     job.mode = mode
     job.sourceGeometryUuid = geo.uuid
+    job.sourceModelRevision = modelRevisionOf(geo)
     for (const cut of job.cuts) {
       cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
       cut.overlayContour = extractOverlayContour(geo, cut.thetaDeg)
@@ -702,6 +724,25 @@ export function AppStateProvider({ children }) {
       rotationN,
       cutMode,
       sourceGeometryUuid: hiRes.uuid,
+      sourceModelRevision: modelRevisionOf(hiRes),
+    })) {
+      return true
+    }
+    return saveToolpathStage()
+  }, [cutJob, cutMode, getHiResGeometryForCompute, rotationN, saveToolpathStage])
+
+  /**
+   * Setup-close trigger — first visit (or any close with no cutJob yet).
+   * Runs after the blocking setup panel dismisses.
+   */
+  const ensureToolpathAfterSetupClose = useCallback(async () => {
+    const hiRes = getHiResGeometryForCompute()
+    if (!hiRes) return false
+    if (!cutJobNeedsRecompute(cutJob, {
+      rotationN,
+      cutMode,
+      sourceGeometryUuid: hiRes.uuid,
+      sourceModelRevision: modelRevisionOf(hiRes),
     })) {
       return true
     }
@@ -721,6 +762,7 @@ export function AppStateProvider({ children }) {
     viewerRef.current?.resetMeshTransform?.()
     const geo = workingRef.current.clone()
     geo.userData = { ...workingRef.current.userData, nc7CentroidApplied: true }
+    bumpModelRevision(geo)
     workingRef.current = geo
     storeHighResGeometry(geo)
     setGeometry(geo)
@@ -728,6 +770,7 @@ export function AppStateProvider({ children }) {
     setToolpathTick((t) => t + 1)
     setProfile(null)
     setSilhouettePreview(null)
+    setCutJob(null)
     rebuildToolpathDisplayProxy()
     return true
   }, [bakeModelTransform, rebuildToolpathDisplayProxy, stock, storeHighResGeometry, updateStatsOnly])
@@ -760,7 +803,10 @@ export function AppStateProvider({ children }) {
   }, [applyModelBlockOffsetFromStock, saveToolpathStage])
 
   const openToolpathSetup = useCallback(() => setToolpathSetupOpen(true), [])
-  const closeToolpathSetup = useCallback(() => setToolpathSetupOpen(false), [])
+  const closeToolpathSetup = useCallback(async () => {
+    setToolpathSetupOpen(false)
+    await ensureToolpathAfterSetupClose()
+  }, [ensureToolpathAfterSetupClose])
 
   const handleSaveProject = useCallback(async () => {
     if (!workingRef.current) {
