@@ -49,6 +49,8 @@ function serializeCutJob(cutJob) {
   if (!cutJob) return null
   return {
     rotationN: cutJob.rotationN,
+    mode: cutJob.mode ?? null,
+    sourceGeometryUuid: cutJob.sourceGeometryUuid ?? null,
     stock: cutJob.stock ? { ...cutJob.stock } : null,
     cuts: cutJob.cuts.map((cut) => ({
       index: cut.index,
@@ -71,6 +73,8 @@ function deserializeCutJob(data) {
   }))
   return {
     rotationN: data.rotationN,
+    mode: data.mode ?? null,
+    sourceGeometryUuid: data.sourceGeometryUuid ?? null,
     stock: data.stock ? { ...data.stock } : null,
     cuts,
   }

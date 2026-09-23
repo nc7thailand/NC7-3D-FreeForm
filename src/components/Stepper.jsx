@@ -6,7 +6,14 @@ import { useAppState } from '../context/AppState'
 export default function Stepper() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { hasModel, hasToolpath, hasToolpathSaved, saveModelStage, saveToolpathStage } = useAppState()
+  const {
+    hasModel,
+    hasToolpath,
+    hasToolpathSaved,
+    saveModelStage,
+    saveToolpathStage,
+    ensureToolpathOnModelEntry,
+  } = useAppState()
 
   const canVisit = (path) => {
     if (path.endsWith('/model')) return true
@@ -19,7 +26,9 @@ export default function Stepper() {
   const goTo = async (path, e) => {
     if (pathname === ROUTES.model && path === ROUTES.toolpath) {
       e.preventDefault()
-      if (await saveModelStage()) navigate(path)
+      if (!(await saveModelStage())) return
+      if (!(await ensureToolpathOnModelEntry())) return
+      navigate(path)
       return
     }
     if (

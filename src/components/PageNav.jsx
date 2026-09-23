@@ -85,7 +85,16 @@ function ToolpathNavCenter({ onOpenSetup }) {
 
 export default function PageNav({ page }) {
   const navigate = useNavigate()
-  const { hasModel, hasToolpath, saveModelStage, saveToolpathStage, toolpathSetupOpen, openToolpathSetup, closeToolpathSetup } = useAppState()
+  const {
+    hasModel,
+    hasToolpath,
+    saveModelStage,
+    saveToolpathStage,
+    ensureToolpathOnModelEntry,
+    toolpathSetupOpen,
+    openToolpathSetup,
+    closeToolpathSetup,
+  } = useAppState()
 
   const config = {
     model: {
@@ -121,7 +130,10 @@ export default function PageNav({ page }) {
   if (!config) return null
 
   const goNext = async () => {
-    if (page === 'model' && !(await saveModelStage())) return
+    if (page === 'model') {
+      if (!(await saveModelStage())) return
+      if (!(await ensureToolpathOnModelEntry())) return
+    }
     if (page === 'toolpath' && !(await saveToolpathStage())) return
     if (config.next) navigate(config.next)
   }

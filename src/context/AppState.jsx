@@ -20,6 +20,8 @@ import {
 } from '../lib/project'
 import { saveBrowserSession, loadBrowserSession, clearBrowserSession } from '../lib/session'
 import { loadSimSettings, saveSimSettings } from '../lib/simSettings'
+import { cloneStoredGeometry, cutJobNeedsRecompute } from '../lib/toolpathCompute'
+import { shouldAutoOpenToolpathSetup } from '../lib/navigationLoad'
 import { ROUTES } from '../routes'
 
 const DEFAULT_STOCK = {
@@ -134,8 +136,23 @@ export function AppStateProvider({ children }) {
   const simAutoAdvanceRef = useRef(false)
 
   const workingRef = useRef(null)
+  /** Hi-res source mesh for toolpath compute — independent of display geometry (Phase 2). */
+  const highResStoredRef = useRef(null)
   const viewerRef = useRef(null)
   const planePoint = useRef(planePointFromStock(DEFAULT_STOCK))
+
+  const storeHighResGeometry = useCallback((geo) => {
+    if (!geo) {
+      highResStoredRef.current = null
+      return
+    }
+    highResStoredRef.current = cloneStoredGeometry(geo)
+    highResStoredRef.current.userData.nc7CentroidApplied = true
+  }, [])
+
+  const getHiResGeometryForCompute = useCallback(() => (
+    highResStoredRef.current ?? workingRef.current
+  ), [])
 
   const cutCount = effectiveCutCount(rotationN, { mode: cutMode })
   const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / cutCount : 0
@@ -225,6 +242,7 @@ export function AppStateProvider({ children }) {
   const applyRestoredSession = useCallback((data) => {
     data.geometry.userData.nc7CentroidApplied = true
     workingRef.current = data.geometry
+    storeHighResGeometry(data.geometry)
     setGeometry(data.geometry)
     setModelName(data.modelName)
     // Merge over defaults: a session saved before a stock field existed omits
@@ -247,7 +265,7 @@ export function AppStateProvider({ children }) {
     updateStatsOnly(data.geometry)
     setResetKey((k) => k + 1)
     setToolpathTick((t) => t + 1)
-  }, [updateStatsOnly])
+  }, [updateStatsOnly, storeHighResGeometry])
 
   useEffect(() => {
     if (!status || statusShouldPersist(status)) return undefined
@@ -288,6 +306,7 @@ export function AppStateProvider({ children }) {
         if (cancelled) return
         const geo = prepareRawGeometry(rawGeo)
         workingRef.current = geo
+        storeHighResGeometry(geo)
         setGeometry(geo)
         updateStatsFrom(geo)
         setModelName(DUMMY_STL_NAME)
@@ -303,7 +322,7 @@ export function AppStateProvider({ children }) {
 
     initSession()
     return () => { cancelled = true }
-  }, [applyRestoredSession, updateStatsFrom])
+  }, [applyRestoredSession, storeHighResGeometry, updateStatsFrom])
 
   // Preview the buffered cut for the current index. Everything is computed in
   // one batch on Apply, so stepping through cuts never re-runs a silhouette.
@@ -429,6 +448,7 @@ export function AppStateProvider({ children }) {
       })
       const geo = prepareRawGeometry(rawGeo)
       workingRef.current = geo
+      storeHighResGeometry(geo)
       setGeometry(geo)
       updateStatsFrom(geo)
       setModelName(file.name)
@@ -550,6 +570,7 @@ export function AppStateProvider({ children }) {
     if (workingRef.current) {
       settleGeometry(workingRef.current)
       workingRef.current.userData.nc7CentroidApplied = true
+      storeHighResGeometry(workingRef.current)
       setGeometry(workingRef.current)
       updateStatsFrom(workingRef.current)
     }
@@ -560,10 +581,18 @@ export function AppStateProvider({ children }) {
     setToolpathTick((t) => t + 1)
     setStatus('Model saved — settled on floor, ready for toolpath.')
     return true
-  }, [bakeModelTransform, updateStatsFrom])
+  }, [bakeModelTransform, storeHighResGeometry, updateStatsFrom])
 
-  const computeCutJob = useCallback(async (onProgress, stockOverride = null, cutModeOverride = null) => {
-    const geo = workingRef.current
+  /**
+   * Phase 2 choke point — every cutJob is built from hi-res stored geometry,
+   * never from a display proxy mesh.
+   */
+  const computeToolpathFromHiRes = useCallback(async (
+    onProgress,
+    stockOverride = null,
+    cutModeOverride = null,
+  ) => {
+    const geo = getHiResGeometryForCompute()
     if (!geo) return null
     const s = stockOverride ?? stock
     const mode = cutModeOverride ?? cutMode
@@ -574,13 +603,18 @@ export function AppStateProvider({ children }) {
       onProgress,
     })
     job.stock = { ...s }
+    job.mode = mode
+    job.sourceGeometryUuid = geo.uuid
     for (const cut of job.cuts) {
       cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
       cut.overlayContour = extractOverlayContour(geo, cut.thetaDeg)
     }
     attachIndexSafetyToJob(job, geo, s, mode)
     return job
-  }, [rotationN, cutMode, stock])
+  }, [getHiResGeometryForCompute, rotationN, cutMode, stock])
+
+  /** @deprecated internal alias — callers should use computeToolpathFromHiRes. */
+  const computeCutJob = computeToolpathFromHiRes
 
   const saveToolpathStage = useCallback(async (stockOverride = null, cutModeOverride = null) => {
     const geo = workingRef.current
@@ -609,7 +643,32 @@ export function AppStateProvider({ children }) {
     } finally {
       await endBusy()
     }
-  }, [computeCutJob, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+  }, [computeToolpathFromHiRes, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+
+  /**
+   * Model → Toolpath trigger. First visit defers compute to Setup Apply;
+   * return visits compute immediately with committed settings.
+   */
+  const ensureToolpathOnModelEntry = useCallback(async () => {
+    if (shouldAutoOpenToolpathSetup()) return true
+    return saveToolpathStage()
+  }, [saveToolpathStage])
+
+  /**
+   * Refresh trigger — recompute when the restored cutJob is stale vs hi-res source.
+   */
+  const refreshToolpathIfNeeded = useCallback(async () => {
+    const hiRes = getHiResGeometryForCompute()
+    if (!hiRes) return false
+    if (!cutJobNeedsRecompute(cutJob, {
+      rotationN,
+      cutMode,
+      sourceGeometryUuid: hiRes.uuid,
+    })) {
+      return true
+    }
+    return saveToolpathStage()
+  }, [cutJob, cutMode, getHiResGeometryForCompute, rotationN, saveToolpathStage])
 
   /** Bake gizmo, apply foam-block vertical offset, refresh geometry (new clone for React). */
   const applyModelBlockOffsetFromStock = useCallback((stockSnapshot = stock) => {
@@ -713,6 +772,7 @@ export function AppStateProvider({ children }) {
     try {
       const data = await unpackProject(file)
       workingRef.current = data.geometry
+      storeHighResGeometry(data.geometry)
       setGeometry(data.geometry)
       setModelName(data.modelName)
       // Same forward-compatibility merge as applyRestoredSession: an older
@@ -743,7 +803,7 @@ export function AppStateProvider({ children }) {
       setStatus(`Open failed: ${err.message}`)
       return null
     }
-  }, [updateStatsOnly])
+  }, [storeHighResGeometry, updateStatsOnly])
 
   const value = {
     geometry,
@@ -812,6 +872,8 @@ export function AppStateProvider({ children }) {
     handleMeshTransformChange,
     saveModelStage,
     saveToolpathStage,
+    ensureToolpathOnModelEntry,
+    refreshToolpathIfNeeded,
     applyToolpathSettings,
     applyModelBlockOffsetFromStock,
     handleSaveProject,

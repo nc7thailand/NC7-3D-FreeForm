@@ -167,6 +167,7 @@ export default function ToolpathPage() {
     closeSimPanel,
     gcodeSettings,
     sessionReady,
+    refreshToolpathIfNeeded,
   } = useAppState()
 
   const playback = useSimPlayback({
@@ -216,6 +217,18 @@ export default function ToolpathPage() {
     markToolpathAutoSetupShown()
     openToolpathSetup()
   }, [sessionReady, openToolpathSetup])
+
+  // Refresh trigger — recompute from hi-res when the restored cutJob is stale.
+  // Skipped on the first tab visit: Setup Apply is the compute trigger there.
+  useEffect(() => {
+    if (!sessionReady || !geometry) return undefined
+    if (shouldAutoOpenToolpathSetup()) return undefined
+    let cancelled = false
+    ;(async () => {
+      if (!cancelled) await refreshToolpathIfNeeded()
+    })()
+    return () => { cancelled = true }
+  }, [sessionReady, geometry, refreshToolpathIfNeeded])
 
   const wirePointCount = useMemo(() => {
     if (!profile?.polylines?.length) return null

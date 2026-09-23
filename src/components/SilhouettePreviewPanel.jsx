@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from '../lib/cutJob'
+import { effectiveCutCount } from '../lib/cutJob'
 import WireSimulatorBar from './WireSimulatorBar'
 import { useAppState } from '../context/AppState'
 import {
