@@ -194,6 +194,7 @@ savepoint-2026-03-10                (2026-09-10)  toolpath UI + envelope silhoue
 savepoint-2026-03-10-session2       (2026-09-10)  shadow silhouette + floor settle
 savepoint-2026-09-11-settle-fix     (2026-09-11)  โมเดลไม่ร่วงซ้ำ
 savepoint-2026-09-12-center-turntable (2026-09-12) ยืนบนพื้น + gizmo + Center
+savepoint-2026-09-24-minimap-overlays (2026-09-24)  foam-block minimap + centered overlays + origin edit
 ```
 
 ---

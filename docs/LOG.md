@@ -8,6 +8,29 @@
 
 ---
 
+## 2026-09-24 — Minimap ใหม่ + overlay แบบ modal กลางจอ
+
+**Commit:** `bcc3f9d` · **Tag:** `savepoint-2026-09-24-minimap-overlays`
+
+### สิ่งที่ทำ
+
+**1. Minimap — foam block top view**
+ลบจุดแดง N all และวงกลมด้านใน → แสดงบล็อกโฟม W×T มุมมองบน หมุนตามมุมตัด
+จุดน้ำเงินเดียวที่ 9 น. เป็นจุดอ้างอิงตัด ข้อความ `N / N all` อยู่ใต้วงกลม
+โหมด Left to Right ใช้ `effectiveCutCount` (floor N/2)
+
+**2. Centered modal overlays**
+`CenteredModalOverlay` ใช้ร่วมกับ minimap N-all, direction markers, model gap, origin
+Apply จะ recalc เฉพาะเมื่อค่า draft ≠ applied
+
+**3. Origin point editing**
+`originPointManager` — idle → focused → editing พร้อม scale pulse บน canvas
+เลือก origin แบบ top/bottom แทน X/Y input
+
+**ถัดไป:** G-code panel
+
+---
+
 ## 2026-09-12 — ล็อกขอบเขตแอป + กติกาการคำนวณ
 
 **Commit:** `e8f2314` · **Tag:** `savepoint-2026-09-12-center-turntable`
