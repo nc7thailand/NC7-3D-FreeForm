@@ -8,6 +8,7 @@ import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
+import { extractOverlayContour } from '../lib/cutOverlay'
 import { attachIndexSafetyToJob } from '../lib/indexSafety'
 import { wirePathFromProfile } from '../lib/wirePath'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
@@ -575,6 +576,7 @@ export function AppStateProvider({ children }) {
     job.stock = { ...s }
     for (const cut of job.cuts) {
       cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
+      cut.overlayContour = extractOverlayContour(geo, cut.thetaDeg)
     }
     attachIndexSafetyToJob(job, geo, s, mode)
     return job

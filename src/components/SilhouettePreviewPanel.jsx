@@ -14,9 +14,7 @@ import {
 import {
   OVERLAY_GRID_BINS,
   OVERLAY_COLORS,
-  buildCutPath,
-  extractOverlayContour,
-  buildOverlayAnnotations,
+  buildOverlayData,
   originMarkerUV,
 } from '../lib/cutOverlay'
 import { cutBoV } from '../lib/toolpath'
@@ -149,6 +147,7 @@ function drawOriginAxisGizmo(ctx, ox, oy) {
  */
 export default function SilhouettePreviewPanel({
   geometry,
+  cutJob = null,
   thetaDeg,
   cutIndex = 0,
   cutMode,
@@ -318,27 +317,21 @@ export default function SilhouettePreviewPanel({
     setTransform(1, { x: 0, y: 0 })
   }, [setTransform])
 
-  const contour = useMemo(
-    () => extractOverlayContour(geometry, activeThetaDeg),
-    [geometry, activeThetaDeg],
-  )
-
-  const boV = useMemo(
-    () => cutBoV(stock, geometry),
-    [stock, geometry],
-  )
-
-  const cutPath = useMemo(
-    () => buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY),
-    [contour, boV, cutMode],
-  )
-
-  const annotations = useMemo(
-    () => buildOverlayAnnotations({
-      cutPath, cutMode, stock, cutIndex, geometry, thetaDeg: activeThetaDeg, boV,
+  const overlayData = useMemo(
+    () => buildOverlayData({
+      geometry,
+      thetaDeg: activeThetaDeg,
+      stock,
+      cutMode,
+      cutIndex,
+      cutJob,
     }),
-    [cutPath, cutMode, stock, cutIndex, geometry, activeThetaDeg, boV],
+    [geometry, activeThetaDeg, stock, cutMode, cutIndex, cutJob],
   )
+
+  const { contour, cutPath, block, markers, links } = overlayData
+  const boV = overlayData.cutBoV
+  const annotations = { block, markers, links }
 
   // Experimental Sim — the full wire travel for this rotation, used only by the
   // animation. Derived from the drawn link lines, so no geometry is recomputed

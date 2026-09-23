@@ -147,6 +147,7 @@ export default function ToolpathPage() {
     stock,
     thetaDeg,
     profile,
+    cutJob,
     silhouettePreview,
     viewerRef,
     stats,
@@ -185,6 +186,7 @@ export default function ToolpathPage() {
   // View mode: '2d' (default) — canvas only, no WebGL. '3d' lazy-loads Viewer3D.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
   const [originPanelOpen, setOriginPanelOpen] = useState(false)
+  const [loDisplayActive, setLoDisplayActive] = useState(false)
 
   const toggleViewMode = useCallback(() => {
     setViewMode((m) => (m === '2d' ? '3d' : '2d'))
@@ -279,21 +281,30 @@ export default function ToolpathPage() {
                 >
                   {show2d ? '3D' : '2D'}
                 </button>
-                {show2d && (
-                  <button
-                    type="button"
-                    className="view-hud-toggle"
-                    onClick={() => setOriginPanelOpen(true)}
-                    aria-label="Origin display settings"
-                    title="Origin"
-                  >
-                    Origin
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="view-hud-toggle"
+                  onClick={() => setOriginPanelOpen(true)}
+                  aria-label="Origin display settings"
+                  title="Origin"
+                >
+                  Origin
+                </button>
+                <button
+                  type="button"
+                  className={`view-hud-toggle${loDisplayActive ? ' is-active' : ''}`}
+                  onClick={() => setLoDisplayActive((v) => !v)}
+                  aria-label="Low-resolution display"
+                  aria-pressed={loDisplayActive}
+                  title="Lo"
+                >
+                  Lo
+                </button>
               </div>
               {show2d && (
                 <SilhouettePreviewPanel
                   geometry={geometry}
+                  cutJob={cutJob}
                   thetaDeg={thetaDeg}
                   cutIndex={cutIndex}
                   cutMode={cutMode}
@@ -314,6 +325,7 @@ export default function ToolpathPage() {
                       thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
                       cutIndex={cutIndex}
                       stock={stock}
+                      cutJob={cutJob}
                       profile={profile}
                       silhouettePreview={silhouettePreview}
                       cutMode={cutMode}

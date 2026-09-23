@@ -55,6 +55,7 @@ function serializeCutJob(cutJob) {
       thetaDeg: cut.thetaDeg,
       profile: serializeProfile(cut.profile),
       wirePath: cut.wirePath ?? null,
+      overlayContour: cut.overlayContour ?? null,
     })),
   }
 }
@@ -66,6 +67,7 @@ function deserializeCutJob(data) {
     thetaDeg: cut.thetaDeg,
     profile: deserializeProfile(cut.profile),
     wirePath: cut.wirePath ?? null,
+    overlayContour: cut.overlayContour ?? null,
   }))
   return {
     rotationN: data.rotationN,

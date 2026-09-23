@@ -288,11 +288,26 @@ export function originMarkerUV(block, originDisplay = 'bottom') {
 }
 
 /**
+ * Saved overlay contour for one cut — populated at toolpath Apply time so the
+ * display never re-slices the mesh when a cutJob is in memory.
+ */
+export function overlayContourFromCutJob(cutJob, cutIndex) {
+  if (!cutJob?.cuts?.length) return null
+  const cut = cutJob.cuts[Math.min(Math.max(cutIndex, 0), cutJob.cuts.length - 1)]
+  const stored = cut.overlayContour ?? cut.profile?.polylines?.[0]
+  return stored?.length >= 2 ? stored : null
+}
+
+/**
  * One-shot bundle of everything the overlay draws at a given θ.
  * The 2D panel and the 3D Combined view both consume this.
+ *
+ * When `cutJob` holds a saved contour for `cutIndex`, that contour is used
+ * instead of live `extractOverlayContour(geometry, …)` — Phase 1 display path.
  */
-export function buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex }) {
-  const contour = extractOverlayContour(geometry, thetaDeg)
+export function buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex, cutJob }) {
+  const storedContour = overlayContourFromCutJob(cutJob, cutIndex)
+  const contour = storedContour ?? extractOverlayContour(geometry, thetaDeg)
   const boV = cutBoV(stock, geometry)
   const cutPath = buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY)
   const annotations = buildOverlayAnnotations({

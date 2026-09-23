@@ -111,6 +111,7 @@ export default forwardRef(function Viewer3D(
     thetaDeg = 0,
     cutIndex = 0,
     stock,
+    cutJob = null,
     profile,
     silhouettePreview,
     cutMode = CUT_MODE_LEFT_TO_RIGHT,
@@ -1073,7 +1074,7 @@ export default forwardRef(function Viewer3D(
 
     if (!combinedView || !geometry) return
 
-    const data = buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex })
+    const data = buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex, cutJob })
     const { contour, cutPath, markers, links, block, cutBoV } = data
     if (!contour.length) return
 
@@ -1239,7 +1240,7 @@ export default forwardRef(function Viewer3D(
     state.overlaySignature = thetaDeg
 
     return () => disposeGroup()
-  }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex, rotationN])
+  }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex, cutJob, rotationN])
 
   // Combined view: dynamic sim overlay (wire marker ⊥ MP plane, trail, next-cut dot).
   useEffect(() => {
