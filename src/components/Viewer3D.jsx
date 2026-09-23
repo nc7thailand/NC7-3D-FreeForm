@@ -13,7 +13,8 @@ import {
 } from '../lib/toolpath'
 import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
-import { buildOverlayData, OVERLAY_COLORS } from '../lib/cutOverlay'
+import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
+import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
 import {
   createNextDotGroup,
   createSimOverlayGroup,
@@ -248,9 +249,12 @@ export default forwardRef(function Viewer3D(
     camera.position.set(10, 5, 0)
     camera.lookAt(0, 0, 0)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+    })
     renderer.setSize(mount.clientWidth, mount.clientHeight)
-    renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.setPixelRatio(effectivePixelRatio())
     mount.appendChild(renderer.domElement)
 
     // Lights
@@ -552,33 +556,57 @@ export default forwardRef(function Viewer3D(
     // disposed (context-lost) renderer floods the console with shader errors.
     let running = true
     let animId = 0
+    let needsContinuousRender = !readOnlyRef.current
+    let inRender = false
+
+    const renderFrame = () => {
+      if (inRender) return
+      inRender = true
+      try {
+        controls.update()
+
+        if (viewCubeRef.current && state.frameInfo) {
+          viewCubeRef.current.sync(camera, state.frameInfo.center)
+        }
+
+        if (state.simOverlay) {
+          const opacity = wireBlinkOpacity()
+          state.simOverlay.wireGlowMat.opacity = Math.max(0, opacity)
+          state.simOverlay.wireCoreMat.opacity = Math.max(0, opacity * 0.95)
+          state.simOverlay.trailMat.opacity = 0.35
+        }
+
+        if (state.simActive && state.simOverlay) {
+          syncSimOverlay(state.simOverlay, state.simPlayback, state.simOverlayCtx)
+        }
+
+        renderer.render(scene, camera)
+      } finally {
+        inRender = false
+      }
+    }
+
+    const requestRender = () => {
+      if (!running || needsContinuousRender) return
+      renderFrame()
+    }
+
+    state.requestRender = requestRender
+    state.setContinuousRender = (on) => {
+      needsContinuousRender = on
+      if (on) renderFrame()
+    }
+
     const animate = () => {
       if (!running) return
       animId = requestAnimationFrame(animate)
-      controls.update()
-
-      // The bounding box is a static child of the model group and rotates with
-      // it; no per-frame recalculation is needed.
-
-      // Sync the Three.js view cube with the main camera
-      if (viewCubeRef.current && state.frameInfo) {
-        viewCubeRef.current.sync(camera, state.frameInfo.center)
-      }
-
-      if (state.simOverlay) {
-        const opacity = wireBlinkOpacity()
-        state.simOverlay.wireGlowMat.opacity = Math.max(0, opacity)
-        state.simOverlay.wireCoreMat.opacity = Math.max(0, opacity * 0.95)
-        state.simOverlay.trailMat.opacity = 0.35
-      }
-
-      if (state.simActive && state.simOverlay) {
-        syncSimOverlay(state.simOverlay, state.simPlayback, state.simOverlayCtx)
-      }
-
-      renderer.render(scene, camera)
+      if (!needsContinuousRender) return
+      renderFrame()
     }
     animate()
+    renderFrame()
+
+    controls.addEventListener('change', requestRender)
 
     // --- Resize ---
     // Line2 lays its quads out in screen space, so every LineMaterial must be
@@ -602,8 +630,10 @@ export default forwardRef(function Viewer3D(
       const h = mount.clientHeight
       camera.aspect = w / h
       camera.updateProjectionMatrix()
+      renderer.setPixelRatio(effectivePixelRatio())
       renderer.setSize(w, h)
       syncOverlayResolution(w, h)
+      requestRender()
     }
     window.addEventListener('resize', onResize)
 
@@ -620,6 +650,7 @@ export default forwardRef(function Viewer3D(
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKeyDown)
       renderer.domElement.removeEventListener('pointerdown', onMouseDown)
+      controls.removeEventListener('change', requestRender)
       controls.dispose()
       transform.dispose()
       renderer.dispose()
@@ -675,13 +706,19 @@ export default forwardRef(function Viewer3D(
     geometry.computeBoundingBox()
     const com = geometry.boundingBox.getCenter(new THREE.Vector3())
 
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x7fb2d9,
-      side: THREE.DoubleSide,
-      flatShading: true,
-      metalness: 0.1,
-      roughness: 0.6,
-    })
+    const material = readOnly
+      ? new THREE.MeshLambertMaterial({
+        color: 0x7fb2d9,
+        side: THREE.DoubleSide,
+        flatShading: true,
+      })
+      : new THREE.MeshStandardMaterial({
+        color: 0x7fb2d9,
+        side: THREE.DoubleSide,
+        flatShading: true,
+        metalness: 0.1,
+        roughness: 0.6,
+      })
     const mesh = new THREE.Mesh(geometry, material)
     state.mesh = mesh
     // Position the mesh relative to the OBJ_Gizmo pivot.
@@ -747,6 +784,7 @@ export default forwardRef(function Viewer3D(
     // Default camera view = "front" — matches the 2D silhouette's face-on
     // projection (looking along +Z, the same angle the 2D panel draws from).
     state.frameCamera('front')
+    state.requestRender?.()
 
     // Resize the floor plan / world origin markers to match the model scale
     if (state.floorGrid) {
@@ -769,6 +807,7 @@ export default forwardRef(function Viewer3D(
     const axes = new THREE.AxesHelper(maxDim * 0.5)
     state.scene.add(axes)
     state.floorAxes = axes
+    state.requestRender?.()
   }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
 
   useEffect(() => {
@@ -1025,6 +1064,7 @@ export default forwardRef(function Viewer3D(
     if (state.objGizmo) {
       state.objGizmo.rotation.y = toRadians(thetaDeg)
     }
+    state.requestRender?.()
 
     return () => {
       if (state.middlePlaneGroup) {
@@ -1172,6 +1212,52 @@ export default forwardRef(function Viewer3D(
     )
 
     if (block) {
+      const topGap = modelTopGapRect(block, contour)
+      if (topGap) {
+        const gapW = topGap.rightU - topGap.leftU
+        const gapH = topGap.topV - topGap.bottomV
+        const topGapGeo = new THREE.PlaneGeometry(gapW, gapH)
+        const topGapMat = new THREE.MeshBasicMaterial({
+          color: 0x22c55e,
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+          depthTest: false,
+          depthWrite: false,
+        })
+        const topGapMesh = new THREE.Mesh(topGapGeo, topGapMat)
+        topGapMesh.position.set(
+          (topGap.leftU + topGap.rightU) / 2,
+          topGap.bottomV + gapH / 2,
+          -0.01,
+        )
+        topGapMesh.renderOrder = 2
+        group.add(topGapMesh)
+      }
+
+      const baseGap = modelBaseGapRect(block, contour)
+      if (baseGap) {
+        const gapW = baseGap.rightU - baseGap.leftU
+        const gapH = baseGap.topV - baseGap.bottomV
+        const gapGeo = new THREE.PlaneGeometry(gapW, gapH)
+        const gapMat = new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+          depthTest: false,
+          depthWrite: false,
+        })
+        const gapMesh = new THREE.Mesh(gapGeo, gapMat)
+        gapMesh.position.set(
+          (baseGap.leftU + baseGap.rightU) / 2,
+          baseGap.bottomV + gapH / 2,
+          -0.01,
+        )
+        gapMesh.renderOrder = 2
+        group.add(gapMesh)
+      }
+
       const blockPts = [
         { u: block.leftU, v: block.bottomV },
         { u: block.rightU, v: block.bottomV },
@@ -1186,7 +1272,11 @@ export default forwardRef(function Viewer3D(
     addLine(cutPath, OVERLAY_COLORS.cutPath, { opacity: 1, width: 1.5, scale: true })
     // Overlay link lines — green / red, scaled.
     for (const link of links) {
-      addLine([link.from, link.to], link.color, { opacity: 0.95, width: 1.25, scale: true })
+      addLine([link.from, link.to], link.color, {
+        opacity: 0.95,
+        width: 1.25 * overlayScale,
+        dash: OVERLAY_LEAD_DASH,
+      })
     }
 
     // Overlay markers — translucent quads standing on the plane, with a darker
@@ -1238,6 +1328,7 @@ export default forwardRef(function Viewer3D(
     state.scene.add(group)
     state.overlayGroup = group
     state.overlaySignature = thetaDeg
+    state.requestRender?.()
 
     return () => disposeGroup()
   }, [combinedView, geometry, thetaDeg, stock, cutMode, cutIndex, cutJob, rotationN])
@@ -1293,6 +1384,14 @@ export default forwardRef(function Viewer3D(
     state.simPlayback = simPlayback
     state.simOverlayCtx = simOverlayCtxRef.current
   }, [simPlayback, geometry, stock, cutMode, cutIndex, rotationN, thetaDeg])
+
+  // Read-only toolpath view: render on demand unless sim playback is running.
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.setContinuousRender) return
+    state.setContinuousRender(!readOnly || simActive)
+    state.requestRender?.()
+  }, [readOnly, simActive, geometry, resetKey, thetaDeg, cutIndex])
 
   // View-only mode (Page 2): orbit with left-drag, hide gizmo toolbar
   useEffect(() => {

@@ -28,7 +28,86 @@ export const OVERLAY_COLORS = {
   red: '#ef4444',
   redDark: '#b91c1c',
   block: '#8a9099',
+  /** Model position gap — foam block floor up to model silhouette bottom. */
+  modelBaseGapFill: 'rgba(239, 68, 68, 0.28)',
+  /** Model position gap — model silhouette top up to foam block top (v = H). */
+  modelTopGapFill: 'rgba(34, 197, 94, 0.28)',
 }
+
+/** Lowest v on the overlay silhouette — the model's bottom in section view. */
+export function contourMinV(contour) {
+  if (!contour?.length) return 0
+  let minV = contour[0].v
+  for (let i = 1; i < contour.length; i++) {
+    if (contour[i].v < minV) minV = contour[i].v
+  }
+  return minV
+}
+
+/**
+ * Rectangle (u, v) covering the foam pedestal gap under the model, clipped to
+ * the stock block width. Returns null when there is no gap to show.
+ */
+export function modelBaseGapRect(block, contour) {
+  if (!block || !contour?.length) return null
+  const modelBottomV = contourMinV(contour)
+  if (modelBottomV <= block.bottomV + 1e-3) return null
+  return {
+    leftU: block.leftU,
+    rightU: block.rightU,
+    bottomV: block.bottomV,
+    topV: modelBottomV,
+  }
+}
+
+/**
+ * Rectangle (u, v) covering the clearance gap from the model silhouette top
+ * up to the foam block top (v = H) — mirror of modelBaseGapRect at the top.
+ * Returns null when the model already touches the foam ceiling.
+ */
+export function modelTopGapRect(block, contour) {
+  if (!block || !contour?.length) return null
+  const modelTopV = contourMaxV(contour)
+  if (modelTopV >= block.topV - 1e-3) return null
+  return {
+    leftU: block.leftU,
+    rightU: block.rightU,
+    bottomV: modelTopV,
+    topV: block.topV,
+  }
+}
+
+/** Lowest v on the overlay silhouette — the model's top in section view. */
+export function contourMaxV(contour) {
+  if (!contour?.length) return 0
+  let maxV = contour[0].v
+  for (let i = 1; i < contour.length; i++) {
+    if (contour[i].v > maxV) maxV = contour[i].v
+  }
+  return maxV
+}
+
+/**
+ * Model-position zones for the 2D canvas.
+ * Green = model top → foam block top; red = foam floor → model bottom.
+ * @returns {Array<{ zoneType: 'top'|'bottom', role: string, rect: object }>}
+ */
+export function buildSafeZoneRegions({ block, contour }) {
+  if (!block) return []
+  const regions = []
+  const baseGap = modelBaseGapRect(block, contour)
+  if (baseGap) {
+    regions.push({ zoneType: 'bottom', role: 'bottom', rect: baseGap })
+  }
+  const topGap = modelTopGapRect(block, contour)
+  if (topGap) {
+    regions.push({ zoneType: 'top', role: 'top', rect: topGap })
+  }
+  return regions
+}
+
+/** Lead-in / lead-out link dash shared by 2D canvas and 3D combined overlay. */
+export const OVERLAY_LEAD_DASH = [5, 4]
 
 /**
  * Interpolate where edge `a→b` crosses a constant value of `axis`.
@@ -198,7 +277,10 @@ export function blockCenterU(geometry, thetaDeg) {
  *   links: Array<{ from:{u:number,v:number}, to:{u:number,v:number}, color:string }>,
  * }}
  */
-export function buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geometry, thetaDeg, boV: boVOverride }) {
+export function buildOverlayAnnotations({
+  cutPath, cutMode, stock, cutIndex, geometry, thetaDeg,
+  boV: boVOverride, boMarginOverride, topOffsetOverride,
+}) {
   const boV = boVOverride ?? cutBoV(stock, geometry)
   const projectedW = projectedBlockWidth(thetaDeg, stock)
   const uCenter = blockCenterU(geometry, thetaDeg)
@@ -209,7 +291,7 @@ export function buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geo
     bottomV: 0,
   }
 
-  const bottomSafeOffset = stock?.boMargin ?? 20
+  const bottomSafeOffset = boMarginOverride ?? stock?.boMargin ?? 20
   const leftMarkerU = block.leftU - bottomSafeOffset
   const rightMarkerU = block.rightU + bottomSafeOffset
   const markerV = boV
@@ -226,7 +308,7 @@ export function buildOverlayAnnotations({ cutPath, cutMode, stock, cutIndex, geo
 
   if (cutMode === CUT_MODE_LEFT_ONLY) {
     const topMarkerU = 0
-    const topMarkerV = (stock?.h ?? 0) + (stock?.topOffset ?? 20)
+    const topMarkerV = (stock?.h ?? 0) + (topOffsetOverride ?? stock?.topOffset ?? 20)
 
     if (cutPath.length >= 2) {
       const bottomPt = cutPath[0]
@@ -305,13 +387,16 @@ export function overlayContourFromCutJob(cutJob, cutIndex) {
  * When `cutJob` holds a saved contour for `cutIndex`, that contour is used
  * instead of live `extractOverlayContour(geometry, …)` — Phase 1 display path.
  */
-export function buildOverlayData({ geometry, thetaDeg, stock, cutMode, cutIndex, cutJob }) {
+export function buildOverlayData({
+  geometry, thetaDeg, stock, cutMode, cutIndex, cutJob, boMarginOverride, topOffsetOverride,
+}) {
   const storedContour = overlayContourFromCutJob(cutJob, cutIndex)
   const contour = storedContour ?? extractOverlayContour(geometry, thetaDeg)
   const boV = cutBoV(stock, geometry)
   const cutPath = buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY)
   const annotations = buildOverlayAnnotations({
     cutPath, cutMode, stock, cutIndex, geometry, thetaDeg, boV,
+    boMarginOverride, topOffsetOverride,
   })
   return { contour, cutPath, cutBoV: boV, ...annotations }
 }

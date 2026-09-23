@@ -72,10 +72,13 @@ function ToolpathNavCenter({ onOpenSetup }) {
         className={`cut-nav-btn sim-toggle-btn${simActive ? ' is-active' : ''}`}
         onClick={() => setSimActive((v) => !v)}
         aria-pressed={simActive}
-        aria-label="Toggle Sim"
-        title="Sim"
+        aria-label="Toggle simulation"
+        title="Simulation"
       >
-        Sim
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M8 5v14l11-7z" />
+        </svg>
+        Simulation
       </button>
       {/* Play/pause moved into the wire simulator bar (WSB), which appears while
           Sim mode is on. Keeping a second control here would duplicate state. */}
@@ -107,8 +110,8 @@ export default function PageNav({ page }) {
     toolpath: {
       back: ROUTES.model,
       backLabel: '← Back to Model',
-      next: ROUTES.simulate,
-      nextLabel: 'Next → Simulate',
+      next: ROUTES.gcode,
+      nextLabel: 'Next ---> Gcode',
       nextDisabled: !hasToolpath,
     },
     simulate: {

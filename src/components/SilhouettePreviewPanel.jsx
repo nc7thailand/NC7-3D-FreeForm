@@ -14,11 +14,42 @@ import {
 import {
   OVERLAY_GRID_BINS,
   OVERLAY_COLORS,
+  OVERLAY_LEAD_DASH,
   buildOverlayData,
+  buildSafeZoneRegions,
+  modelBaseGapRect,
+  modelTopGapRect,
   originMarkerUV,
 } from '../lib/cutOverlay'
+import { drawFoamBlockDimensions, pickFoamDimensionHit } from '../lib/foamBlockDimensions'
+import DirectionMarkerOverlayPanel from './DirectionMarkerOverlayPanel'
+import Minimap2DOverlay from './Minimap2DOverlay'
+import {
+  bottomMarkerU,
+  classifyMarker,
+  markerCaption,
+  nudgeBoMargin,
+  nudgeTopOffset,
+  topMarkerV,
+} from '../lib/markerStockEdit'
+import { measureModelBlockOffset } from '../lib/modelBlockOffset'
+import {
+  SafeZoneController,
+  SAFE_ZONE,
+  SAFE_ZONE_STATE,
+  safeZoneBlinkOpacity,
+  safeZoneBubbleText,
+  safeZoneFieldLabel,
+  safeZonePanelTitle,
+} from '../lib/safeZoneManager'
 import { cutBoV } from '../lib/toolpath'
 import { nextSimDot } from '../lib/simOverlay3d'
+import {
+  UI_AXES_DISPLAY,
+  displayCoordX,
+  displayCoordY,
+  displayPointLines,
+} from '../lib/uiAxesDisplay'
 
 // Quality is fixed at High (600 grid bins) for the Stage 1 preview.
 const GRID_BINS = OVERLAY_GRID_BINS
@@ -53,6 +84,278 @@ const TRAIL_WIDTH = 1.5
 // Matches cutOverlay.js's MARKER_SIZE so the Sim dot is the same size as the
 // green/red direction markers.
 const MARKER_SIZE = 7
+const MARKER_HIT_PAD = 10
+
+const HOVER_KIND = {
+  SAFE_TOP: 'safeTop',
+  SAFE_BOTTOM: 'safeBottom',
+  GREEN: 'greenDot',
+  RED: 'redDot',
+  SIM: 'simDot',
+  ORIGIN: 'origin',
+}
+
+function hitTargetContains(t, lx, ly) {
+  if (t.hitRect) {
+    const r = t.hitRect
+    return lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h
+  }
+  return Math.abs(lx - t.sx) <= t.half && Math.abs(ly - t.sy) <= t.half
+}
+
+function buildOriginHoverTarget(originPt, w, h, stock, zoom, pan) {
+  if (!originPt) return null
+  const { x: ox, y: oy } = uvToScreen(originPt.u, originPt.v, w, h, stock, zoom, pan)
+  const baseLen = ORIGIN_GIZMO.LENGTH / 4
+  const axisLen = baseLen + baseLen * 0.5
+  const pad = 8
+  return {
+    kind: HOVER_KIND.ORIGIN,
+    sx: ox,
+    sy: oy,
+    hitRect: {
+      x: ox - pad,
+      y: oy - axisLen - pad,
+      w: axisLen + pad * 2 + 18,
+      h: axisLen + ORIGIN_GIZMO.LABEL_GAP + 18 + pad,
+    },
+    detail: {
+      title: 'Origin Coordinate System',
+      lines: [],
+    },
+  }
+}
+
+function overlayStockScale(w, h, stock) {
+  const stockExtent = Math.max(stock?.w ?? 1, stock?.t ?? 1, stock?.h ?? 1, 1)
+  return (Math.min(w, h) * 0.7) / stockExtent
+}
+
+function uvToScreen(u, v, w, h, stock, zoom, pan) {
+  const scale = overlayStockScale(w, h, stock) * zoom
+  return {
+    x: w / 2 + u * scale + pan.x,
+    y: h * 0.8 - v * scale + pan.y,
+  }
+}
+
+function markerHoverDetail(kind, marker, cutIndex) {
+  const isGreen = kind === HOVER_KIND.GREEN
+  const parity = (cutIndex + 1) % 2 === 1 ? 'odd' : 'even'
+  return {
+    title: isGreen ? 'Wire start (green)' : 'Wire end (red)',
+    lines: [
+      `Cut ${cutIndex + 1} · ${parity}`,
+      ...displayPointLines(marker.u, marker.v),
+    ],
+  }
+}
+
+function buildCanvasHoverTargets({
+  markers,
+  simDot,
+  originPt,
+  cutIndex,
+  cutCount,
+  w,
+  h,
+  stock,
+  zoom,
+  pan,
+}) {
+  const targets = []
+  for (const m of markers) {
+    let kind = null
+    if (m.color === OVERLAY_COLORS.green) kind = HOVER_KIND.GREEN
+    else if (m.color === OVERLAY_COLORS.red) kind = HOVER_KIND.RED
+    if (!kind) continue
+    const { x, y } = uvToScreen(m.u, m.v, w, h, stock, zoom, pan)
+    targets.push({
+      kind,
+      marker: m,
+      sx: x,
+      sy: y,
+      half: (m.size ?? MARKER_SIZE) / 2 + MARKER_HIT_PAD,
+      detail: markerHoverDetail(kind, m, cutIndex),
+    })
+  }
+  if (simDot) {
+    const { x, y } = uvToScreen(simDot.u, simDot.v, w, h, stock, zoom, pan)
+    const nextCut = Math.min(cutIndex + 2, cutCount)
+    targets.push({
+      kind: HOVER_KIND.SIM,
+      sx: x,
+      sy: y,
+      half: SIM_DOT_SIZE / 2 + 5,
+      detail: {
+        title: 'Next cut (K)',
+        lines: [
+          `Cut ${nextCut} wire entry`,
+          ...displayPointLines(simDot.u, simDot.v),
+        ],
+      },
+    })
+  }
+  const originTarget = buildOriginHoverTarget(originPt, w, h, stock, zoom, pan)
+  if (originTarget) targets.push(originTarget)
+  return targets
+}
+
+const FOCUS_STROKE = {
+  color: '#2b6cb0',
+  width: 2.5,
+  dash: [5, 4],
+  pad: 4,
+}
+
+function buildCanvasFocusKey(dimHit, hoverHit) {
+  if (dimHit) return `dim:${dimHit.axis}`
+  if (!hoverHit) return null
+  if (hoverHit.marker) {
+    return `${hoverHit.kind}:${hoverHit.marker.u.toFixed(3)}:${hoverHit.marker.v.toFixed(3)}`
+  }
+  return hoverHit.kind
+}
+
+function buildCanvasFocusState(dimHit, hoverHit, overlayCtx = null) {
+  const key = buildCanvasFocusKey(dimHit, hoverHit)
+  if (!key) return null
+
+  if (dimHit) {
+    return {
+      key,
+      kind: 'dim',
+      dimHit,
+      highlight: { ...dimHit.hitRect },
+      bubble: {
+        title: dimHit.axis === 'w' ? 'Foam width (W)' : 'Foam height (H)',
+        lines: [dimHit.label, 'Tap again to edit'],
+        x: dimHit.anchor.x,
+        y: dimHit.anchor.y,
+      },
+    }
+  }
+
+  if (hoverHit) {
+    let highlight
+    if (hoverHit.hitRect) {
+      highlight = { ...hoverHit.hitRect }
+    } else {
+      const half = hoverHit.half ?? MARKER_SIZE / 2 + 4
+      highlight = {
+        x: hoverHit.sx - half - 2,
+        y: hoverHit.sy - half - 2,
+        w: (half + 2) * 2,
+        h: (half + 2) * 2,
+      }
+    }
+    const lines = [...(hoverHit.detail.lines ?? [])]
+    let bubbleTitle = hoverHit.detail.title
+    if (hoverHit.kind === HOVER_KIND.ORIGIN) {
+      lines.push('Tap again to open')
+    } else if (
+      (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED)
+      && hoverHit.marker
+      && overlayCtx
+    ) {
+      const role = classifyMarker(hoverHit.marker, overlayCtx)
+      if (role === 'top') {
+        bubbleTitle = 'Wire safe offset (top)'
+        lines.length = 0
+        lines.push('Distance above foam block top for wire travel.')
+      } else if (role) {
+        bubbleTitle = 'Wire safe offset (BO margin)'
+        lines.length = 0
+        lines.push('Horizontal clearance outside the foam block at BO.')
+      } else {
+        lines.push('Tap again to edit')
+      }
+    } else if (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED) {
+      lines.push('Tap again to edit')
+    }
+    return {
+      key,
+      kind: hoverHit.kind,
+      hoverHit,
+      highlight,
+      bubble: {
+        title: bubbleTitle,
+        lines,
+        x: hoverHit.sx,
+        y: hoverHit.sy,
+      },
+    }
+  }
+
+  return null
+}
+
+function drawCanvasFocusStroke(ctx, highlight, blink = false) {
+  if (!highlight) return
+  const { color, width, dash, pad } = FOCUS_STROKE
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = width
+  ctx.setLineDash(dash)
+  if (blink) ctx.globalAlpha = safeZoneBlinkOpacity()
+  ctx.strokeRect(
+    highlight.x - pad,
+    highlight.y - pad,
+    highlight.w + pad * 2,
+    highlight.h + pad * 2,
+  )
+  ctx.restore()
+}
+
+function uvRectToScreen(rect, X, Y) {
+  const x = X(rect.leftU)
+  const y = Y(rect.topV)
+  const w = X(rect.rightU) - x
+  const h = Y(rect.bottomV) - y
+  return { x, y, w, h }
+}
+
+function screenRectContains(r, lx, ly) {
+  return lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h
+}
+
+function pickSafeZoneHit(lx, ly, hits) {
+  for (let i = hits.length - 1; i >= 0; i--) {
+    if (screenRectContains(hits[i].screenRect, lx, ly)) return hits[i]
+  }
+  return null
+}
+
+function buildSafeZoneFocusState(zoneHit) {
+  const zoneType = zoneHit.zoneType
+  return {
+    key: `safezone:${zoneType}`,
+    kind: zoneType === SAFE_ZONE.TOP ? HOVER_KIND.SAFE_TOP : HOVER_KIND.SAFE_BOTTOM,
+    zoneHit,
+    highlight: { ...zoneHit.screenRect },
+    bubble: {
+      title: safeZonePanelTitle(zoneType),
+      lines: [safeZoneBubbleText(zoneType)],
+      x: zoneHit.sx,
+      y: zoneHit.sy,
+    },
+  }
+}
+
+function drawSafeZoneFocusFill(ctx, screenRect, zoneType, blink) {
+  if (!screenRect) return
+  ctx.save()
+  ctx.fillStyle = zoneType === SAFE_ZONE.TOP
+    ? 'rgba(34, 197, 94, 0.22)'
+    : 'rgba(239, 68, 68, 0.22)'
+  if (blink) ctx.globalAlpha = safeZoneBlinkOpacity()
+  ctx.fillRect(screenRect.x, screenRect.y, screenRect.w, screenRect.h)
+  ctx.strokeStyle = zoneType === SAFE_ZONE.TOP ? '#15803d' : '#b91c1c'
+  ctx.lineWidth = 2
+  ctx.setLineDash([4, 3])
+  ctx.strokeRect(screenRect.x, screenRect.y, screenRect.w, screenRect.h)
+  ctx.restore()
+}
 
 const ORIGIN_GIZMO = {
   X_COLOR: '#e53935',
@@ -156,6 +459,7 @@ export default function SilhouettePreviewPanel({
   playback = null,
   rotationN,
   onOpenSimPanel,
+  onOpenOriginPanel,
 }) {
   const useSharedPlayback = !!playback
   const {
@@ -169,10 +473,15 @@ export default function SilhouettePreviewPanel({
     setSimActive,
     simSettings,
     updateSimSettings,
+    handleStockChange,
+    applyToolpathSettings,
+    commitToolpathSettings,
   } = useAppState()
 
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
+  const onOpenOriginPanelRef = useRef(onOpenOriginPanel)
+  onOpenOriginPanelRef.current = onOpenOriginPanel
   const simJobRef = useRef(null)
   const simJobKeyRef = useRef('')
   const completedLengthRef = useRef(0)
@@ -185,8 +494,95 @@ export default function SilhouettePreviewPanel({
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const zoomRef = useRef(1)
   const panRef = useRef({ x: 0, y: 0 })
-  const dragRef = useRef(null) // { x, y, pointerId } — middle-mouse pan only
+  const dragRef = useRef(null) // { startX, startY, x, y, pointerId, panning } — left-drag pan
+  const pointerTapEligibleRef = useRef(false)
   const pinchRef = useRef(null) // { startDist, startZoom, lastCx, lastCy }
+  const hoverContextRef = useRef({
+    markers: [],
+    simDot: null,
+    cutIndex: 0,
+    cutCount: 0,
+    stock: null,
+  })
+  const [hoverBubble, setHoverBubble] = useState(null)
+  const dimensionHitsRef = useRef([])
+  const safeZoneHitsRef = useRef([])
+  const dimensionInputRef = useRef(null)
+  const [dimensionEdit, setDimensionEdit] = useState(null)
+  const dimensionEditRef = useRef(null)
+  dimensionEditRef.current = dimensionEdit
+  const [bottomMarkerPanel, setBottomMarkerPanel] = useState(null)
+  const [topMarkerPanel, setTopMarkerPanel] = useState(null)
+  const [modelGapPanel, setModelGapPanel] = useState(null)
+  const [canvasFocus, setCanvasFocus] = useState(null)
+  const canvasFocusRef = useRef(null)
+  canvasFocusRef.current = canvasFocus
+  const [isCoarsePointer, setIsCoarsePointer] = useState(false)
+  const isCoarsePointerRef = useRef(false)
+  isCoarsePointerRef.current = isCoarsePointer
+  const overlayContextRef = useRef({})
+  const stockRef = useRef(stock)
+  stockRef.current = stock
+  const handleStockChangeRef = useRef(handleStockChange)
+  handleStockChangeRef.current = handleStockChange
+  const applyToolpathRef = useRef(applyToolpathSettings)
+  applyToolpathRef.current = applyToolpathSettings
+  const commitToolpathRef = useRef(commitToolpathSettings)
+  commitToolpathRef.current = commitToolpathSettings
+  const geometryRef = useRef(geometry)
+  geometryRef.current = geometry
+  const cutModeRef = useRef(cutMode)
+  cutModeRef.current = cutMode
+  const modelGapControllerRef = useRef(null)
+  if (!modelGapControllerRef.current) {
+    modelGapControllerRef.current = new SafeZoneController({
+      getTopValue: () => measureModelBlockOffset(
+        geometryRef.current,
+        stockRef.current,
+        'top',
+      ),
+      getBottomValue: () => measureModelBlockOffset(
+        geometryRef.current,
+        stockRef.current,
+        'bottom',
+      ),
+      onApplyTop: async (n) => {
+        await commitToolpathRef.current({
+          stock: {
+            ...stockRef.current,
+            modelOffsetType: 'top',
+            modelOffsetMm: n,
+          },
+          cutMode: cutModeRef.current,
+        })
+      },
+      onApplyBottom: async (n) => {
+        await commitToolpathRef.current({
+          stock: {
+            ...stockRef.current,
+            modelOffsetType: 'bottom',
+            modelOffsetMm: n,
+          },
+          cutMode: cutModeRef.current,
+        })
+      },
+    })
+  }
+  const wireSafeControllerRef = useRef(null)
+  if (!wireSafeControllerRef.current) {
+    wireSafeControllerRef.current = new SafeZoneController({
+      getTopValue: () => stockRef.current?.topOffset ?? 20,
+      getBottomValue: () => stockRef.current?.boMargin ?? 20,
+      onApplyTop: async (n) => {
+        handleStockChangeRef.current('topOffset', n)
+        await applyToolpathRef.current()
+      },
+      onApplyBottom: async (n) => {
+        handleStockChangeRef.current('boMargin', n)
+        await applyToolpathRef.current()
+      },
+    })
+  }
   const originDisplayRef = useRef(stock?.originDisplay ?? 'bottom')
   originDisplayRef.current = stock?.originDisplay ?? 'bottom'
   // Sim playback distance along the travel, in mm. Held in a ref (not state)
@@ -317,6 +713,432 @@ export default function SilhouettePreviewPanel({
     setTransform(1, { x: 0, y: 0 })
   }, [setTransform])
 
+  const confirmDimensionEdit = useCallback(async (rawValue) => {
+    const edit = dimensionEditRef.current
+    if (!edit) return
+    const n = Math.max(1, Math.round(Number(rawValue)))
+    if (!Number.isFinite(n) || n === edit.value) {
+      setDimensionEdit(null)
+      return
+    }
+    handleStockChange(edit.axis, n)
+    setDimensionEdit(null)
+    await applyToolpathSettings()
+  }, [handleStockChange, applyToolpathSettings])
+
+  const openBottomMarkerPanel = useCallback((hoverHit, role) => {
+    setModelGapPanel(null)
+    setTopMarkerPanel(null)
+    setBottomMarkerPanel({
+      key: `${hoverHit.kind}:${role}:${cutIndex}`,
+      kind: hoverHit.kind,
+      role,
+      placement: 'bottom',
+      panelTitle: 'Wire Safe Offset',
+      caption: markerCaption(hoverHit.kind),
+      fieldLabel: 'Bottom safe offset (BO margin)',
+      sx: hoverHit.sx,
+      sy: hoverHit.sy,
+      draftValue: stock?.boMargin ?? 20,
+      appliedValue: stock?.boMargin ?? 20,
+      nudgeDownLabel: 'Move left 1 mm',
+      nudgeUpLabel: 'Move right 1 mm',
+    })
+  }, [cutIndex, stock?.boMargin])
+
+  const openTopMarkerPanel = useCallback((hoverHit) => {
+    setModelGapPanel(null)
+    setBottomMarkerPanel(null)
+    setTopMarkerPanel({
+      key: `${hoverHit.kind}:top:${cutIndex}`,
+      kind: hoverHit.kind,
+      role: 'top',
+      placement: 'top',
+      panelTitle: 'Wire Safe Offset',
+      caption: markerCaption(hoverHit.kind),
+      fieldLabel: 'Top safe offset',
+      sx: hoverHit.sx,
+      sy: hoverHit.sy,
+      draftValue: stock?.topOffset ?? 20,
+      appliedValue: stock?.topOffset ?? 20,
+      nudgeDownLabel: 'Move down 1 mm',
+      nudgeUpLabel: 'Move up 1 mm',
+    })
+  }, [cutIndex, stock?.topOffset])
+
+  const openModelGapPanel = useCallback((zoneHit) => {
+    setBottomMarkerPanel(null)
+    setTopMarkerPanel(null)
+    const zoneType = zoneHit.zoneType
+    const offsetType = zoneType === SAFE_ZONE.TOP ? 'top' : 'bottom'
+    const gapMm = Math.round(measureModelBlockOffset(geometry, stock, offsetType))
+    setModelGapPanel({
+      key: `modelgap:${zoneType}:${cutIndex}`,
+      zoneType,
+      offsetType,
+      placement: zoneType === SAFE_ZONE.TOP ? 'top' : 'bottom',
+      panelTitle: safeZonePanelTitle(zoneType),
+      caption: zoneType === SAFE_ZONE.TOP ? 'Model position (top)' : 'Model position (bottom)',
+      fieldLabel: safeZoneFieldLabel(zoneType),
+      sx: zoneHit.sx,
+      sy: zoneHit.sy,
+      draftValue: gapMm,
+      appliedValue: gapMm,
+      nudgeDownLabel: 'Decrease gap 1 mm',
+      nudgeUpLabel: 'Increase gap 1 mm',
+    })
+  }, [cutIndex, geometry, stock])
+
+  const markerPanelOpen = !!(bottomMarkerPanel || topMarkerPanel || modelGapPanel)
+
+  const ensureMarkerPanelVisible = useCallback((panShiftY) => {
+    if (!(panShiftY > 1)) return
+    const nextPanY = panRef.current.y + panShiftY
+    setTransform(zoomRef.current, { x: panRef.current.x, y: nextPanY })
+    setBottomMarkerPanel((prev) => {
+      if (!prev) return prev
+      const wrap = wrapRef.current
+      if (!wrap) return { ...prev, sy: prev.sy + panShiftY }
+      const w = wrap.clientWidth
+      const h = wrap.clientHeight
+      const ctx = overlayContextRef.current
+      if (prev.role === 'top') {
+        const v = topMarkerV(stock, prev.draftValue ?? 20)
+        const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, { x: panRef.current.x, y: nextPanY })
+        return { ...prev, sx: x, sy: y }
+      }
+      if (ctx.block) {
+        const u = bottomMarkerU(prev.role, ctx.block, prev.draftValue ?? 20)
+        const { x, y } = uvToScreen(u, ctx.boV, w, h, stock, zoomRef.current, { x: panRef.current.x, y: nextPanY })
+        return { ...prev, sx: x, sy: y }
+      }
+      return { ...prev, sy: prev.sy + panShiftY }
+    })
+    setTopMarkerPanel((prev) => {
+      if (!prev) return prev
+      const wrap = wrapRef.current
+      if (!wrap) return { ...prev, sy: prev.sy + panShiftY }
+      const w = wrap.clientWidth
+      const h = wrap.clientHeight
+      const v = topMarkerV(stock, prev.draftValue ?? 20)
+      const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, { x: panRef.current.x, y: nextPanY })
+      return { ...prev, sx: x, sy: y }
+    })
+    setModelGapPanel((prev) => (prev ? { ...prev, sy: prev.sy + panShiftY } : prev))
+    simDrawRef.current?.()
+  }, [setTransform, stock])
+
+  const applySafeZoneFocusUi = useCallback((focusState, manager) => {
+    if (manager?.state === SAFE_ZONE_STATE.FOCUSED) {
+      setCanvasFocus(focusState)
+      wrapRef.current?.classList.add('is-canvas-focused')
+      setHoverBubble({
+        kind: focusState.kind,
+        title: focusState.bubble.title,
+        lines: focusState.bubble.lines,
+        x: focusState.bubble.x,
+        y: focusState.bubble.y,
+      })
+    } else if (manager?.state === SAFE_ZONE_STATE.EDITING) {
+      setCanvasFocus(null)
+      setHoverBubble(null)
+      wrapRef.current?.classList.remove('is-canvas-focused')
+    }
+    simDrawRef.current?.()
+  }, [])
+
+  const handleSafeZoneInteraction = useCallback(({
+    zoneType,
+    role,
+    anchor,
+    hoverHit = null,
+    direct = false,
+  }) => {
+    const focusKey = `safezone:${zoneType}`
+    const zoneHit = safeZoneHitsRef.current.find((z) => z.zoneType === zoneType)
+      ?? {
+        zoneType,
+        role,
+        sx: anchor.sx,
+        sy: anchor.sy,
+        screenRect: anchor.screenRect ?? { x: anchor.sx - 8, y: anchor.sy - 8, w: 16, h: 16 },
+      }
+    const focusState = buildSafeZoneFocusState(zoneHit)
+
+    const openPanel = () => {
+      openModelGapPanel(zoneHit)
+    }
+
+    const controller = modelGapControllerRef.current
+    if (direct) {
+      controller.openZoneEditorDirect({
+        zoneType,
+        focusKey,
+        context: { hoverHit, focusState, zoneHit },
+        openPanel,
+      })
+      setCanvasFocus(null)
+      setHoverBubble(null)
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      simDrawRef.current?.()
+      return true
+    }
+
+    const handled = controller.handleZoneClick({
+      zoneType,
+      focusKey,
+      context: { hoverHit, focusState, zoneHit },
+      openPanel,
+    })
+    if (!handled) return false
+
+    const manager = controller.managerForZone(zoneType)
+    applySafeZoneFocusUi(focusState, manager)
+    return true
+  }, [applySafeZoneFocusUi, openModelGapPanel])
+
+  const handleWireMarkerClick = useCallback((hoverHit, role, { direct = false } = {}) => {
+    const focusKey = `wire:${role}:${hoverHit.marker?.u?.toFixed(3)}:${hoverHit.marker?.v?.toFixed(3)}`
+    const focusState = buildCanvasFocusState(null, hoverHit, overlayContextRef.current)
+    const openPanel = () => {
+      if (role === 'top') openTopMarkerPanel(hoverHit)
+      else openBottomMarkerPanel(hoverHit, role)
+    }
+
+    const controller = wireSafeControllerRef.current
+    if (direct) {
+      controller.openEditorDirect({ role, focusKey, context: { hoverHit }, openPanel })
+      setCanvasFocus(null)
+      setHoverBubble(null)
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      simDrawRef.current?.()
+      return true
+    }
+
+    const handled = controller.handleMarkerClick({ role, focusKey, context: { hoverHit }, openPanel })
+    if (!handled) return false
+
+    const manager = controller.managerForRole(role)
+    if (manager?.state === SAFE_ZONE_STATE.FOCUSED && focusState) {
+      setCanvasFocus(focusState)
+      wrapRef.current?.classList.add('is-canvas-focused')
+      setHoverBubble({
+        kind: focusState.kind,
+        title: focusState.bubble.title,
+        lines: focusState.bubble.lines,
+        x: focusState.bubble.x,
+        y: focusState.bubble.y,
+      })
+    } else if (manager?.state === SAFE_ZONE_STATE.EDITING) {
+      setCanvasFocus(null)
+      setHoverBubble(null)
+      wrapRef.current?.classList.remove('is-canvas-focused')
+    }
+    simDrawRef.current?.()
+    return true
+  }, [openBottomMarkerPanel, openTopMarkerPanel])
+
+  const updateBottomMarkerDraft = useCallback((rawDraft) => {
+    const n = Math.max(0, Math.round(Number(rawDraft)))
+    if (!Number.isFinite(n)) return
+    setBottomMarkerPanel((prev) => {
+      if (!prev) return prev
+      const wrap = wrapRef.current
+      const ctx = overlayContextRef.current
+      if (!wrap || !ctx.block) {
+        return { ...prev, draftValue: n }
+      }
+      const w = wrap.clientWidth
+      const h = wrap.clientHeight
+      const u = bottomMarkerU(prev.role, ctx.block, n)
+      const { x, y } = uvToScreen(u, ctx.boV, w, h, stock, zoomRef.current, panRef.current)
+      return { ...prev, draftValue: n, sx: x, sy: y }
+    })
+  }, [stock])
+
+  const updateTopMarkerDraft = useCallback((rawDraft) => {
+    const n = Math.max(0, Math.round(Number(rawDraft)))
+    if (!Number.isFinite(n)) return
+    setTopMarkerPanel((prev) => {
+      if (!prev) return prev
+      const wrap = wrapRef.current
+      if (!wrap) return { ...prev, draftValue: n }
+      const w = wrap.clientWidth
+      const h = wrap.clientHeight
+      const v = topMarkerV(stock, n)
+      const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, panRef.current)
+      return { ...prev, draftValue: n, sx: x, sy: y }
+    })
+  }, [stock])
+
+  const applyBottomMarkerPanel = useCallback(async (boMargin) => {
+    const n = Math.max(0, Math.round(Number(boMargin)))
+    const unchanged = bottomMarkerPanel?.appliedValue === n
+    setBottomMarkerPanel(null)
+    setHoverBubble(null)
+    if (unchanged) {
+      wireSafeControllerRef.current.bottom.cancelEdit()
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      return
+    }
+    await wireSafeControllerRef.current.bottom.applyNewValue(boMargin)
+  }, [bottomMarkerPanel?.appliedValue])
+
+  const nudgeBottomMarkerDraft = useCallback((dir) => {
+    setBottomMarkerPanel((prev) => {
+      if (!prev) return prev
+      const n = Math.abs(dir) === 1
+        ? nudgeBoMargin(prev.role, prev.draftValue ?? 20, dir)
+        : Math.max(0, Math.round((prev.draftValue ?? 20) + dir))
+      const wrap = wrapRef.current
+      const ctx = overlayContextRef.current
+      if (!wrap || !ctx.block) return { ...prev, draftValue: n }
+      const w = wrap.clientWidth
+      const h = wrap.clientHeight
+      const u = bottomMarkerU(prev.role, ctx.block, n)
+      const { x, y } = uvToScreen(u, ctx.boV, w, h, stock, zoomRef.current, panRef.current)
+      return { ...prev, draftValue: n, sx: x, sy: y }
+    })
+  }, [stock])
+
+  const nudgeTopMarkerDraft = useCallback((dir) => {
+    setTopMarkerPanel((prev) => {
+      if (!prev) return prev
+      const n = Math.abs(dir) === 1
+        ? nudgeTopOffset(prev.draftValue ?? 20, dir)
+        : Math.max(0, Math.round((prev.draftValue ?? 20) + dir))
+      const wrap = wrapRef.current
+      if (!wrap) return { ...prev, draftValue: n }
+      const w = wrap.clientWidth
+      const h = wrap.clientHeight
+      const v = topMarkerV(stock, n)
+      const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, panRef.current)
+      return { ...prev, draftValue: n, sx: x, sy: y }
+    })
+  }, [stock])
+
+  const applyTopMarkerPanel = useCallback(async (topOffset) => {
+    const n = Math.max(0, Math.round(Number(topOffset)))
+    const unchanged = topMarkerPanel?.appliedValue === n
+    setTopMarkerPanel(null)
+    setHoverBubble(null)
+    if (unchanged) {
+      wireSafeControllerRef.current.top.cancelEdit()
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      return
+    }
+    await wireSafeControllerRef.current.top.applyNewValue(topOffset)
+  }, [topMarkerPanel?.appliedValue])
+
+  const updateModelGapDraft = useCallback((rawDraft) => {
+    const n = Math.max(0, Math.round(Number(rawDraft)))
+    if (!Number.isFinite(n)) return
+    setModelGapPanel((prev) => (prev ? { ...prev, draftValue: n } : prev))
+  }, [])
+
+  const nudgeModelGapDraft = useCallback((dir) => {
+    setModelGapPanel((prev) => {
+      if (!prev) return prev
+      const step = Math.abs(dir) === 1 ? dir : dir
+      const n = Math.max(0, Math.round((prev.draftValue ?? 0) + step))
+      return { ...prev, draftValue: n }
+    })
+  }, [])
+
+  const applyModelGapPanel = useCallback(async (gapMm) => {
+    const panel = modelGapPanel
+    const n = Math.max(0, Math.round(Number(gapMm)))
+    setModelGapPanel(null)
+    setHoverBubble(null)
+    if (panel?.appliedValue === n) {
+      modelGapControllerRef.current.managerForZone(panel.zoneType)?.cancelEdit()
+      wrapRef.current?.classList.remove('is-canvas-focused')
+      return
+    }
+    const manager = modelGapControllerRef.current.managerForZone(panel?.zoneType)
+    await manager?.applyNewValue(n)
+  }, [modelGapPanel])
+
+  const closeModelGapPanel = useCallback(() => {
+    modelGapControllerRef.current.resetAll()
+    setModelGapPanel(null)
+    setCanvasFocus(null)
+    setHoverBubble(null)
+    wrapRef.current?.classList.remove('is-canvas-focused')
+    simDrawRef.current?.()
+  }, [])
+
+  const closeBottomMarkerPanel = useCallback(() => {
+    wireSafeControllerRef.current.bottom.cancelEdit()
+    setBottomMarkerPanel(null)
+    setCanvasFocus(null)
+    setHoverBubble(null)
+    wrapRef.current?.classList.remove('is-canvas-focused')
+    simDrawRef.current?.()
+  }, [])
+
+  const closeTopMarkerPanel = useCallback(() => {
+    wireSafeControllerRef.current.top.cancelEdit()
+    setTopMarkerPanel(null)
+    setCanvasFocus(null)
+    setHoverBubble(null)
+    wrapRef.current?.classList.remove('is-canvas-focused')
+    simDrawRef.current?.()
+  }, [])
+
+  useEffect(() => {
+    if (!dimensionEdit) return undefined
+    const t = setTimeout(() => dimensionInputRef.current?.select(), 0)
+    return () => clearTimeout(t)
+  }, [dimensionEdit])
+
+  useEffect(() => {
+    const mq = window.matchMedia('(hover: none) and (pointer: coarse)')
+    const update = () => setIsCoarsePointer(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
+  useEffect(() => {
+    simDrawRef.current?.()
+  }, [canvasFocus])
+
+  const activateCanvasFocus = useCallback((focus) => {
+    if (!focus) return
+    if (focus.dimHit) {
+      setDimensionEdit({
+        axis: focus.dimHit.axis,
+        value: focus.dimHit.value,
+        x: focus.dimHit.anchor.x,
+        y: focus.dimHit.anchor.y,
+      })
+      setCanvasFocus(null)
+      setHoverBubble(null)
+      return
+    }
+    const hoverHit = focus.hoverHit
+    if (!hoverHit) return
+    if (hoverHit.kind === HOVER_KIND.ORIGIN) {
+      onOpenOriginPanelRef.current?.()
+      setCanvasFocus(null)
+      setHoverBubble(null)
+      return
+    }
+    if (
+      (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED)
+      && hoverHit.marker
+    ) {
+      const ctx = overlayContextRef.current
+      const role = classifyMarker(hoverHit.marker, ctx)
+      if (!role) return
+      handleWireMarkerClick(hoverHit, role)
+    }
+  }, [handleWireMarkerClick])
+
+  const previewBoMargin = bottomMarkerPanel?.draftValue ?? null
+  const previewTopOffset = topMarkerPanel?.draftValue ?? null
+
   const overlayData = useMemo(
     () => buildOverlayData({
       geometry,
@@ -325,8 +1147,10 @@ export default function SilhouettePreviewPanel({
       cutMode,
       cutIndex,
       cutJob,
+      boMarginOverride: previewBoMargin,
+      topOffsetOverride: previewTopOffset,
     }),
-    [geometry, activeThetaDeg, stock, cutMode, cutIndex, cutJob],
+    [geometry, activeThetaDeg, stock, cutMode, cutIndex, cutJob, previewBoMargin, previewTopOffset],
   )
 
   const { contour, cutPath, block, markers, links } = overlayData
@@ -368,6 +1192,29 @@ export default function SilhouettePreviewPanel({
     })
   }, [geometry, rotationN, cutMode, cutIndex, stock, activeThetaDeg])
 
+  const originPt = useMemo(
+    () => originMarkerUV(block, stock?.originDisplay ?? 'bottom'),
+    [block, stock?.originDisplay],
+  )
+
+  useEffect(() => {
+    hoverContextRef.current = {
+      markers: annotations.markers,
+      simDot,
+      originPt,
+      cutIndex,
+      cutCount,
+      stock,
+    }
+    overlayContextRef.current = {
+      block,
+      boV,
+      cutMode,
+      stock,
+      geometry,
+    }
+  }, [annotations.markers, simDot, originPt, cutIndex, cutCount, stock, block, boV, cutMode, geometry])
+
   useEffect(() => {
     const canvas = canvasRef.current
     const wrap = wrapRef.current
@@ -390,6 +1237,8 @@ export default function SilhouettePreviewPanel({
       ctx.fillRect(0, 0, w, h)
 
       if (!contour.length) {
+        dimensionHitsRef.current = []
+        safeZoneHitsRef.current = []
         ctx.fillStyle = '#8892a0'
         ctx.font = '13px system-ui'
         ctx.textAlign = 'center'
@@ -400,12 +1249,7 @@ export default function SilhouettePreviewPanel({
       const z = zoomRef.current
       const pn = panRef.current
 
-      // Stock-based constant scale (foam block size, NOT silhouette bbox).
-      // u = 0 is anchored at canvas centre (w/2); v = 0 near the bottom (0.8h).
-      // The silhouette renders at its true position relative to the axis.
-      const stockExtent = Math.max(stock?.w ?? 1, stock?.t ?? 1, stock?.h ?? 1, 1)
-      const baseScale = (Math.min(w, h) * 0.7) / stockExtent
-
+      const baseScale = overlayStockScale(w, h, stock)
       const scale = baseScale * z
       const X = (u) => w / 2 + u * scale + pn.x
       const Y = (v) => h * 0.8 - v * scale + pn.y
@@ -443,6 +1287,53 @@ export default function SilhouettePreviewPanel({
       )
       ctx.setLineDash([])
       ctx.globalAlpha = 1
+
+      const topGap = modelTopGapRect(block, contour)
+      if (topGap) {
+        ctx.fillStyle = OVERLAY_COLORS.modelTopGapFill
+        ctx.fillRect(
+          X(topGap.leftU),
+          Y(topGap.topV),
+          X(topGap.rightU) - X(topGap.leftU),
+          Y(topGap.bottomV) - Y(topGap.topV),
+        )
+      }
+
+      const baseGap = modelBaseGapRect(block, contour)
+      if (baseGap) {
+        ctx.fillStyle = OVERLAY_COLORS.modelBaseGapFill
+        ctx.fillRect(
+          X(baseGap.leftU),
+          Y(baseGap.topV),
+          X(baseGap.rightU) - X(baseGap.leftU),
+          Y(baseGap.bottomV) - Y(baseGap.topV),
+        )
+      }
+
+      const safeRegions = buildSafeZoneRegions({ block, contour })
+      safeZoneHitsRef.current = safeRegions.map((region) => {
+        const screenRect = uvRectToScreen(region.rect, X, Y)
+        return {
+          ...region,
+          screenRect,
+          sx: screenRect.x + screenRect.w / 2,
+          sy: screenRect.y + screenRect.h / 2,
+        }
+      })
+
+      const blockLeft = X(block.leftU)
+      const blockRight = X(block.rightU)
+      const blockTop = Y(block.topV)
+      const blockBottom = Y(block.bottomV)
+      const { hitTargets: dimHits } = drawFoamBlockDimensions(ctx, {
+        left: blockLeft,
+        right: blockRight,
+        top: blockTop,
+        bottom: blockBottom,
+        w: stock?.w ?? 0,
+        h: stock?.h ?? 0,
+      })
+      dimensionHitsRef.current = dimHits
 
       // Silhouette outline — dashed, 50% opacity.
       ctx.setLineDash([5, 4])
@@ -485,11 +1376,12 @@ export default function SilhouettePreviewPanel({
       const drawLink = (x1, y1, x2, y2, color) => {
         ctx.strokeStyle = color
         ctx.lineWidth = 1.5
-        ctx.setLineDash([])
+        ctx.setLineDash(OVERLAY_LEAD_DASH)
         ctx.beginPath()
         ctx.moveTo(x1, y1)
         ctx.lineTo(x2, y2)
         ctx.stroke()
+        ctx.setLineDash([])
       }
 
       for (const link of annotations.links) {
@@ -578,6 +1470,19 @@ export default function SilhouettePreviewPanel({
           }
         }
       }
+
+      const focusedZone = modelGapControllerRef.current?.focusedZoneType?.()
+      const wireFocused = wireSafeControllerRef.current?.isAnyFocused?.()
+      if (focusedZone) {
+        const zoneScreen = safeZoneHitsRef.current.find((z) => z.zoneType === focusedZone)?.screenRect
+        drawSafeZoneFocusFill(ctx, zoneScreen, focusedZone, true)
+      } else {
+        drawCanvasFocusStroke(
+          ctx,
+          canvasFocusRef.current?.highlight,
+          wireFocused || modelGapControllerRef.current?.isAnyFocused?.(),
+        )
+      }
     }
 
     simDrawRef.current = draw
@@ -592,10 +1497,12 @@ export default function SilhouettePreviewPanel({
     simDrawRef.current?.()
   }, [stock?.originDisplay])
 
-  // Repaint the canvas while sim is active so the wire marker keeps blinking
-  // during pause (not only while the playback loop is running).
+  // Repaint while sim wire blinks or a safe-zone marker is in focused (blinking) state.
   useEffect(() => {
-    if (!simActive) return undefined
+    const needsBlink = simActive
+      || modelGapControllerRef.current?.isAnyFocused?.()
+      || wireSafeControllerRef.current?.isAnyFocused?.()
+    if (!needsBlink) return undefined
     let rafId = 0
     const tick = () => {
       simDrawRef.current?.()
@@ -603,7 +1510,7 @@ export default function SilhouettePreviewPanel({
     }
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [simActive])
+  }, [simActive, canvasFocus])
 
   // Full-job sim playback: integrate distance along the current cut, then auto-
   // advance to the next playable cut until the job is done.
@@ -781,6 +1688,29 @@ export default function SilhouettePreviewPanel({
     setSimPlaying,
   ])
 
+  const activateCanvasFocusRef = useRef(activateCanvasFocus)
+  activateCanvasFocusRef.current = activateCanvasFocus
+  const handleWireMarkerClickRef = useRef(handleWireMarkerClick)
+  handleWireMarkerClickRef.current = handleWireMarkerClick
+  const handleSafeZoneInteractionRef = useRef(handleSafeZoneInteraction)
+  handleSafeZoneInteractionRef.current = handleSafeZoneInteraction
+
+  const trySafeZonePointer = useCallback((clientX, clientY, { direct = false } = {}) => {
+    const wrap = wrapRef.current
+    if (!wrap) return false
+    const rect = wrap.getBoundingClientRect()
+    const lx = clientX - rect.left
+    const ly = clientY - rect.top
+    const zoneHit = pickSafeZoneHit(lx, ly, safeZoneHitsRef.current)
+    if (!zoneHit) return false
+    return handleSafeZoneInteractionRef.current({
+      zoneType: zoneHit.zoneType,
+      role: zoneHit.role,
+      anchor: zoneHit,
+      direct,
+    })
+  }, [])
+
   // Zoom / pan interaction handlers (wheel, pointer drag, pinch).
   useEffect(() => {
     const wrap = wrapRef.current
@@ -809,9 +1739,14 @@ export default function SilhouettePreviewPanel({
     // originating in the bar; the controls keep their normal behaviour.
     const isFromOverlayControl = (e) => !!(
       e.target?.closest?.('.wsb-bar')
-      ||       e.target?.closest?.('.view-hud-stack')
+      || e.target?.closest?.('.view-hud-stack')
       || e.target?.closest?.('.view-hud-stack--top-right')
       || e.target?.closest?.('.silhouette-zoom-controls')
+      || e.target?.closest?.('.canvas-dimension-editor')
+      || e.target?.closest?.('.canvas-marker-editor')
+      || e.target?.closest?.('.canvas-direction-marker-panel')
+      || e.target?.closest?.('.canvas-marker-panel-backdrop')
+      || e.target?.closest?.('.canvas-hover-bubble')
     )
 
     const onWheel = (e) => {
@@ -821,38 +1756,239 @@ export default function SilhouettePreviewPanel({
       zoomAt(e.clientX, e.clientY, factor)
     }
 
+    const DRAG_THRESHOLD = 4
+
+    const pickHoverTarget = (clientX, clientY) => {
+      const ctx = hoverContextRef.current
+      const rect = wrap.getBoundingClientRect()
+      const w = rect.width
+      const h = rect.height
+      if (w < 10 || h < 10) return null
+      const lx = clientX - rect.left
+      const ly = clientY - rect.top
+      const targets = buildCanvasHoverTargets({
+        ...ctx,
+        w,
+        h,
+        zoom: zoomRef.current,
+        pan: panRef.current,
+      })
+      for (let i = targets.length - 1; i >= 0; i--) {
+        if (hitTargetContains(targets[i], lx, ly)) return targets[i]
+      }
+      return null
+    }
+
+    const pickCanvasTargets = (clientX, clientY) => {
+      const rect = wrap.getBoundingClientRect()
+      const lx = clientX - rect.left
+      const ly = clientY - rect.top
+      const dimHit = pickFoamDimensionHit(dimensionHitsRef.current, lx, ly)
+      const zoneHit = dimHit ? null : pickSafeZoneHit(lx, ly, safeZoneHitsRef.current)
+      const hoverHit = (dimHit || zoneHit) ? null : pickHoverTarget(clientX, clientY)
+      return { dimHit, hoverHit, zoneHit }
+    }
+
+    const useTapToFocus = (e) => (
+      e?.pointerType === 'touch' || isCoarsePointerRef.current
+    )
+
+    const handleCoarseTap = (clientX, clientY) => {
+      const { dimHit, hoverHit, zoneHit } = pickCanvasTargets(clientX, clientY)
+      if (!dimHit && !hoverHit && !zoneHit) {
+        modelGapControllerRef.current?.resetAll()
+        wireSafeControllerRef.current?.resetAll()
+        setCanvasFocus(null)
+        clearHover()
+        wrap.classList.remove('is-canvas-focused')
+        simDrawRef.current?.()
+        return
+      }
+
+      if (zoneHit) {
+        if (handleSafeZoneInteractionRef.current({
+          zoneType: zoneHit.zoneType,
+          role: zoneHit.role,
+          anchor: zoneHit,
+        })) return
+      }
+
+      if (
+        hoverHit
+        && (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED)
+        && hoverHit.marker
+      ) {
+        const role = classifyMarker(hoverHit.marker, overlayContextRef.current)
+        if (role && handleWireMarkerClickRef.current(hoverHit, role)) return
+      }
+
+      const nextFocus = buildCanvasFocusState(dimHit, hoverHit, overlayContextRef.current)
+      if (!nextFocus) return
+
+      if (canvasFocusRef.current?.key === nextFocus.key) {
+        activateCanvasFocusRef.current?.(canvasFocusRef.current)
+        wrap.classList.remove('is-canvas-focused')
+        simDrawRef.current?.()
+        return
+      }
+
+      setCanvasFocus(nextFocus)
+      wrap.classList.add('is-canvas-focused')
+      wrap.classList.add('is-dot-hover')
+      setHoverBubble({
+        kind: nextFocus.kind,
+        title: nextFocus.bubble.title,
+        lines: nextFocus.bubble.lines,
+        x: nextFocus.bubble.x,
+        y: nextFocus.bubble.y,
+      })
+      simDrawRef.current?.()
+    }
+
+    const updateHover = (e) => {
+      if (isCoarsePointerRef.current) return
+      if (dragRef.current?.panning) {
+        setHoverBubble(null)
+        wrap.classList.remove('is-dot-hover')
+        wrap.classList.remove('is-safe-zone-hover')
+        return
+      }
+      const rect = wrap.getBoundingClientRect()
+      const zoneHit = pickSafeZoneHit(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        safeZoneHitsRef.current,
+      )
+      if (zoneHit) {
+        wrap.classList.add('is-dot-hover')
+        wrap.classList.add('is-safe-zone-hover')
+        setHoverBubble({
+          kind: zoneHit.zoneType === SAFE_ZONE.TOP ? HOVER_KIND.SAFE_TOP : HOVER_KIND.SAFE_BOTTOM,
+          title: safeZonePanelTitle(zoneHit.zoneType),
+          lines: [safeZoneBubbleText(zoneHit.zoneType), 'Click to focus · click again to edit'],
+          x: zoneHit.sx,
+          y: zoneHit.sy,
+        })
+        return
+      }
+      wrap.classList.remove('is-safe-zone-hover')
+      const hit = pickHoverTarget(e.clientX, e.clientY)
+      if (!hit) {
+        setHoverBubble(null)
+        wrap.classList.remove('is-dot-hover')
+        return
+      }
+      wrap.classList.add('is-dot-hover')
+      setHoverBubble({
+        kind: hit.kind,
+        title: hit.detail.title,
+        lines: hit.detail.lines,
+        x: hit.sx,
+        y: hit.sy,
+      })
+    }
+
+    const clearHover = () => {
+      setHoverBubble(null)
+      wrap.classList.remove('is-dot-hover')
+    }
+
     const onPointerDown = (e) => {
       if (isFromOverlayControl(e)) return
-      // Left drag does nothing; pan with middle mouse only.
-      if (e.pointerType === 'mouse' && e.button !== 1) return
-      if (e.pointerType === 'touch') return
-      e.preventDefault()
-      dragRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId }
-      wrap.setPointerCapture(e.pointerId)
-      wrap.classList.add('is-panning')
+      if (e.pointerType === 'mouse') {
+        if (e.button === 1) return // middle + drag: do nothing
+        if (e.button !== 0) return // left button only
+      }
+      dragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        x: e.clientX,
+        y: e.clientY,
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        panning: false,
+      }
     }
 
     const onPointerMove = (e) => {
       const d = dragRef.current
-      if (!d || d.pointerId !== e.pointerId) return
+      if (!d || d.pointerId !== e.pointerId) {
+        updateHover(e)
+        return
+      }
+
+      if (!d.panning) {
+        const totalDx = e.clientX - d.startX
+        const totalDy = e.clientY - d.startY
+        if (Math.hypot(totalDx, totalDy) < DRAG_THRESHOLD) return
+        d.panning = true
+        e.preventDefault()
+        wrap.setPointerCapture(e.pointerId)
+        wrap.classList.add('is-panning')
+        if (useTapToFocus(e)) {
+          setCanvasFocus(null)
+          wrap.classList.remove('is-canvas-focused')
+          clearHover()
+          simDrawRef.current?.()
+        }
+        const pn = panRef.current
+        setTransform(zoomRef.current, { x: pn.x + totalDx, y: pn.y + totalDy })
+        d.x = e.clientX
+        d.y = e.clientY
+        return
+      }
+
+      e.preventDefault()
       const dx = e.clientX - d.x
       const dy = e.clientY - d.y
       d.x = e.clientX
       d.y = e.clientY
       const pn = panRef.current
       setTransform(zoomRef.current, { x: pn.x + dx, y: pn.y + dy })
+      if (!useTapToFocus(e)) clearHover()
     }
 
     const endPan = (e) => {
       const d = dragRef.current
       if (!d) return
       if (e && e.pointerId && d.pointerId !== e.pointerId) return
+      const wasPanning = d.panning
+      const pointerType = d.pointerType
       dragRef.current = null
       wrap.classList.remove('is-panning')
-      if (e && e.pointerId != null) {
+      if (wasPanning && e?.pointerId != null) {
         try { wrap.releasePointerCapture(e.pointerId) } catch (_) {}
       }
+      if (!wasPanning && e) {
+        if (pointerType === 'touch' || isCoarsePointerRef.current) {
+          handleCoarseTap(e.clientX, e.clientY)
+          return
+        }
+        if (pointerType === 'mouse') {
+          pointerTapEligibleRef.current = true
+        }
+      }
+      if (e) updateHover(e)
     }
+
+    const onClick = (e) => {
+      if (isFromOverlayControl(e)) return
+      if (!pointerTapEligibleRef.current) return
+      pointerTapEligibleRef.current = false
+      if (trySafeZonePointer(e.clientX, e.clientY)) return
+      const { hoverHit, zoneHit } = pickCanvasTargets(e.clientX, e.clientY)
+      if (zoneHit) return
+      if (
+        hoverHit
+        && (hoverHit.kind === HOVER_KIND.GREEN || hoverHit.kind === HOVER_KIND.RED)
+        && hoverHit.marker
+      ) {
+        const role = classifyMarker(hoverHit.marker, overlayContextRef.current)
+        if (role) handleWireMarkerClickRef.current(hoverHit, role)
+      }
+    }
+
+    const onPointerLeave = () => clearHover()
 
     // Pinch (two-finger) zoom for touch.
     const touchDist = (touches) => Math.hypot(
@@ -862,6 +1998,13 @@ export default function SilhouettePreviewPanel({
 
     const onTouchStart = (e) => {
       if (isFromOverlayControl(e)) return
+      if (e.touches.length >= 2) {
+        dragRef.current = null
+        setCanvasFocus(null)
+        wrap.classList.remove('is-canvas-focused')
+        clearHover()
+        simDrawRef.current?.()
+      }
       if (e.touches.length === 2) {
         e.preventDefault()
         const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
@@ -917,14 +2060,64 @@ export default function SilhouettePreviewPanel({
 
     const onDoubleClick = (e) => {
       if (isFromOverlayControl(e)) return
+      const rect = wrap.getBoundingClientRect()
+      const hit = pickFoamDimensionHit(
+        dimensionHitsRef.current,
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+      )
+      if (hit) {
+        e.preventDefault()
+        setDimensionEdit({
+          axis: hit.axis,
+          value: hit.value,
+          x: hit.anchor.x,
+          y: hit.anchor.y,
+        })
+        return
+      }
+      const zoneHit = pickSafeZoneHit(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        safeZoneHitsRef.current,
+      )
+      if (zoneHit) {
+        e.preventDefault()
+        handleSafeZoneInteractionRef.current({
+          zoneType: zoneHit.zoneType,
+          role: zoneHit.role,
+          anchor: zoneHit,
+          direct: true,
+        })
+        return
+      }
+      const hoverHit = pickHoverTarget(e.clientX, e.clientY)
+      if (hoverHit?.kind === HOVER_KIND.ORIGIN) {
+        e.preventDefault()
+        onOpenOriginPanelRef.current?.()
+        return
+      }
+      if (
+        (hoverHit?.kind === HOVER_KIND.GREEN || hoverHit?.kind === HOVER_KIND.RED)
+        && hoverHit.marker
+      ) {
+        e.preventDefault()
+        const ctx = overlayContextRef.current
+        const role = classifyMarker(hoverHit.marker, ctx)
+        if (!role) return
+        handleWireMarkerClickRef.current(hoverHit, role, { direct: true })
+        return
+      }
       resetView()
     }
 
     wrap.addEventListener('wheel', onWheel, { passive: false })
+    wrap.addEventListener('click', onClick)
     wrap.addEventListener('pointerdown', onPointerDown)
     wrap.addEventListener('pointermove', onPointerMove)
     wrap.addEventListener('pointerup', endPan)
     wrap.addEventListener('pointercancel', endPan)
+    wrap.addEventListener('pointerleave', onPointerLeave)
     wrap.addEventListener('touchstart', onTouchStart, { passive: false })
     wrap.addEventListener('touchmove', onTouchMove, { passive: false })
     wrap.addEventListener('touchend', onTouchEnd)
@@ -937,13 +2130,15 @@ export default function SilhouettePreviewPanel({
       wrap.removeEventListener('pointermove', onPointerMove)
       wrap.removeEventListener('pointerup', endPan)
       wrap.removeEventListener('pointercancel', endPan)
+      wrap.removeEventListener('pointerleave', onPointerLeave)
       wrap.removeEventListener('touchstart', onTouchStart)
       wrap.removeEventListener('touchmove', onTouchMove)
       wrap.removeEventListener('touchend', onTouchEnd)
       wrap.removeEventListener('touchcancel', onTouchEnd)
       wrap.removeEventListener('dblclick', onDoubleClick)
+      wrap.removeEventListener('click', onClick)
     }
-  }, [setTransform, resetView])
+  }, [setTransform, resetView, setDimensionEdit, activateCanvasFocus, trySafeZonePointer])
 
   // --- WSB-facing derived values -------------------------------------------
   // Status names the run, not the motion: CUTTING means the playhead is
@@ -1085,8 +2280,97 @@ export default function SilhouettePreviewPanel({
     <section className="silhouette-preview-section">
       <div className="section-label section-label-sub">2D Silhouette Preview (Stage 1)</div>
 
-      <div className="preview-wrap silhouette-preview-canvas-wrap" ref={wrapRef}>
+      <div
+        className={`preview-wrap silhouette-preview-canvas-wrap${isCoarsePointer ? ' is-coarse-pointer' : ''}${canvasFocus ? ' is-canvas-focused' : ''}${markerPanelOpen ? ' is-marker-panel-open' : ''}`}
+        ref={wrapRef}
+      >
+        {markerPanelOpen && (
+          <div
+            className="canvas-marker-panel-backdrop"
+            aria-hidden="true"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
         <canvas ref={canvasRef} />
+        <Minimap2DOverlay
+          stock={stock}
+          geometry={geometry}
+          rotationN={rotationN}
+          cutMode={cutMode}
+          cutIndex={cutIndex}
+        />
+        {hoverBubble && (
+          <div
+            className="canvas-hover-bubble"
+            style={{
+              left: hoverBubble.x,
+              top: hoverBubble.y,
+            }}
+            role="tooltip"
+          >
+            <div className="canvas-hover-bubble-title">{hoverBubble.title}</div>
+            {hoverBubble.lines?.length > 0 && hoverBubble.lines.map((line) => (
+              <div key={line} className="canvas-hover-bubble-line">{line}</div>
+            ))}
+          </div>
+        )}
+        {dimensionEdit && (
+          <div
+            className="canvas-dimension-editor"
+            style={{
+              left: dimensionEdit.x,
+              top: dimensionEdit.y,
+            }}
+          >
+            <input
+              ref={dimensionInputRef}
+              className="canvas-dimension-input"
+              type="number"
+              min={1}
+              step={1}
+              defaultValue={dimensionEdit.value}
+              autoFocus
+              aria-label={dimensionEdit.axis === 'w' ? 'Foam width (W)' : 'Foam height (H)'}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  confirmDimensionEdit(e.currentTarget.value)
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setDimensionEdit(null)
+                }
+              }}
+              onBlur={(e) => confirmDimensionEdit(e.currentTarget.value)}
+            />
+            <span className="canvas-dimension-unit">mm</span>
+          </div>
+        )}
+        <DirectionMarkerOverlayPanel
+          panel={bottomMarkerPanel}
+          onClose={closeBottomMarkerPanel}
+          onApply={applyBottomMarkerPanel}
+          onDraftChange={updateBottomMarkerDraft}
+          onNudge={nudgeBottomMarkerDraft}
+          onEnsureVisible={ensureMarkerPanelVisible}
+        />
+        <DirectionMarkerOverlayPanel
+          panel={topMarkerPanel}
+          onClose={closeTopMarkerPanel}
+          onApply={applyTopMarkerPanel}
+          onDraftChange={updateTopMarkerDraft}
+          onNudge={nudgeTopMarkerDraft}
+          onEnsureVisible={ensureMarkerPanelVisible}
+        />
+        <DirectionMarkerOverlayPanel
+          panel={modelGapPanel}
+          onClose={closeModelGapPanel}
+          onApply={applyModelGapPanel}
+          onDraftChange={updateModelGapDraft}
+          onNudge={nudgeModelGapDraft}
+          onEnsureVisible={ensureMarkerPanelVisible}
+        />
         {simActive && drawSimLabel && (
           <button
             type="button"
@@ -1094,7 +2378,8 @@ export default function SilhouettePreviewPanel({
             onClick={() => setSimLogOpen(true)}
             title="Open Sim track log"
           >
-            {`N=${drawSimLabel.n}  u=${drawSimLabel.u.toFixed(1)}  v=${drawSimLabel.v.toFixed(1)}  `
+            {`N=${drawSimLabel.n}  ${UI_AXES_DISPLAY.xLabel}=${displayCoordX(drawSimLabel.u).toFixed(1)}  `
+              + `${UI_AXES_DISPLAY.yLabel}=${displayCoordY(drawSimLabel.v).toFixed(1)}  `
               + `${(drawSimLabel.distance ?? 0).toFixed(0)}mm`}
           </button>
         )}

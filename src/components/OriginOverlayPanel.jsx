@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useAppState } from '../context/AppState'
 
 /**
@@ -8,10 +8,17 @@ import { useAppState } from '../context/AppState'
 export default function OriginOverlayPanel({ open, onClose }) {
   const { stock, handleStockChange } = useAppState()
   const [draftOrigin, setDraftOrigin] = useState('bottom')
+  const selectRef = useRef(null)
 
   useEffect(() => {
     if (open) setDraftOrigin(stock.originDisplay ?? 'bottom')
   }, [open, stock.originDisplay])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const t = setTimeout(() => selectRef.current?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -51,6 +58,7 @@ export default function OriginOverlayPanel({ open, onClose }) {
         <div className="origin-overlay-row">
           <label htmlFor="origin-display-select">Select Origin position</label>
           <select
+            ref={selectRef}
             id="origin-display-select"
             className="origin-overlay-select"
             value={draftOrigin}
