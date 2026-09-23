@@ -148,6 +148,7 @@ export default function ToolpathPage() {
     thetaDeg,
     profile,
     cutJob,
+    toolpathDisplayGeometry,
     silhouettePreview,
     viewerRef,
     stats,
@@ -187,7 +188,7 @@ export default function ToolpathPage() {
   // View mode: '2d' (default) — canvas only, no WebGL. '3d' lazy-loads Viewer3D.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
   const [originPanelOpen, setOriginPanelOpen] = useState(false)
-  const [loDisplayActive, setLoDisplayActive] = useState(false)
+  const [loDisplayActive, setLoDisplayActive] = useState(true)
 
   const toggleViewMode = useCallback(() => {
     setViewMode((m) => (m === '2d' ? '3d' : '2d'))
@@ -238,6 +239,11 @@ export default function ToolpathPage() {
   const is3d = viewMode === '3d'
   const show2d = viewMode === '2d'
   const show3d = is3d
+
+  // Phase 3 — 3D mesh shell only; overlay still comes from cutJob.
+  const viewerGeometry = loDisplayActive
+    ? (toolpathDisplayGeometry ?? geometry)
+    : geometry
 
   const mmss = (seconds) => {
     if (!Number.isFinite(seconds) || seconds < 0) return '00:00'
@@ -307,9 +313,9 @@ export default function ToolpathPage() {
                   type="button"
                   className={`view-hud-toggle${loDisplayActive ? ' is-active' : ''}`}
                   onClick={() => setLoDisplayActive((v) => !v)}
-                  aria-label="Low-resolution display"
+                  aria-label={loDisplayActive ? 'Show hi-res 3D mesh' : 'Show low-res 3D mesh'}
                   aria-pressed={loDisplayActive}
-                  title="Lo"
+                  title={loDisplayActive ? 'Lo — low-res 3D (on)' : 'Lo — low-res 3D (off)'}
                 >
                   Lo
                 </button>
@@ -333,7 +339,7 @@ export default function ToolpathPage() {
                   <Suspense fallback={<Viewport3DLoading />}>
                     <Viewer3D
                       ref={viewerRef}
-                      geometry={geometry}
+                      geometry={viewerGeometry}
                       resetKey={resetKey}
                       thetaDeg={simActive ? playback.displayThetaDeg : thetaDeg}
                       cutIndex={cutIndex}

@@ -21,6 +21,7 @@ import {
 import { saveBrowserSession, loadBrowserSession, clearBrowserSession } from '../lib/session'
 import { loadSimSettings, saveSimSettings } from '../lib/simSettings'
 import { cloneStoredGeometry, cutJobNeedsRecompute } from '../lib/toolpathCompute'
+import { buildToolpathDisplayProxy } from '../lib/meshProxy'
 import { shouldAutoOpenToolpathSetup } from '../lib/navigationLoad'
 import { ROUTES } from '../routes'
 
@@ -138,6 +139,9 @@ export function AppStateProvider({ children }) {
   const workingRef = useRef(null)
   /** Hi-res source mesh for toolpath compute — independent of display geometry (Phase 2). */
   const highResStoredRef = useRef(null)
+  /** Cached low-poly shell for Toolpath 3D display (Phase 3). */
+  const lowPolyDisplayRef = useRef(null)
+  const [toolpathDisplayGeometry, setToolpathDisplayGeometry] = useState(null)
   const viewerRef = useRef(null)
   const planePoint = useRef(planePointFromStock(DEFAULT_STOCK))
 
@@ -153,6 +157,29 @@ export function AppStateProvider({ children }) {
   const getHiResGeometryForCompute = useCallback(() => (
     highResStoredRef.current ?? workingRef.current
   ), [])
+
+  const clearToolpathDisplayProxy = useCallback(() => {
+    lowPolyDisplayRef.current?.dispose?.()
+    lowPolyDisplayRef.current = null
+    setToolpathDisplayGeometry(null)
+  }, [])
+
+  /** Rebuild the Toolpath 3D display proxy from the current hi-res source. */
+  const rebuildToolpathDisplayProxy = useCallback(() => {
+    const hiRes = getHiResGeometryForCompute()
+    if (!hiRes) {
+      clearToolpathDisplayProxy()
+      return null
+    }
+    if (lowPolyDisplayRef.current?.userData?.nc7SourceUuid === hiRes.uuid) {
+      return lowPolyDisplayRef.current
+    }
+    lowPolyDisplayRef.current?.dispose?.()
+    const proxy = buildToolpathDisplayProxy(hiRes)
+    lowPolyDisplayRef.current = proxy
+    setToolpathDisplayGeometry(proxy)
+    return proxy
+  }, [clearToolpathDisplayProxy, getHiResGeometryForCompute])
 
   const cutCount = effectiveCutCount(rotationN, { mode: cutMode })
   const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / cutCount : 0
@@ -323,6 +350,12 @@ export function AppStateProvider({ children }) {
     initSession()
     return () => { cancelled = true }
   }, [applyRestoredSession, storeHighResGeometry, updateStatsFrom])
+
+  // Keep the Toolpath 3D display proxy in sync with hi-res source geometry.
+  useEffect(() => {
+    if (!sessionReady || !geometry) return
+    rebuildToolpathDisplayProxy()
+  }, [sessionReady, geometry, rebuildToolpathDisplayProxy])
 
   // Preview the buffered cut for the current index. Everything is computed in
   // one batch on Apply, so stepping through cuts never re-runs a silhouette.
@@ -518,6 +551,8 @@ export function AppStateProvider({ children }) {
     await clearBrowserSession().catch(() => {})
     viewerRef.current?.resetMeshTransform?.()
     workingRef.current = null
+    highResStoredRef.current = null
+    clearToolpathDisplayProxy()
     setGeometry(null)
     setStats(null)
     setProfile(null)
@@ -531,6 +566,7 @@ export function AppStateProvider({ children }) {
       const rawGeo = await loadSTLFromUrl(DUMMY_STL_URL)
       const geo = prepareRawGeometry(rawGeo)
       workingRef.current = geo
+      storeHighResGeometry(geo)
       setGeometry(geo)
       updateStatsFrom(geo)
       setModelName(DUMMY_STL_NAME)
@@ -579,9 +615,10 @@ export function AppStateProvider({ children }) {
     setCutJob(null)
     setCutIndex(0)
     setToolpathTick((t) => t + 1)
+    rebuildToolpathDisplayProxy()
     setStatus('Model saved — settled on floor, ready for toolpath.')
     return true
-  }, [bakeModelTransform, storeHighResGeometry, updateStatsFrom])
+  }, [bakeModelTransform, rebuildToolpathDisplayProxy, storeHighResGeometry, updateStatsFrom])
 
   /**
    * Phase 2 choke point — every cutJob is built from hi-res stored geometry,
@@ -634,6 +671,7 @@ export function AppStateProvider({ children }) {
         return false
       }
       setCutJob(job)
+      rebuildToolpathDisplayProxy()
       const withProfile = job.cuts.filter((c) => c.profile.polylines.length > 0).length
       setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${mode}).`)
       return true
@@ -643,7 +681,7 @@ export function AppStateProvider({ children }) {
     } finally {
       await endBusy()
     }
-  }, [computeToolpathFromHiRes, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+  }, [computeToolpathFromHiRes, rebuildToolpathDisplayProxy, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
 
   /**
    * Model → Toolpath trigger. First visit defers compute to Setup Apply;
@@ -684,13 +722,15 @@ export function AppStateProvider({ children }) {
     const geo = workingRef.current.clone()
     geo.userData = { ...workingRef.current.userData, nc7CentroidApplied: true }
     workingRef.current = geo
+    storeHighResGeometry(geo)
     setGeometry(geo)
     updateStatsOnly(geo)
     setToolpathTick((t) => t + 1)
     setProfile(null)
     setSilhouettePreview(null)
+    rebuildToolpathDisplayProxy()
     return true
-  }, [bakeModelTransform, stock, updateStatsOnly])
+  }, [bakeModelTransform, rebuildToolpathDisplayProxy, stock, storeHighResGeometry, updateStatsOnly])
 
   /**
    * Toolpath page Apply button. Recomputes every cut for the current settings
@@ -838,6 +878,7 @@ export function AppStateProvider({ children }) {
     profile,
     silhouettePreview,
     cutJob,
+    toolpathDisplayGeometry,
     gcodeSettings,
     setGcodeSettings,
     handleGcodeSettingsChange,
