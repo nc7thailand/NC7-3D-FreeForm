@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { debounce } from '../lib/debounce'
 
 /**
  * Standard numeric input for NC7 — mandatory pattern for all number fields.
@@ -6,6 +7,8 @@ import React, { useCallback, useEffect, useState } from 'react'
  * Rest: shows 0 when value is 0.
  * Focus: clears the field when value is 0; keeps non-zero values visible.
  * Blur: empty input falls back to `emptyFallback` (default 0).
+ *
+ * @param {number} [debounceMs=0] delay before `onChange` fires while typing
  */
 export default function SmartNumberInput({
   value,
@@ -15,6 +18,7 @@ export default function SmartNumberInput({
   max,
   step,
   className,
+  debounceMs = 0,
   onFocus,
   onBlur,
   ...rest
@@ -24,6 +28,37 @@ export default function SmartNumberInput({
 
   const [focused, setFocused] = useState(false)
   const [text, setText] = useState('')
+
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  const debouncedOnChangeRef = useRef(null)
+  if (!debouncedOnChangeRef.current) {
+    debouncedOnChangeRef.current = debounceMs > 0
+      ? debounce((n) => onChangeRef.current(n), debounceMs)
+      : null
+  }
+
+  useEffect(() => {
+    if (debounceMs > 0) {
+      debouncedOnChangeRef.current?.cancel()
+      debouncedOnChangeRef.current = debounce((n) => onChangeRef.current(n), debounceMs)
+    } else {
+      debouncedOnChangeRef.current = null
+    }
+  }, [debounceMs])
+
+  useEffect(() => () => {
+    debouncedOnChangeRef.current?.cancel()
+  }, [])
+
+  const emitChange = useCallback((n) => {
+    if (debouncedOnChangeRef.current) {
+      debouncedOnChangeRef.current(n)
+    } else {
+      onChangeRef.current(n)
+    }
+  }, [])
 
   useEffect(() => {
     if (!focused) {
@@ -41,20 +76,23 @@ export default function SmartNumberInput({
   const commit = useCallback((raw) => {
     const trimmed = raw.trim()
     if (trimmed === '' || trimmed === '-' || trimmed === '+') {
-      onChange(emptyFallback)
+      debouncedOnChangeRef.current?.cancel()
+      onChangeRef.current(emptyFallback)
       setText(String(emptyFallback))
       return
     }
     const parsed = Number(trimmed)
     if (!Number.isFinite(parsed)) {
-      onChange(emptyFallback)
+      debouncedOnChangeRef.current?.cancel()
+      onChangeRef.current(emptyFallback)
       setText(String(emptyFallback))
       return
     }
     const next = clamp(parsed)
-    onChange(next)
+    debouncedOnChangeRef.current?.cancel()
+    onChangeRef.current(next)
     setText(String(next))
-  }, [clamp, emptyFallback, onChange])
+  }, [clamp, emptyFallback])
 
   const handleFocus = (e) => {
     setFocused(true)
@@ -69,12 +107,13 @@ export default function SmartNumberInput({
     if (trimmed === '' || trimmed === '-' || trimmed === '+') return
     const parsed = Number(trimmed)
     if (Number.isFinite(parsed)) {
-      onChange(clamp(parsed))
+      emitChange(clamp(parsed))
     }
   }
 
   const handleBlur = (e) => {
     setFocused(false)
+    debouncedOnChangeRef.current?.flush()
     commit(text)
     onBlur?.(e)
   }

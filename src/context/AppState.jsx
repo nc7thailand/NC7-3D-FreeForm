@@ -7,10 +7,8 @@ import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib
 import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
-import { buildCutJob, cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
-import { extractOverlayContour } from '../lib/cutOverlay'
-import { attachIndexSafetyToJob } from '../lib/indexSafety'
-import { wirePathFromProfile } from '../lib/wirePath'
+import { cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
+import { computeToolpathInWorker } from '../lib/camWorkerClient'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
   packProject,
@@ -25,6 +23,8 @@ import {
   cloneStoredGeometry,
   cutJobNeedsRecompute,
   modelRevisionOf,
+  patchCutJobMarkerStock,
+  patchCutJobOriginStock,
 } from '../lib/toolpathCompute'
 import { shouldAutoOpenToolpathSetup } from '../lib/navigationLoad'
 import { ROUTES } from '../routes'
@@ -344,36 +344,40 @@ export function AppStateProvider({ children }) {
     if (cutJob?.cuts?.length) {
       const cut = cutJob.cuts[Math.min(cutIndex, cutJob.cuts.length - 1)]
       setProfile(cut?.profile ?? null)
-      return
+      return undefined
     }
-    // No batch yet (first visit, or settings changed but not applied): show a
-    // single preview so the page is not empty.
+
     const geo = workingRef.current
     if (!geo) {
       setProfile(null)
       setSilhouettePreview(null)
-      return
+      return undefined
     }
-    const settled = ensureGeometryOnFloor(geo)
-    if (settled) {
-      geo.userData.nc7CentroidApplied = true
-      setGeometry(geo)
-      updateStatsFrom(geo)
-      viewerRef.current?.refreshMeshPivot?.()
-    }
-    planePoint.current.copy(planePointFromStock(stock))
-    const worldMatrix = null
-    const silhouetteOpts = silhouetteOptsFromStock(stock)
-    try {
-      setProfile(buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts))
-      setSilhouettePreview(
-        buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
-      )
-    } catch (err) {
-      setProfile(null)
-      setSilhouettePreview(null)
-      setStatus(`Toolpath error: ${err.message}`)
-    }
+
+    const timer = setTimeout(() => {
+      const settled = ensureGeometryOnFloor(geo)
+      if (settled) {
+        geo.userData.nc7CentroidApplied = true
+        setGeometry(geo)
+        updateStatsFrom(geo)
+        viewerRef.current?.refreshMeshPivot?.()
+      }
+      planePoint.current.copy(planePointFromStock(stock))
+      const worldMatrix = null
+      const silhouetteOpts = silhouetteOptsFromStock(stock)
+      try {
+        setProfile(buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts))
+        setSilhouettePreview(
+          buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
+        )
+      } catch (err) {
+        setProfile(null)
+        setSilhouettePreview(null)
+        setStatus(`Toolpath error: ${err.message}`)
+      }
+    }, 300)
+
+    return () => clearTimeout(timer)
   }, [cutIndex, cutJob, thetaDeg, stock.t, stock.w, stock.h, stock.lo, stock.kerf, stock.profileAccuracy, geometry, toolpathTick, updateStatsFrom])
 
   // Changing settings only clamps which cut is previewed. The buffered job is
@@ -623,21 +627,12 @@ export function AppStateProvider({ children }) {
     const s = stockOverride ?? stock
     const mode = cutModeOverride ?? cutMode
     planePoint.current.copy(planePointFromStock(s))
-    const job = await buildCutJob(geo, rotationN, planePoint.current, {
-      silhouetteOpts: silhouetteOptsFromStock(s),
-      mode,
+    return computeToolpathInWorker(geo, {
+      rotationN,
+      stock: s,
+      cutMode: mode,
       onProgress,
     })
-    job.stock = { ...s }
-    job.mode = mode
-    job.sourceGeometryUuid = geo.uuid
-    job.sourceModelRevision = modelRevisionOf(geo)
-    for (const cut of job.cuts) {
-      cut.wirePath = wirePathFromProfile(cut.profile, s, cut.thetaDeg)
-      cut.overlayContour = extractOverlayContour(geo, cut.thetaDeg)
-    }
-    attachIndexSafetyToJob(job, geo, s, mode)
-    return job
   }, [getHiResGeometryForCompute, rotationN, cutMode, stock])
 
   /** @deprecated internal alias — callers should use computeToolpathFromHiRes. */
@@ -751,6 +746,37 @@ export function AppStateProvider({ children }) {
     if (ok) setCutIndex(0)
     return ok
   }, [applyModelBlockOffsetFromStock, saveToolpathStage])
+
+  /**
+   * Apply green/red marker stock fields (boMargin, topOffset) without
+   * re-slicing silhouettes. Refreshes index safety and cutJob.stock so G-code
+   * recompiles from the patched job.
+   */
+  const applyMarkerStockSettings = useCallback(async (patch) => {
+    const newStock = { ...stock, ...patch }
+    setStock(newStock)
+    if (cutJobHasProfile(cutJob)) {
+      const geo = workingRef.current
+      const patched = patchCutJobMarkerStock(cutJob, newStock, geo, cutMode)
+      if (patched) setCutJob(patched)
+    }
+    setStatus('Wire marker positions updated.')
+    return true
+  }, [stock, cutJob, cutMode])
+
+  /**
+   * Apply origin display fields — overlay-only, no silhouette or index work.
+   */
+  const applyOriginDisplaySettings = useCallback(async (patch) => {
+    const newStock = { ...stock, ...patch }
+    setStock(newStock)
+    if (cutJobHasProfile(cutJob)) {
+      const patched = patchCutJobOriginStock(cutJob, newStock)
+      if (patched) setCutJob(patched)
+    }
+    setStatus('Origin display updated.')
+    return true
+  }, [stock, cutJob])
 
   /**
    * Commit draft toolpath settings (stock + cut mode) and recompute. Used by
@@ -927,6 +953,8 @@ export function AppStateProvider({ children }) {
     ensureToolpathOnModelEntry,
     refreshToolpathIfNeeded,
     applyToolpathSettings,
+    applyMarkerStockSettings,
+    applyOriginDisplaySettings,
     applyModelBlockOffsetFromStock,
     handleSaveProject,
     handleOpenProject,

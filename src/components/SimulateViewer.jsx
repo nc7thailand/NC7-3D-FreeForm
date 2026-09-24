@@ -119,16 +119,41 @@ export default function SimulateViewer({
     }
     state.orbitCamera = orbitCamera
 
-    let animId
-    const animate = () => {
-      animId = requestAnimationFrame(animate)
+    let animId = 0
+    let needsContinuousRender = false
+
+    const renderFrame = () => {
       controls.update()
       if (viewCubeRef.current && state.frameInfo) {
         viewCubeRef.current.sync(camera, state.frameInfo.center)
       }
       renderer.render(scene, camera)
     }
+
+    const requestRender = () => {
+      if (needsContinuousRender) return
+      renderFrame()
+    }
+
+    state.requestRender = requestRender
+
+    const animate = () => {
+      animId = requestAnimationFrame(animate)
+      if (!needsContinuousRender) return
+      renderFrame()
+    }
     animate()
+
+    const onControlsStart = () => {
+      needsContinuousRender = true
+    }
+    const onControlsEnd = () => {
+      needsContinuousRender = false
+      renderFrame()
+    }
+    controls.addEventListener('change', requestRender)
+    controls.addEventListener('start', onControlsStart)
+    controls.addEventListener('end', onControlsEnd)
 
     const onResize = () => {
       const w = mount.clientWidth
@@ -136,11 +161,16 @@ export default function SimulateViewer({
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      requestRender()
     }
     window.addEventListener('resize', onResize)
+    renderFrame()
 
     return () => {
       cancelAnimationFrame(animId)
+      controls.removeEventListener('change', requestRender)
+      controls.removeEventListener('start', onControlsStart)
+      controls.removeEventListener('end', onControlsEnd)
       window.removeEventListener('resize', onResize)
       controls.dispose()
       renderer.dispose()
@@ -206,6 +236,7 @@ export default function SimulateViewer({
       state.scene.add(grid)
       state.floorGrid = grid
     }
+    state.requestRender?.()
   }, [geometry, resetKey])
 
   useEffect(() => {
@@ -241,7 +272,7 @@ export default function SimulateViewer({
       boxGeo.dispose()
     }
 
-    const stack = buildWireStack(cutJob)
+    const stack = buildWireStack(cutJob, geometry)
     const inactivePos = []
     const activePos = []
 
@@ -276,13 +307,15 @@ export default function SimulateViewer({
       state.scene.add(lines)
       state.activeWire = lines
     }
-  }, [cutJob, activeCutIndex])
+    state.requestRender?.()
+  }, [cutJob, geometry, activeCutIndex])
 
   useEffect(() => {
     const state = stateRef.current
     if (!state?.mesh) return
     state.mesh.visible = !wireOnly
     if (state.stockBox) state.stockBox.visible = !wireOnly
+    state.requestRender?.()
   }, [wireOnly])
 
   useEffect(() => {
@@ -298,6 +331,7 @@ export default function SimulateViewer({
     } else {
       marker.visible = false
     }
+    state.requestRender?.()
   }, [playbackPoint])
 
   const setView = (view) => stateRef.current?.frameCamera?.(view)

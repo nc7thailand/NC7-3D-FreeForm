@@ -1,41 +1,37 @@
-// Build 3D world-space wire paths from a saved cut job (DevFoam sim stack).
+// Build 3D wire paths from a saved cut job (DevFoam sim stack).
+// Uses the same middle-plane overlay cutPath as the 2D visualizer and G-code.
 
 import * as THREE from 'three'
-import { unprojectFromSection } from './toolpath.js'
-import { wirePathFromProfile } from './wirePath.js'
+import { layerZForCut } from './cutPathStack3d.js'
+import { overlayCutPath } from './gcodePath.js'
 
 /**
  * @typedef {{ index: number, thetaDeg: number, points: THREE.Vector3[] }} WireStackPath
  */
 
 /**
- * Convert every cut profile into kerf-compensated world points on its cutting plane.
+ * Convert every cut into overlay cutPath points stacked by rotary layer (u→X, v→Y, index→Z).
  *
  * @param {object} cutJob
+ * @param {import('three').BufferGeometry|null} [geometry]
  * @returns {WireStackPath[]}
  */
-export function buildWireStack(cutJob) {
+export function buildWireStack(cutJob, geometry = null) {
   if (!cutJob?.cuts?.length) return []
   const stock = cutJob.stock ?? {}
+  const cutMode = cutJob.mode
+  const geo = geometry ?? cutJob.geometry ?? null
+  const ctx = { geometry: geo, stock, cutMode }
   const paths = []
 
   for (const cut of cutJob.cuts) {
-    if (cut.wirePath?.length >= 2) {
-      paths.push({
-        index: cut.index,
-        thetaDeg: cut.thetaDeg,
-        points: cut.wirePath.map((p) => unprojectFromSection(p, cut.profile.frame)),
-      })
-      continue
-    }
-    if (!cut.profile?.polylines?.length || !cut.profile.frame) continue
-    const uv = wirePathFromProfile(cut.profile, stock, cut.thetaDeg)
+    const uv = overlayCutPath(cutJob, cut, ctx)
     if (uv.length < 2) continue
-    const points = uv.map((p) => unprojectFromSection(p, cut.profile.frame))
+    const layerZ = layerZForCut(cutJob, cut)
     paths.push({
       index: cut.index,
       thetaDeg: cut.thetaDeg,
-      points,
+      points: uv.map((p) => new THREE.Vector3(p.u, p.v, layerZ)),
     })
   }
 

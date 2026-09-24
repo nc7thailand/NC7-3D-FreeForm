@@ -41,6 +41,7 @@ function ToolpathNavCenter({ onOpenSetup }) {
           min={3}
           max={64}
           emptyFallback={16}
+          debounceMs={300}
           className="header-n-input"
           value={rotationN}
           onChange={(n) => setRotationN(clampN(n))}

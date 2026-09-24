@@ -7,7 +7,7 @@ import * as THREE from 'three'
 import { orientGeometryUp } from '../src/lib/stl.js'
 import { planePointFromStock } from '../src/lib/toolpath.js'
 import { buildCutJob, CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../src/lib/cutJob.js'
-import { wirePathFromProfile } from '../src/lib/wirePath.js'
+import { extractOverlayContour } from '../src/lib/cutOverlay.js'
 import { attachIndexSafetyToJob } from '../src/lib/indexSafety.js'
 import { generateGcode, DEFAULT_GCODE_SETTINGS } from '../src/lib/gcode.js'
 
@@ -63,10 +63,10 @@ for (const [label, mode] of [
   })
   job.stock = { ...STOCK }
   for (const cut of job.cuts) {
-    cut.wirePath = wirePathFromProfile(cut.profile, STOCK, cut.thetaDeg)
+    cut.overlayContour = extractOverlayContour(geo, cut.thetaDeg)
   }
   attachIndexSafetyToJob(job, geo, STOCK, mode)
-  const program = generateGcode({ ...job, stock: STOCK }, DEFAULT_GCODE_SETTINGS)
+  const program = generateGcode({ ...job, stock: STOCK, mode }, DEFAULT_GCODE_SETTINGS, { geometry: geo })
   out[label] = {
     cutCount: job.cutCount,
     pointCounts: job.cuts.map((c) => c.profile.pointCount),

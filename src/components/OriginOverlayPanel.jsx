@@ -6,7 +6,7 @@ import CenteredModalOverlay from './CenteredModalOverlay'
  * Origin overlay — centered modal for the 2D preview HUD button.
  */
 export default function OriginOverlayPanel({ open, onClose }) {
-  const { stock, cutMode, commitToolpathSettings } = useAppState()
+  const { stock, applyOriginDisplaySettings } = useAppState()
   const [draftOrigin, setDraftOrigin] = useState('bottom')
   const selectRef = useRef(null)
 
@@ -24,14 +24,10 @@ export default function OriginOverlayPanel({ open, onClose }) {
     const applied = stock.originDisplay ?? 'bottom'
     onClose()
     if (draftOrigin === applied) return
-    await commitToolpathSettings({
-      stock: {
-        ...stock,
-        originDisplay: draftOrigin,
-        originU: undefined,
-        originV: undefined,
-      },
-      cutMode,
+    await applyOriginDisplaySettings({
+      originDisplay: draftOrigin,
+      originU: undefined,
+      originV: undefined,
     })
   }
 

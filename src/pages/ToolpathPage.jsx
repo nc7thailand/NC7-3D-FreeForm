@@ -78,6 +78,7 @@ function ToolpathPanel() {
                 min={3}
                 max={64}
                 emptyFallback={16}
+                debounceMs={300}
                 value={rotationN}
                 onChange={(n) => setRotationN(clampN(n))}
               />

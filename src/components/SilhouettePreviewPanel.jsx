@@ -488,6 +488,8 @@ export default function SilhouettePreviewPanel({
     handleStockChange,
     applyToolpathSettings,
     commitToolpathSettings,
+    applyMarkerStockSettings,
+    applyOriginDisplaySettings,
   } = useAppState()
 
   const wrapRef = useRef(null)
@@ -543,6 +545,10 @@ export default function SilhouettePreviewPanel({
   applyToolpathRef.current = applyToolpathSettings
   const commitToolpathRef = useRef(commitToolpathSettings)
   commitToolpathRef.current = commitToolpathSettings
+  const applyMarkerStockRef = useRef(applyMarkerStockSettings)
+  applyMarkerStockRef.current = applyMarkerStockSettings
+  const applyOriginDisplayRef = useRef(applyOriginDisplaySettings)
+  applyOriginDisplayRef.current = applyOriginDisplaySettings
   const geometryRef = useRef(geometry)
   geometryRef.current = geometry
   const cutModeRef = useRef(cutMode)
@@ -587,14 +593,10 @@ export default function SilhouettePreviewPanel({
     originManagerRef.current = new OriginPointManager({
       getPosition: () => stockRef.current?.originDisplay ?? 'bottom',
       onApplyPosition: async (display) => {
-        await commitToolpathRef.current({
-          stock: {
-            ...stockRef.current,
-            originDisplay: display,
-            originU: undefined,
-            originV: undefined,
-          },
-          cutMode: cutModeRef.current,
+        await applyOriginDisplayRef.current({
+          originDisplay: display,
+          originU: undefined,
+          originV: undefined,
         })
       },
     })
@@ -605,12 +607,10 @@ export default function SilhouettePreviewPanel({
       getTopValue: () => stockRef.current?.topOffset ?? 20,
       getBottomValue: () => stockRef.current?.boMargin ?? 20,
       onApplyTop: async (n) => {
-        handleStockChangeRef.current('topOffset', n)
-        await applyToolpathRef.current()
+        await applyMarkerStockRef.current({ topOffset: n })
       },
       onApplyBottom: async (n) => {
-        handleStockChangeRef.current('boMargin', n)
-        await applyToolpathRef.current()
+        await applyMarkerStockRef.current({ boMargin: n })
       },
     })
   }

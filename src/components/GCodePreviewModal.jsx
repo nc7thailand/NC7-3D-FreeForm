@@ -1,0 +1,278 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { buildCutPathLayerStack, PREVIEW_VIEW } from '../lib/cutPathStack3d.js'
+
+const COLOR_LEAD_IN = 0x22c55e
+const COLOR_CUT = 0x00f3ff
+const COLOR_LEAD_OUT = 0xef4444
+const COLOR_SIM_DOT_LINK = 0xfacc15
+const COLOR_ROTARY_LINK = 0xffffff
+
+const VIEW_OPTIONS = [
+  { id: PREVIEW_VIEW.STACK, label: 'Layer stack' },
+  { id: PREVIEW_VIEW.ASSEMBLED, label: 'Assembled 3D' },
+]
+
+function disposeObject3D(root) {
+  root.traverse((obj) => {
+    obj.geometry?.dispose()
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
+      else obj.material.dispose()
+    }
+  })
+}
+
+function makeLine(points, color, opacity = 0.95) {
+  if (!points || points.length < 2) return null
+  const verts = new Float32Array(points.length * 3)
+  points.forEach((p, i) => {
+    verts[i * 3] = p.x
+    verts[i * 3 + 1] = p.y
+    verts[i * 3 + 2] = p.z
+  })
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3))
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity })
+  return new THREE.Line(geo, mat)
+}
+
+/**
+ * Lightweight mobile-friendly 3D preview — CAM cut blocks
+ * (green lead-in → cyan cut → red lead-out), the same chain the G-code emits.
+ */
+export default function GCodePreviewModal({
+  open,
+  onClose,
+  cutJob = null,
+  geometry = null,
+  rotaryAxis = 'Z',
+}) {
+  const mountRef = useRef(null)
+  const viewerRef = useRef(null)
+  const [viewMode, setViewMode] = useState(PREVIEW_VIEW.STACK)
+
+  const stack = useMemo(
+    () => buildCutPathLayerStack(cutJob, geometry, { viewMode }),
+    [cutJob, geometry, viewMode],
+  )
+
+  useEffect(() => {
+    if (!open) return undefined
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open, onClose])
+
+  useEffect(() => {
+    const mount = mountRef.current
+    if (!open || !mount) return undefined
+
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color(0x1a1a1a)
+
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100000)
+    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    mount.appendChild(renderer.domElement)
+
+    const controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = false
+    controls.screenSpacePanning = true
+
+    scene.add(new THREE.GridHelper(400, 40, 0x444444, 0x222222))
+    scene.add(new THREE.AxesHelper(60))
+
+    const linesGroup = new THREE.Group()
+    scene.add(linesGroup)
+
+    let animId = 0
+    let needsContinuousRender = false
+
+    // Never call controls.update() here: it emits 'change' → requestRender → recursion.
+    const renderFrame = () => {
+      renderer.render(scene, camera)
+    }
+
+    const requestRender = () => {
+      if (needsContinuousRender) return
+      renderFrame()
+    }
+
+    const animate = () => {
+      animId = requestAnimationFrame(animate)
+      if (!needsContinuousRender) return
+      controls.update()
+      renderFrame()
+    }
+    animate()
+
+    const onControlsStart = () => { needsContinuousRender = true }
+    const onControlsEnd = () => {
+      needsContinuousRender = false
+      renderFrame()
+    }
+    controls.addEventListener('change', requestRender)
+    controls.addEventListener('start', onControlsStart)
+    controls.addEventListener('end', onControlsEnd)
+
+    const resize = () => {
+      const w = Math.max(mount.clientWidth, 1)
+      const h = Math.max(mount.clientHeight, 1)
+      camera.aspect = w / h
+      camera.updateProjectionMatrix()
+      renderer.setSize(w, h, false)
+      requestRender()
+    }
+
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(resize)
+      : null
+    if (ro) ro.observe(mount)
+    else window.addEventListener('resize', resize)
+
+    const rebuildLayers = ({ layers, bounds }) => {
+      disposeObject3D(linesGroup)
+      linesGroup.clear()
+
+      for (const layer of layers) {
+        const parts = [
+          makeLine(layer.leadIn, COLOR_LEAD_IN),
+          makeLine(layer.cut, COLOR_CUT, 0.92),
+          makeLine(layer.leadOut, COLOR_LEAD_OUT),
+          ...layer.simDotLinks.map((l) => makeLine(l.points, COLOR_SIM_DOT_LINK)),
+          makeLine(layer.rotaryLink, COLOR_ROTARY_LINK),
+        ]
+        for (const line of parts) {
+          if (!line) continue
+          line.userData.cutIndex = layer.index
+          linesGroup.add(line)
+        }
+      }
+
+      if (bounds) {
+        controls.target.set(bounds.center.x, bounds.center.y, bounds.center.z)
+        const dist = Math.max(bounds.radius * 2.2, 120)
+        camera.position.set(
+          bounds.center.x + dist * 0.65,
+          bounds.center.y + dist * 0.45,
+          bounds.center.z + dist * 0.75,
+        )
+        camera.near = Math.max(dist / 500, 0.1)
+        camera.far = Math.max(dist * 20, 5000)
+        camera.updateProjectionMatrix()
+      } else {
+        controls.target.set(0, 0, 0)
+        camera.position.set(120, 90, 160)
+      }
+      requestRender()
+    }
+
+    viewerRef.current = { rebuildLayers }
+    requestAnimationFrame(resize)
+
+    return () => {
+      viewerRef.current = null
+      cancelAnimationFrame(animId)
+      controls.removeEventListener('change', requestRender)
+      controls.removeEventListener('start', onControlsStart)
+      controls.removeEventListener('end', onControlsEnd)
+      if (ro) ro.disconnect()
+      else window.removeEventListener('resize', resize)
+      disposeObject3D(linesGroup)
+      controls.dispose()
+      renderer.dispose()
+      if (renderer.domElement.parentNode === mount) {
+        mount.removeChild(renderer.domElement)
+      }
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    viewerRef.current?.rebuildLayers(stack)
+  }, [open, stack])
+
+  if (!open) return null
+
+  const layerCount = stack.layers.length
+  const hasSimDotLinks = stack.layers.some((l) => l.simDotLinks.length)
+  const hasRotaryLinks = stack.layers.some((l) => l.rotaryLink)
+  const viewLabel = viewMode === PREVIEW_VIEW.ASSEMBLED
+    ? 'rotated to cut angle'
+    : `${rotaryAxis} stack → Z`
+
+  return createPortal(
+    <div
+      className="gcode-preview-modal-backdrop"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="gcode-preview-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="G-code 3D preview"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="gcode-preview-modal-header">
+          <div className="gcode-preview-modal-title-row">
+            <h2 className="gcode-preview-modal-title">G-code 3D Preview</h2>
+            <button
+              type="button"
+              className="gcode-preview-modal-close"
+              onClick={onClose}
+              aria-label="Close preview"
+            >
+              Close
+            </button>
+          </div>
+          <p className="gcode-preview-modal-meta">
+            {layerCount > 0
+              ? `${stack.pointCount} points · ${layerCount} cut layers · ${viewLabel}`
+              : 'No cut paths — commit toolpath on Page 2 first'}
+          </p>
+          <div className="gcode-preview-modal-toggle" role="group" aria-label="Preview view">
+            {VIEW_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className={viewMode === opt.id ? 'is-active' : ''}
+                aria-pressed={viewMode === opt.id}
+                onClick={() => setViewMode(opt.id)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </header>
+        <div ref={mountRef} className="gcode-preview-modal-canvas" />
+        <p className="gcode-preview-modal-hint">
+          <span className="gcode-preview-legend is-lead-in">lead-in</span>
+          <span className="gcode-preview-legend is-cut">cut</span>
+          <span className="gcode-preview-legend is-lead-out">lead-out</span>
+          {hasSimDotLinks && (
+            <span className="gcode-preview-legend is-sim-dot">X rapid (G0)</span>
+          )}
+          {hasRotaryLinks && (
+            <span className="gcode-preview-legend is-rotary">{rotaryAxis} rotary</span>
+          )}
+          · drag to orbit · pinch to zoom
+        </p>
+      </div>
+    </div>,
+    document.body,
+  )
+}

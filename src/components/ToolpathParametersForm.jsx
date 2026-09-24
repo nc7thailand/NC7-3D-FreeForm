@@ -61,13 +61,13 @@ export default function ToolpathParametersForm({
 
         <div className="stock-dim-row">
           <label>Width (W)
-            <SmartNumberInput min={1} emptyFallback={1} value={s.w} onChange={(n) => change('w', n)} />
+            <SmartNumberInput min={1} emptyFallback={1} debounceMs={300} value={s.w} onChange={(n) => change('w', n)} />
           </label>
           <label>Thickness (T)
-            <SmartNumberInput min={1} emptyFallback={1} value={s.t} onChange={(n) => change('t', n)} />
+            <SmartNumberInput min={1} emptyFallback={1} debounceMs={300} value={s.t} onChange={(n) => change('t', n)} />
           </label>
           <label>Height (H)
-            <SmartNumberInput min={1} emptyFallback={1} value={s.h} onChange={(n) => change('h', n)} />
+            <SmartNumberInput min={1} emptyFallback={1} debounceMs={300} value={s.h} onChange={(n) => change('h', n)} />
           </label>
         </div>
 
@@ -86,6 +86,7 @@ export default function ToolpathParametersForm({
             <SmartNumberInput
               id="offsetDis"
               step={0.1}
+              debounceMs={300}
               value={s.modelOffsetMm ?? 0}
               onChange={(n) => change('modelOffsetMm', n)}
               aria-label="Model offset distance"
@@ -113,7 +114,7 @@ export default function ToolpathParametersForm({
 
         <div className="param-fields">
           <ParamField label="Model Bottom Cut Out" unit="mm">
-            <SmartNumberInput min={0} step={0.5} value={s.bo} onChange={(n) => change('bo', n)} />
+            <SmartNumberInput min={0} step={0.5} debounceMs={300} value={s.bo} onChange={(n) => change('bo', n)} />
           </ParamField>
 
           {onCutModeChange && cutMode != null && (
@@ -131,23 +132,23 @@ export default function ToolpathParametersForm({
           )}
 
           <ParamField label="LO (wire clearance)" unit="mm">
-            <SmartNumberInput min={0} step={0.5} value={s.lo} onChange={(n) => change('lo', n)} />
+            <SmartNumberInput min={0} step={0.5} debounceMs={300} value={s.lo} onChange={(n) => change('lo', n)} />
           </ParamField>
 
           <ParamField label="Kerf (wire Ø comp.)" unit="mm">
-            <SmartNumberInput min={0} step={0.1} value={s.kerf ?? 2} onChange={(n) => change('kerf', n)} />
+            <SmartNumberInput min={0} step={0.1} debounceMs={300} value={s.kerf ?? 2} onChange={(n) => change('kerf', n)} />
           </ParamField>
 
           <ParamField label="Top safe offset" unit="mm">
-            <SmartNumberInput min={0} step={1} value={s.topOffset ?? 20} onChange={(n) => change('topOffset', n)} />
+            <SmartNumberInput min={0} step={1} debounceMs={300} value={s.topOffset ?? 20} onChange={(n) => change('topOffset', n)} />
           </ParamField>
 
           <ParamField label="Bottom safe point offset" unit="mm">
-            <SmartNumberInput min={0} step={1} value={s.boMargin ?? 20} onChange={(n) => change('boMargin', n)} />
+            <SmartNumberInput min={0} step={1} debounceMs={300} value={s.boMargin ?? 20} onChange={(n) => change('boMargin', n)} />
           </ParamField>
 
           <ParamField label="Overlay thickness">
-            <SmartNumberInput min={1} max={10} step={1} emptyFallback={1} value={s.overlayThickness ?? 3} onChange={(n) => change('overlayThickness', n)} />
+            <SmartNumberInput min={1} max={10} step={1} emptyFallback={1} debounceMs={300} value={s.overlayThickness ?? 3} onChange={(n) => change('overlayThickness', n)} />
           </ParamField>
 
           <label className="param-field param-field--checkbox">
