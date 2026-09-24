@@ -485,8 +485,6 @@ export default function SilhouettePreviewPanel({
     setSimActive,
     simSettings,
     updateSimSettings,
-    handleStockChange,
-    applyToolpathSettings,
     commitToolpathSettings,
     applyMarkerStockSettings,
     applyOriginDisplaySettings,
@@ -539,10 +537,6 @@ export default function SilhouettePreviewPanel({
   const overlayContextRef = useRef({})
   const stockRef = useRef(stock)
   stockRef.current = stock
-  const handleStockChangeRef = useRef(handleStockChange)
-  handleStockChangeRef.current = handleStockChange
-  const applyToolpathRef = useRef(applyToolpathSettings)
-  applyToolpathRef.current = applyToolpathSettings
   const commitToolpathRef = useRef(commitToolpathSettings)
   commitToolpathRef.current = commitToolpathSettings
   const applyMarkerStockRef = useRef(applyMarkerStockSettings)
@@ -752,10 +746,12 @@ export default function SilhouettePreviewPanel({
       setDimensionEdit(null)
       return
     }
-    handleStockChange(edit.axis, n)
     setDimensionEdit(null)
-    await applyToolpathSettings()
-  }, [handleStockChange, applyToolpathSettings])
+    await commitToolpathRef.current({
+      stock: { ...stockRef.current, [edit.axis]: n },
+      cutMode: cutModeRef.current,
+    })
+  }, [])
 
   const openBottomMarkerPanel = useCallback((hoverHit, role) => {
     setModelGapPanel(null)

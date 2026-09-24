@@ -809,6 +809,35 @@ body {
   color: #8892a0;
 }
 
+.gcode-preview-modal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gcode-preview-modal-download {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: #dbe8ff;
+  background: rgba(29, 92, 255, 0.28);
+  border: 1px solid rgba(29, 92, 255, 0.55);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gcode-preview-modal-download:hover:not(:disabled) {
+  background: rgba(29, 92, 255, 0.4);
+}
+
+.gcode-preview-modal-download:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .gcode-preview-modal-toggle {
   display: inline-flex;
   align-self: flex-start;

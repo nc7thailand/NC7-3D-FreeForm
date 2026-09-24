@@ -9,6 +9,7 @@ const COLOR_CUT = 0x00f3ff
 const COLOR_LEAD_OUT = 0xef4444
 const COLOR_SIM_DOT_LINK = 0xfacc15
 const COLOR_ROTARY_LINK = 0xffffff
+const FRAME_DIRECTION = new THREE.Vector3(0.65, 0.45, 0.75).normalize()
 
 const VIEW_OPTIONS = [
   { id: PREVIEW_VIEW.STACK, label: 'Layer stack' },
@@ -49,6 +50,8 @@ export default function GCodePreviewModal({
   cutJob = null,
   geometry = null,
   rotaryAxis = 'Z',
+  program = null,
+  onDownload = null,
 }) {
   const mountRef = useRef(null)
   const viewerRef = useRef(null)
@@ -162,26 +165,42 @@ export default function GCodePreviewModal({
         }
       }
 
-      if (bounds) {
-        controls.target.set(bounds.center.x, bounds.center.y, bounds.center.z)
-        const dist = Math.max(bounds.radius * 2.2, 120)
-        camera.position.set(
-          bounds.center.x + dist * 0.65,
-          bounds.center.y + dist * 0.45,
-          bounds.center.z + dist * 0.75,
-        )
-        camera.near = Math.max(dist / 500, 0.1)
-        camera.far = Math.max(dist * 20, 5000)
-        camera.updateProjectionMatrix()
-      } else {
-        controls.target.set(0, 0, 0)
-        camera.position.set(120, 90, 160)
+      lastBounds = bounds
+      frameOrigin()
+    }
+
+    // Orbit around the G-code origin (X0 Y0, rotary axis) and back off far
+    // enough that every path fits the narrower of the two view angles.
+    let lastBounds = null
+    const frameOrigin = () => {
+      controls.target.set(0, 0, 0)
+      let radius = 120
+      if (lastBounds) {
+        const { min, max } = lastBounds
+        for (const x of [min.x, max.x]) {
+          for (const y of [min.y, max.y]) {
+            for (const z of [min.z, max.z]) {
+              radius = Math.max(radius, Math.hypot(x, y, z))
+            }
+          }
+        }
       }
+      const vHalf = THREE.MathUtils.degToRad(camera.fov / 2)
+      const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect)
+      const dist = (radius / Math.sin(Math.min(vHalf, hHalf))) * 1.05
+      camera.position.copy(FRAME_DIRECTION).multiplyScalar(dist)
+      camera.near = Math.max(dist / 500, 0.1)
+      camera.far = Math.max(dist * 20, 5000)
+      camera.updateProjectionMatrix()
+      controls.update()
       requestRender()
     }
 
     viewerRef.current = { rebuildLayers }
-    requestAnimationFrame(resize)
+    requestAnimationFrame(() => {
+      resize()
+      frameOrigin()
+    })
 
     return () => {
       viewerRef.current = null
@@ -244,18 +263,29 @@ export default function GCodePreviewModal({
               ? `${stack.pointCount} points · ${layerCount} cut layers · ${viewLabel}`
               : 'No cut paths — commit toolpath on Page 2 first'}
           </p>
-          <div className="gcode-preview-modal-toggle" role="group" aria-label="Preview view">
-            {VIEW_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className={viewMode === opt.id ? 'is-active' : ''}
-                aria-pressed={viewMode === opt.id}
-                onClick={() => setViewMode(opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div className="gcode-preview-modal-toolbar">
+            <div className="gcode-preview-modal-toggle" role="group" aria-label="Preview view">
+              {VIEW_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className={viewMode === opt.id ? 'is-active' : ''}
+                  aria-pressed={viewMode === opt.id}
+                  onClick={() => setViewMode(opt.id)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="gcode-preview-modal-download"
+              onClick={onDownload}
+              disabled={!program || !onDownload}
+              title={program ? 'Download G-code file' : 'Compiling G-code…'}
+            >
+              Download
+            </button>
           </div>
         </header>
         <div ref={mountRef} className="gcode-preview-modal-canvas" />

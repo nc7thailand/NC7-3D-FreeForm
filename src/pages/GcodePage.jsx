@@ -5,6 +5,8 @@ import { useAppState } from '../context/AppState'
 import { compileGcodeInWorker } from '../lib/camWorkerClient'
 import GCodePreviewModal from '../components/GCodePreviewModal'
 import {
+  downloadGcode,
+  defaultGcodeFilename,
   INDEX_MOTION_G0,
   INDEX_MOTION_G1,
   POST_PROCESS_OPTIONS,
@@ -15,7 +17,7 @@ import { topSafeY } from '../lib/wirePath'
 import { effectiveBottomSafeOffset } from '../lib/toolpath'
 
 export default function GcodePage() {
-  const { cutJob, stock, geometry, gcodeSettings, setGcodeSettings } = useAppState()
+  const { cutJob, stock, geometry, modelName, gcodeSettings, setGcodeSettings } = useAppState()
   const [preview3dOpen, setPreview3dOpen] = useState(false)
 
   const { feedRate, indexFeed, spindle, rotaryAxis, postProcess } = gcodeSettings
@@ -50,6 +52,14 @@ export default function GcodePage() {
 
   const updateSetting = (key, value) => {
     setGcodeSettings((prev) => (prev[key] === value ? prev : { ...prev, [key]: value }))
+  }
+
+  const handleDownload = () => {
+    if (!gcodeResult?.program) return
+    downloadGcode(
+      gcodeResult.program,
+      defaultGcodeFilename(modelName, postProcess ?? POST_PROCESS_GRBL),
+    )
   }
 
   const handleIndexMotionChange = (value) => {
@@ -164,6 +174,8 @@ export default function GcodePage() {
         cutJob={cutJob}
         geometry={geometry}
         rotaryAxis={rotaryAxis ?? 'Z'}
+        program={gcodeCompiling ? null : gcodeResult?.program ?? null}
+        onDownload={handleDownload}
       />
     </main>
   )

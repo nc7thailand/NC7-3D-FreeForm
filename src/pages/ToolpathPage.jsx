@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useMemo, useState, useEffect, useCallback } from 'react'
+import React, { lazy, Suspense, useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import SmartNumberInput from '../components/SmartNumberInput'
 import SilhouettePreviewPanel from '../components/SilhouettePreviewPanel'
 import SimulationGcodePanel from '../components/SimulationGcodePanel'
@@ -217,17 +217,17 @@ export default function ToolpathPage() {
     openToolpathSetup()
   }, [sessionReady, openToolpathSetup])
 
-  // Refresh trigger — recompute from hi-res when the restored cutJob is stale.
-  // Skipped on the first tab visit: Setup Apply is the compute trigger there.
+  // Refresh trigger — recompute from hi-res when the cutJob is stale (restore,
+  // N or cut mode change). Skipped on the first tab visit: Setup Apply is the
+  // compute trigger there. The ref keeps stock-only identity changes from
+  // re-running the effect.
+  const refreshToolpathRef = useRef(refreshToolpathIfNeeded)
+  refreshToolpathRef.current = refreshToolpathIfNeeded
   useEffect(() => {
-    if (!sessionReady || !geometry) return undefined
-    if (shouldAutoOpenToolpathSetup()) return undefined
-    let cancelled = false
-    ;(async () => {
-      if (!cancelled) await refreshToolpathIfNeeded()
-    })()
-    return () => { cancelled = true }
-  }, [sessionReady, geometry, refreshToolpathIfNeeded])
+    if (!sessionReady || !geometry) return
+    if (shouldAutoOpenToolpathSetup()) return
+    refreshToolpathRef.current()
+  }, [sessionReady, geometry, rotationN, cutMode])
 
   const wirePointCount = useMemo(() => {
     if (!profile?.polylines?.length) return null

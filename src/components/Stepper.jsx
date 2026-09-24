@@ -11,7 +11,7 @@ export default function Stepper() {
     hasToolpath,
     hasToolpathSaved,
     saveModelStage,
-    saveToolpathStage,
+    refreshToolpathIfNeeded,
     ensureToolpathOnModelEntry,
   } = useAppState()
 
@@ -32,7 +32,7 @@ export default function Stepper() {
     }
     if (pathname === ROUTES.toolpath && path === ROUTES.gcode) {
       e.preventDefault()
-      if (await saveToolpathStage()) navigate(path)
+      if (await refreshToolpathIfNeeded()) navigate(path)
     }
   }
 

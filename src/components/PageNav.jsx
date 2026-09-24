@@ -93,7 +93,7 @@ export default function PageNav({ page }) {
     hasModel,
     hasToolpath,
     saveModelStage,
-    saveToolpathStage,
+    refreshToolpathIfNeeded,
     ensureToolpathOnModelEntry,
     toolpathSetupOpen,
     openToolpathSetup,
@@ -138,7 +138,7 @@ export default function PageNav({ page }) {
       if (!(await saveModelStage())) return
       if (!(await ensureToolpathOnModelEntry())) return
     }
-    if (page === 'toolpath' && !(await saveToolpathStage())) return
+    if (page === 'toolpath' && !(await refreshToolpathIfNeeded())) return
     if (config.next) navigate(config.next)
   }
 

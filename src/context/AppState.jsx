@@ -116,15 +116,15 @@ export function AppStateProvider({ children }) {
   const [busy, setBusy] = useState({ active: false, message: '', progress: null })
 
   const [stock, setStock] = useState(DEFAULT_STOCK)
-  const [rotationN, setRotationN] = useState(DEFAULT_ROTATION_N)
+  const [rotationN, setRotationNState] = useState(DEFAULT_ROTATION_N)
   // CAM convention: the blocking setup panel forces an explicit mode choice
   // every session, so the default is a starting suggestion rather than a silent
   // choice. Left only = one half per rotation (16 cuts at N=16).
-  const [cutMode, setCutMode] = useState(CUT_MODE_LEFT_ONLY)
+  const [cutMode, setCutModeState] = useState(CUT_MODE_LEFT_ONLY)
   const [cutIndex, setCutIndex] = useState(0)
   const [profile, setProfile] = useState(null)
   const [silhouettePreview, setSilhouettePreview] = useState(null)
-  const [cutJob, setCutJob] = useState(null)
+  const [cutJob, setCutJobState] = useState(null)
   const [gcodeSettings, setGcodeSettings] = useState(DEFAULT_GCODE_SETTINGS)
   const [toolpathTick, setToolpathTick] = useState(0)
   const [modelName, setModelName] = useState(DUMMY_STL_NAME)
@@ -149,6 +149,27 @@ export function AppStateProvider({ children }) {
   const highResStoredRef = useRef(null)
   const viewerRef = useRef(null)
   const planePoint = useRef(planePointFromStock(DEFAULT_STOCK))
+
+  // Latest-value mirrors, written synchronously by the setters so async
+  // toolpath code (compute, staleness checks) never reads a stale closure.
+  const rotationNRef = useRef(DEFAULT_ROTATION_N)
+  const cutModeRef = useRef(CUT_MODE_LEFT_ONLY)
+  const cutJobRef = useRef(null)
+  /** In-flight saveToolpathStage promise — "recompute if needed" callers join it. */
+  const toolpathComputeRef = useRef(null)
+
+  const setRotationN = useCallback((value) => {
+    rotationNRef.current = typeof value === 'function' ? value(rotationNRef.current) : value
+    setRotationNState(rotationNRef.current)
+  }, [])
+  const setCutMode = useCallback((value) => {
+    cutModeRef.current = typeof value === 'function' ? value(cutModeRef.current) : value
+    setCutModeState(cutModeRef.current)
+  }, [])
+  const setCutJob = useCallback((value) => {
+    cutJobRef.current = typeof value === 'function' ? value(cutJobRef.current) : value
+    setCutJobState(cutJobRef.current)
+  }, [])
 
   const storeHighResGeometry = useCallback((geo) => {
     if (!geo) {
@@ -231,9 +252,11 @@ export function AppStateProvider({ children }) {
   }, [updateStatsOnly])
 
   /** Bake gizmo transform into geometry without clearing toolpath state. */
+  /** @returns {false | 'baked' | 'unchanged'} */
   const bakeModelTransform = useCallback(() => {
     if (!workingRef.current) return false
     const worldMatrix = viewerRef.current?.getMeshWorldMatrix?.() ?? null
+    let baked = false
     if (worldMatrix) {
       const e = worldMatrix.elements
       const isIdentity = !e || (
@@ -248,9 +271,10 @@ export function AppStateProvider({ children }) {
         workingRef.current.userData.nc7CentroidApplied = true
         setGeometry(workingRef.current)
         updateStatsFrom(workingRef.current)
+        baked = true
       }
     }
-    return true
+    return baked ? 'baked' : 'unchanged'
   }, [updateStatsFrom])
 
   const applyRestoredSession = useCallback((data) => {
@@ -595,7 +619,15 @@ export function AppStateProvider({ children }) {
 
   /** Commit gizmo transform into geometry before leaving Page 1. */
   const saveModelStage = useCallback(() => {
-    if (!bakeModelTransform()) return false
+    const bake = bakeModelTransform()
+    if (!bake) return false
+    // Nothing was baked and the saved toolpath still has a profile: every other
+    // model edit (load, resize, settle, simplify) already clears cutJob, so the
+    // saved job was built from this exact geometry — keep it.
+    if (bake === 'unchanged' && cutJobHasProfile(cutJobRef.current)) {
+      setStatus('Model unchanged — keeping saved toolpath.')
+      return true
+    }
     if (workingRef.current) {
       settleGeometry(workingRef.current)
       workingRef.current.userData.nc7CentroidApplied = true
@@ -625,25 +657,26 @@ export function AppStateProvider({ children }) {
     const geo = getHiResGeometryForCompute()
     if (!geo) return null
     const s = stockOverride ?? stock
-    const mode = cutModeOverride ?? cutMode
+    const mode = cutModeOverride ?? cutModeRef.current
     planePoint.current.copy(planePointFromStock(s))
     return computeToolpathInWorker(geo, {
-      rotationN,
+      rotationN: rotationNRef.current,
       stock: s,
       cutMode: mode,
       onProgress,
     })
-  }, [getHiResGeometryForCompute, rotationN, cutMode, stock])
+  }, [getHiResGeometryForCompute, stock])
 
   /** @deprecated internal alias — callers should use computeToolpathFromHiRes. */
   const computeCutJob = computeToolpathFromHiRes
 
-  const saveToolpathStage = useCallback(async (stockOverride = null, cutModeOverride = null) => {
+  const runToolpathCompute = useCallback(async (stockOverride = null, cutModeOverride = null) => {
     const geo = workingRef.current
     if (!geo) return false
-    const mode = cutModeOverride ?? cutMode
-    const total = effectiveCutCount(rotationN, { mode })
-    setStatus(`Computing ${total} cuts (N=${rotationN}, ${mode})…`)
+    const mode = cutModeOverride ?? cutModeRef.current
+    const n = rotationNRef.current
+    const total = effectiveCutCount(n, { mode })
+    setStatus(`Computing ${total} cuts (N=${n}, ${mode})…`)
     beginBusy('Computing toolpath…', { done: 0, total })
     await yieldToPaint()
     try {
@@ -665,51 +698,51 @@ export function AppStateProvider({ children }) {
     } finally {
       await endBusy()
     }
-  }, [computeToolpathFromHiRes, rotationN, cutMode, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+  }, [computeToolpathFromHiRes, beginBusy, setBusyProgress, endBusy, yieldToPaint])
+
+  /** Full recompute — explicit triggers only (Setup Apply, N change). */
+  const saveToolpathStage = useCallback((stockOverride = null, cutModeOverride = null) => {
+    const run = runToolpathCompute(stockOverride, cutModeOverride)
+    toolpathComputeRef.current = run
+    run.finally(() => {
+      if (toolpathComputeRef.current === run) toolpathComputeRef.current = null
+    })
+    return run
+  }, [runToolpathCompute])
+
+  /**
+   * Recompute only when the saved cutJob is stale vs the hi-res source, N or
+   * cut mode. Joins an in-flight compute first, so overlapping triggers
+   * (setup close, page refresh effect, navigation) never compute twice.
+   */
+  const refreshToolpathIfNeeded = useCallback(async () => {
+    while (toolpathComputeRef.current) {
+      await toolpathComputeRef.current.catch(() => {})
+    }
+    const hiRes = getHiResGeometryForCompute()
+    if (!hiRes) return false
+    if (!cutJobNeedsRecompute(cutJobRef.current, {
+      rotationN: rotationNRef.current,
+      cutMode: cutModeRef.current,
+      sourceGeometryUuid: hiRes.uuid,
+      sourceModelRevision: modelRevisionOf(hiRes),
+    })) {
+      return true
+    }
+    return saveToolpathStage()
+  }, [getHiResGeometryForCompute, saveToolpathStage])
 
   /**
    * Model → Toolpath trigger. First visit defers compute to Setup Apply;
-   * return visits compute immediately with committed settings.
+   * return visits recompute only if the saved job is stale.
    */
   const ensureToolpathOnModelEntry = useCallback(async () => {
     if (shouldAutoOpenToolpathSetup()) return true
-    return saveToolpathStage()
-  }, [saveToolpathStage])
+    return refreshToolpathIfNeeded()
+  }, [refreshToolpathIfNeeded])
 
-  /**
-   * Refresh trigger — recompute when the restored cutJob is stale vs hi-res source.
-   */
-  const refreshToolpathIfNeeded = useCallback(async () => {
-    const hiRes = getHiResGeometryForCompute()
-    if (!hiRes) return false
-    if (!cutJobNeedsRecompute(cutJob, {
-      rotationN,
-      cutMode,
-      sourceGeometryUuid: hiRes.uuid,
-      sourceModelRevision: modelRevisionOf(hiRes),
-    })) {
-      return true
-    }
-    return saveToolpathStage()
-  }, [cutJob, cutMode, getHiResGeometryForCompute, rotationN, saveToolpathStage])
-
-  /**
-   * Setup-close trigger — first visit (or any close with no cutJob yet).
-   * Runs after the blocking setup panel dismisses.
-   */
-  const ensureToolpathAfterSetupClose = useCallback(async () => {
-    const hiRes = getHiResGeometryForCompute()
-    if (!hiRes) return false
-    if (!cutJobNeedsRecompute(cutJob, {
-      rotationN,
-      cutMode,
-      sourceGeometryUuid: hiRes.uuid,
-      sourceModelRevision: modelRevisionOf(hiRes),
-    })) {
-      return true
-    }
-    return saveToolpathStage()
-  }, [cutJob, cutMode, getHiResGeometryForCompute, rotationN, saveToolpathStage])
+  /** Setup-close trigger — runs after the blocking setup panel dismisses. */
+  const ensureToolpathAfterSetupClose = refreshToolpathIfNeeded
 
   /** Bake gizmo, apply foam-block vertical offset, refresh geometry (new clone for React). */
   const applyModelBlockOffsetFromStock = useCallback((stockSnapshot = stock) => {

@@ -39,12 +39,26 @@ export function layerZForCut(cutJob, cut) {
   return cut.index * step
 }
 
-function layerMapper(viewMode, cutJob, cut) {
-  if (viewMode === PREVIEW_VIEW.ASSEMBLED) {
-    // Same −θ axis extractOverlayContour projects with, so u unprojects onto the model.
-    const { uAxis } = cuttingPlane(-cut.thetaDeg, planePointMiddleFromStock())
-    return (p) => ({ x: p.u * uAxis.x, y: p.v, z: p.u * uAxis.z })
+function assembledMapper(thetaDeg) {
+  // Same −θ axis extractOverlayContour projects with, so u unprojects onto the model.
+  const { uAxis } = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
+  return (p) => ({ x: p.u * uAxis.x, y: p.v, z: p.u * uAxis.z })
+}
+
+const ROTARY_ARC_STEP_DEG = 2
+
+/** Fixed machine point (u, v) swept from θa to θb, seen in the assembled (foam) frame. */
+function assembledRotaryArc(p, thetaA, thetaB) {
+  const steps = Math.max(2, Math.ceil(Math.abs(thetaB - thetaA) / ROTARY_ARC_STEP_DEG))
+  const pts = []
+  for (let s = 0; s <= steps; s++) {
+    pts.push(assembledMapper(thetaA + ((thetaB - thetaA) * s) / steps)(p))
   }
+  return pts
+}
+
+function layerMapper(viewMode, cutJob, cut) {
+  if (viewMode === PREVIEW_VIEW.ASSEMBLED) return assembledMapper(cut.thetaDeg)
   const z = layerZForCut(cutJob, cut)
   return (p) => ({ x: p.u, y: p.v, z })
 }
@@ -86,9 +100,7 @@ export function buildCutPathLayerStack(cutJob, geometry = null, { viewMode = PRE
     pointCount += layer.cut.length + Math.max(layer.leadIn.length - 1, 0) + Math.max(layer.leadOut.length - 1, 0)
   }
 
-  if (viewMode === PREVIEW_VIEW.STACK) {
-    attachTransitionLinks(layers, cutJob, ctx)
-  }
+  attachTransitionLinks(layers, cutJob, ctx, viewMode)
 
   return {
     layers,
@@ -101,10 +113,13 @@ export function buildCutPathLayerStack(cutJob, geometry = null, { viewMode = PRE
  * Transitions (left-only and left-to-right), from the same index plan the G-code uses:
  * - simDotLink (yellow): the X rapid red → simDot K at the red marker's level,
  *   on layer N when it moves before the turn (preMoveToK), else on layer N+1.
- * - rotaryLink (white): the rotary index, drawn along Z from layer N to N+1
- *   at the XY where the turn happens (K when preMoveToK, else the red marker).
+ *   Layer stack view only.
+ * - rotaryLink (white): the rotary index at the XY where the turn happens
+ *   (K when preMoveToK, else the red marker). Layer stack: a line along Z from
+ *   layer N to N+1. Assembled: an arc around the rotary axis from layer N's
+ *   cut angle to layer N+1's.
  */
-function attachTransitionLinks(layers, cutJob, ctx) {
+function attachTransitionLinks(layers, cutJob, ctx, viewMode) {
   if (!ctx.geometry) return
   for (let i = 0; i < layers.length - 1; i++) {
     const layer = layers[i]
@@ -124,6 +139,12 @@ function attachTransitionLinks(layers, cutJob, ctx) {
 
     const k = plan.k ?? next.chain.green
     const turnAt = k && plan.preMoveToK ? k : red
+
+    if (viewMode === PREVIEW_VIEW.ASSEMBLED) {
+      layer.rotaryLink = assembledRotaryArc(turnAt, layer.thetaDeg, next.thetaDeg)
+      continue
+    }
+
     layer.rotaryLink = [
       { x: turnAt.u, y: turnAt.v, z: layer.layerZ },
       { x: turnAt.u, y: turnAt.v, z: next.layerZ },
