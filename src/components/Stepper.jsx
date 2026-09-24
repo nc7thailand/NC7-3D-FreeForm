@@ -19,7 +19,6 @@ export default function Stepper() {
     if (path.endsWith('/model')) return true
     if (path.endsWith('/toolpath')) return hasModel
     if (path.endsWith('/gcode')) return hasModel && hasToolpathSaved
-    if (path.endsWith('/simulate')) return hasModel && hasToolpathSaved
     return false
   }
 
@@ -31,10 +30,7 @@ export default function Stepper() {
       navigate(path)
       return
     }
-    if (
-      pathname === ROUTES.toolpath
-      && (path === ROUTES.gcode || path === ROUTES.simulate)
-    ) {
+    if (pathname === ROUTES.toolpath && path === ROUTES.gcode) {
       e.preventDefault()
       if (await saveToolpathStage()) navigate(path)
     }
@@ -45,10 +41,7 @@ export default function Stepper() {
       {STEPS.map((step, i) => {
         const active = pathname === step.path
         const unlocked = canVisit(step.path)
-        const dimmed = (
-          (step.path === ROUTES.simulate || step.path === ROUTES.gcode)
-          && hasToolpath && !hasToolpathSaved
-        )
+        const dimmed = step.path === ROUTES.gcode && hasToolpath && !hasToolpathSaved
         return (
           <React.Fragment key={step.path}>
             {i > 0 && <span className="stepper-sep" aria-hidden="true" />}

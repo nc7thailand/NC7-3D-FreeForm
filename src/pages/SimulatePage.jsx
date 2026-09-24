@@ -4,6 +4,7 @@ import SimulateViewer from '../components/SimulateViewer'
 import { useAppState } from '../context/AppState'
 import { buildPlaybackTimeline, buildWireStack, sampleTimeline } from '../lib/simStack'
 import { wireSpeedMmPerSec } from '../lib/turntablePhysics'
+import { SIMULATE_ROUTE_DETACHED } from '../routes'
 
 export default function SimulatePage() {
   const { geometry, cutJob, resetKey, gcodeSettings } = useAppState()
@@ -116,7 +117,10 @@ export default function SimulatePage() {
       <main className="page-main">
         <div className="page-body">
           <div className="placeholder-page">
-            <div className="section-label">Page 3 — Simulation</div>
+            <div className="section-label">Simulation (detached)</div>
+            {SIMULATE_ROUTE_DETACHED && (
+              <p className="detached-route-flag">This page is not part of the main Model → Toolpath → G-code workflow.</p>
+            )}
             <div className="placeholder-content">
               <p className="placeholder-note">No saved cut job — go back to Page 2 and press Next to commit the toolpath.</p>
             </div>
@@ -131,9 +135,12 @@ export default function SimulatePage() {
     <main className="page-main page-main--simulate">
       <div className="page-body">
         <div className="section-label section-label-row simulate-header">
-          <span>Page 3 — Simulation</span>
+          <span>Simulation (detached)</span>
           <span className="simulate-header-meta">{stack.length} wire profiles · {timeline.length} segments</span>
         </div>
+        {SIMULATE_ROUTE_DETACHED && (
+          <p className="detached-route-flag">This page is not part of the main Model → Toolpath → G-code workflow.</p>
+        )}
 
         <div className="simulate-layout">
           <aside className="simulate-controls">

@@ -1,61 +1,108 @@
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import SmartNumberInput from '../components/SmartNumberInput'
 import PageNav from '../components/PageNav'
 import { useAppState } from '../context/AppState'
-import { generateGcode, downloadGcode, defaultGcodeFilename } from '../lib/gcode'
+import {
+  generateGcode,
+  downloadGcode,
+  defaultGcodeFilename,
+  POST_PROCESS_OPTIONS,
+  POST_PROCESS_GRBL,
+  ROTARY_AXIS_OPTIONS,
+} from '../lib/gcode'
 import { topSafeY } from '../lib/wirePath'
 import { effectiveBottomSafeOffset } from '../lib/toolpath'
 
+function gcodeSettingsEqual(a, b) {
+  return a.feedRate === b.feedRate
+    && a.indexFeed === b.indexFeed
+    && a.spindle === b.spindle
+    && a.rotaryAxis === b.rotaryAxis
+    && (a.postProcess ?? POST_PROCESS_GRBL) === (b.postProcess ?? POST_PROCESS_GRBL)
+}
+
 export default function GcodePage() {
-  const { cutJob, stock, modelName, gcodeSettings, handleGcodeSettingsChange } = useAppState()
-  const { feedRate, indexFeed, spindle } = gcodeSettings
+  const { cutJob, stock, geometry, modelName, gcodeSettings, setGcodeSettings } = useAppState()
+  const [draftSettings, setDraftSettings] = useState(gcodeSettings)
+  const [previewOpen, setPreviewOpen] = useState(false)
+
+  useEffect(() => {
+    setDraftSettings(gcodeSettings)
+  }, [gcodeSettings])
+
+  const { feedRate, indexFeed, spindle, rotaryAxis, postProcess } = draftSettings
 
   const jobStock = cutJob?.stock ?? stock
   const profileCount = cutJob?.cuts?.filter((c) => c.profile.polylines.length > 0).length ?? 0
   const lb0 = effectiveBottomSafeOffset(0, jobStock)
+  const dirty = !gcodeSettingsEqual(draftSettings, gcodeSettings)
 
   const gcodeResult = useMemo(() => {
     if (!cutJob) return null
-    return generateGcode(cutJob, gcodeSettings)
-  }, [cutJob, gcodeSettings])
+    return generateGcode(cutJob, gcodeSettings, { geometry })
+  }, [cutJob, gcodeSettings, geometry])
+
+  const updateDraft = (key, value) => {
+    setDraftSettings((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const handleApply = () => {
+    setGcodeSettings({ ...draftSettings })
+  }
 
   const handleDownload = () => {
     if (!gcodeResult?.program) return
-    downloadGcode(gcodeResult.program, defaultGcodeFilename(modelName))
-  }
-
-  const handleCopy = async () => {
-    if (!gcodeResult?.program) return
-    try {
-      await navigator.clipboard.writeText(gcodeResult.program)
-    } catch {
-      /* clipboard may be unavailable */
-    }
+    downloadGcode(
+      gcodeResult.program,
+      defaultGcodeFilename(modelName, postProcess ?? POST_PROCESS_GRBL),
+    )
   }
 
   return (
     <main className="page-main">
       <div className="page-body">
         <div className="gcode-page">
-          <div className="section-label">Page 4 — G-code Generation</div>
+          <div className="section-label">Page 3 — G-code Generation</div>
 
           {!cutJob ? (
             <div className="placeholder-content">
-              <p className="placeholder-note">No saved cut job — go back to Page 2 and press Next to commit the toolpath.</p>
+              <p className="placeholder-note">No saved cut job — go back to Toolpath and press Next to commit the toolpath.</p>
             </div>
           ) : (
-            <div className="gcode-layout">
+            <div className={`gcode-layout${previewOpen ? '' : ' gcode-layout--preview-hidden'}`}>
               <aside className="gcode-settings">
-                <h3>Method 1 · G93</h3>
+                <h3>Method 1 · G1</h3>
                 <div className="inputs">
                   <label>Cut feed (mm/min)
-                    <SmartNumberInput min={1} step={10} emptyFallback={700} value={feedRate} onChange={(n) => handleGcodeSettingsChange('feedRate', n)} />
+                    <SmartNumberInput min={1} step={10} emptyFallback={700} value={feedRate} onChange={(n) => updateDraft('feedRate', n)} />
                   </label>
-                  <label>Z index feed (G93 F)
-                    <SmartNumberInput min={1} step={1} emptyFallback={160} value={indexFeed} onChange={(n) => handleGcodeSettingsChange('indexFeed', n)} />
+                  <label>Rotary Axis Notation
+                    <select
+                      className="gcode-axis-select"
+                      value={rotaryAxis ?? 'Z'}
+                      onChange={(e) => updateDraft('rotaryAxis', e.target.value)}
+                    >
+                      {ROTARY_AXIS_OPTIONS.map((axis) => (
+                        <option key={axis} value={axis}>{axis}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Rotary axis speed (mm/min)
+                    <SmartNumberInput min={1} step={1} emptyFallback={160} value={indexFeed} onChange={(n) => updateDraft('indexFeed', n)} />
                   </label>
                   <label>Spindle (S)
-                    <SmartNumberInput min={0} step={100} emptyFallback={1000} value={spindle} onChange={(n) => handleGcodeSettingsChange('spindle', n)} />
+                    <SmartNumberInput min={0} step={100} emptyFallback={1000} value={spindle} onChange={(n) => updateDraft('spindle', n)} />
+                  </label>
+                  <label>Post process
+                    <select
+                      className="gcode-axis-select"
+                      value={postProcess ?? POST_PROCESS_GRBL}
+                      onChange={(e) => updateDraft('postProcess', e.target.value)}
+                    >
+                      {POST_PROCESS_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
                   </label>
                 </div>
 
@@ -78,24 +125,45 @@ export default function GcodePage() {
                 </div>
 
                 <div className="gcode-actions">
-                  <button type="button" className="header-next-btn" onClick={handleDownload} disabled={!gcodeResult?.cutCount}>
-                    Download .nc
+                  <button
+                    type="button"
+                    className="header-next-btn"
+                    onClick={handleApply}
+                    disabled={!dirty}
+                  >
+                    Apply
                   </button>
-                  <button type="button" className="cut-nav-btn" onClick={handleCopy} disabled={!gcodeResult?.cutCount}>
-                    Copy
+                  <button
+                    type="button"
+                    className="header-next-btn"
+                    onClick={handleDownload}
+                    disabled={!gcodeResult?.cutCount}
+                  >
+                    Download
+                  </button>
+                  <button
+                    type="button"
+                    className={`cut-nav-btn gcode-preview-toggle${previewOpen ? ' is-active' : ''}`}
+                    onClick={() => setPreviewOpen((open) => !open)}
+                    disabled={!gcodeResult?.cutCount}
+                    aria-expanded={previewOpen}
+                  >
+                    G code preview
                   </button>
                 </div>
               </aside>
 
-              <section className="gcode-preview-panel">
-                <div className="section-label section-label-sub">Program preview</div>
-                <textarea
-                  className="gcode-preview"
-                  readOnly
-                  spellCheck={false}
-                  value={gcodeResult?.program ?? ''}
-                />
-              </section>
+              {previewOpen && (
+                <section className="gcode-preview-panel">
+                  <div className="section-label section-label-sub">G code Preview</div>
+                  <textarea
+                    className="gcode-preview"
+                    readOnly
+                    spellCheck={false}
+                    value={gcodeResult?.program ?? ''}
+                  />
+                </section>
+              )}
             </div>
           )}
         </div>

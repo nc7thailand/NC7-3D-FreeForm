@@ -122,8 +122,8 @@ export default function PageNav({ page }) {
       nextDisabled: false,
     },
     gcode: {
-      back: ROUTES.simulate,
-      backLabel: '← Back to Simulate',
+      back: ROUTES.toolpath,
+      backLabel: '← Back to Toolpath',
       next: null,
       nextLabel: null,
       nextDisabled: true,

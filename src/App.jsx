@@ -34,6 +34,7 @@ export default function App() {
                 </RequireToolpath>
               )}
             />
+            {/* Detached from STEPS — see SIMULATE_ROUTE_DETACHED in routes.js */}
             <Route
               path={ROUTES.simulate}
               element={(
