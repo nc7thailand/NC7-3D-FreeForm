@@ -16,6 +16,8 @@ import {
 import { topSafeY } from '../lib/wirePath'
 import { effectiveBottomSafeOffset } from '../lib/toolpath'
 
+const GCODE_COMPILE_DEBOUNCE_MS = 200
+
 export default function GcodePage() {
   const { cutJob, stock, geometry, modelName, gcodeSettings, setGcodeSettings } = useAppState()
   const [preview3dOpen, setPreview3dOpen] = useState(false)
@@ -37,17 +39,24 @@ export default function GcodePage() {
     }
     let cancelled = false
     setGcodeCompiling(true)
-    compileGcodeInWorker(cutJob, gcodeSettings, geometry)
-      .then((result) => {
-        if (!cancelled) setGcodeResult(result)
-      })
-      .catch(() => {
-        if (!cancelled) setGcodeResult(null)
-      })
-      .finally(() => {
-        if (!cancelled) setGcodeCompiling(false)
-      })
-    return () => { cancelled = true }
+    // Each compile copies the mesh into a worker message; debounce so typing
+    // in a settings field does not stack up several full copies at once.
+    const timer = setTimeout(() => {
+      compileGcodeInWorker(cutJob, gcodeSettings, geometry)
+        .then((result) => {
+          if (!cancelled) setGcodeResult(result)
+        })
+        .catch(() => {
+          if (!cancelled) setGcodeResult(null)
+        })
+        .finally(() => {
+          if (!cancelled) setGcodeCompiling(false)
+        })
+    }, GCODE_COMPILE_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [cutJob, gcodeSettings, geometry])
 
   const updateSetting = (key, value) => {

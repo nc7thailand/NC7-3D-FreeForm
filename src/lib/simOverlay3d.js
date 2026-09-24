@@ -7,6 +7,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import { CUT_MODE_LEFT_ONLY, effectiveCutCount } from './cutJob.js'
 import { leftOnlySimDot } from './indexing/indexSequenceLeftOnly.js'
 import { OVERLAY_COLORS, buildOverlayData } from './cutOverlay.js'
+import { disposeObject3D, setLinePositions as setGeometryPositions } from './threeDispose.js'
 
 export const WIRE_BLINK_PERIOD = 0.45
 export const WIRE_GLOW_COLOR = 0xff4500
@@ -136,22 +137,21 @@ export function createNextDotGroup(overlayScale) {
   return { group, fill, border }
 }
 
-function setLinePositions(geo, u, v, halfLen) {
-  geo.setPositions([u, v, -halfLen, u, v, halfLen])
-}
-
-function setTrailPositions(trailGeo, trailUV) {
-  if (!trailUV?.length) {
-    trailGeo.setPositions([0, 0, 0.01, 0, 0, 0.01])
-    return
-  }
-  const verts = new Array(trailUV.length * 3)
-  for (let i = 0; i < trailUV.length; i++) {
+/** Rebuild the trail buffers only when the trail changed since the last frame. */
+function setTrailPositions(sim, trailUV) {
+  const n = trailUV.length
+  const last = trailUV[n - 1]
+  if (sim.trailCount === n && sim.trailLast === last) return false
+  sim.trailCount = n
+  sim.trailLast = last
+  const verts = new Float32Array(n * 3)
+  for (let i = 0; i < n; i++) {
     verts[i * 3] = trailUV[i].u
     verts[i * 3 + 1] = trailUV[i].v
     verts[i * 3 + 2] = 0.01
   }
-  trailGeo.setPositions(verts)
+  setGeometryPositions(sim.trailGeo, verts)
+  return true
 }
 
 /**
@@ -230,10 +230,9 @@ export function syncSimOverlay(sim, playback, ctx) {
   sim.wireGlowMat.color.setHex(glowColor)
 
   if (wireUV && Number.isFinite(wireUV.u) && Number.isFinite(wireUV.v)) {
-    setLinePositions(sim.wireGlowGeo, wireUV.u, wireUV.v, sim.halfLen)
-    setLinePositions(sim.wireCoreGeo, wireUV.u, wireUV.v, sim.halfLen)
-    sim.wireGlowLine.computeLineDistances()
-    sim.wireCoreLine.computeLineDistances()
+    // Geometry is built at (0, 0); moving the object avoids new GPU buffers per frame.
+    sim.wireGlowLine.position.set(wireUV.u, wireUV.v, 0)
+    sim.wireCoreLine.position.set(wireUV.u, wireUV.v, 0)
     sim.wireGlowLine.visible = true
     sim.wireCoreLine.visible = true
   } else {
@@ -242,8 +241,7 @@ export function syncSimOverlay(sim, playback, ctx) {
   }
 
   if (trailUV.length >= 2) {
-    setTrailPositions(sim.trailGeo, trailUV)
-    sim.trail.computeLineDistances()
+    setTrailPositions(sim, trailUV)
     sim.trail.visible = true
   } else {
     sim.trail.visible = false
@@ -255,8 +253,8 @@ export function syncSimOverlay(sim, playback, ctx) {
 
 export function disposeSimOverlay(sim) {
   if (!sim?.group) return
-  sim.group.traverse((obj) => {
-    if (obj.geometry) obj.geometry.dispose()
-    if (obj.material) obj.material.dispose()
-  })
+  disposeObject3D(sim.group)
+  sim.simWireMaterials = []
+  sim.trailLast = null
+  sim.trailCount = 0
 }

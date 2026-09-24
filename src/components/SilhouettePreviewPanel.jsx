@@ -50,6 +50,7 @@ import {
 } from '../lib/safeZoneManager'
 import { cutBoV } from '../lib/toolpath'
 import { nextSimDot } from '../lib/simOverlay3d'
+import { pushSimLog, SIM_LOG_VIEW_ROWS } from '../lib/simLog'
 import {
   UI_AXES_DISPLAY,
   displayCoordX,
@@ -1624,7 +1625,7 @@ export default function SilhouettePreviewPanel({
 
       if (now - simLastSampleRef.current >= SIM_SAMPLE_MS && pt) {
         simLastSampleRef.current = now
-        simLogRef.current.push({
+        pushSimLog(simLogRef.current, {
           n: (cutIndex ?? 0) + 1,
           u: +pt.u.toFixed(2),
           v: +pt.v.toFixed(2),
@@ -2555,7 +2556,7 @@ export default function SilhouettePreviewPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {simLogRef.current.map((r, i) => (
+                  {simLogRef.current.slice(-SIM_LOG_VIEW_ROWS).map((r, i) => (
                     <tr key={i}>
                       <td>{r.n}</td>
                       <td>{r.u.toFixed(2)}</td>

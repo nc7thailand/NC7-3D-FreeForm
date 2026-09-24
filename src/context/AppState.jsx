@@ -20,7 +20,6 @@ import { saveBrowserSession, loadBrowserSession, clearBrowserSession } from '../
 import { loadSimSettings, saveSimSettings } from '../lib/simSettings'
 import {
   bumpModelRevision,
-  cloneStoredGeometry,
   cutJobNeedsRecompute,
   modelRevisionOf,
   patchCutJobMarkerStock,
@@ -171,14 +170,32 @@ export function AppStateProvider({ children }) {
     setCutJobState(cutJobRef.current)
   }, [])
 
+  // Holds a reference, not a clone: there is no display proxy mesh, and a
+  // second full copy of a dense STL is what pushed low-RAM machines over.
   const storeHighResGeometry = useCallback((geo) => {
     if (!geo) {
       highResStoredRef.current = null
       return
     }
-    highResStoredRef.current = cloneStoredGeometry(geo)
-    highResStoredRef.current.userData.nc7CentroidApplied = true
+    geo.userData.nc7CentroidApplied = true
+    highResStoredRef.current = geo
   }, [])
+
+  // Viewers never dispose app-owned geometry, so release the GPU buffers of
+  // the model this state just replaced (load, simplify, offset, reset).
+  const prevGeometryRef = useRef(null)
+  useEffect(() => {
+    const prev = prevGeometryRef.current
+    prevGeometryRef.current = geometry
+    if (
+      prev
+      && prev !== geometry
+      && prev !== workingRef.current
+      && prev !== highResStoredRef.current
+    ) {
+      prev.dispose()
+    }
+  }, [geometry])
 
   const getHiResGeometryForCompute = useCallback(() => {
     const stored = highResStoredRef.current
@@ -292,13 +309,6 @@ export function AppStateProvider({ children }) {
     setCutJob(data.cutJob)
     if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
     setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
-    if (data.cutJob?.cuts) {
-      for (const cut of data.cutJob.cuts) {
-        if (!cut.wirePath?.length && cut.profile?.polylines?.length) {
-          cut.wirePath = wirePathFromProfile(cut.profile, data.stock, cut.thetaDeg)
-        }
-      }
-    }
     setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
     updateStatsOnly(data.geometry)
     setResetKey((k) => k + 1)
@@ -894,13 +904,6 @@ export function AppStateProvider({ children }) {
       setCutJob(data.cutJob)
       if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
       setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
-      if (data.cutJob?.cuts) {
-        for (const cut of data.cutJob.cuts) {
-          if (!cut.wirePath?.length && cut.profile?.polylines?.length) {
-            cut.wirePath = wirePathFromProfile(cut.profile, data.stock, cut.thetaDeg)
-          }
-        }
-      }
       setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
       updateStatsOnly(data.geometry)
       viewerRef.current?.resetMeshTransform?.()

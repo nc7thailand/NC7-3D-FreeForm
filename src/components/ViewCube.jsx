@@ -6,6 +6,7 @@ import * as THREE from 'three'
 const FACE_LABELS = ['RIGHT', 'LEFT', 'BOT', 'FRONT', 'TOP', 'BACK']
 const FACE_VIEWS = ['right', 'left', 'bottom', 'front', 'top', 'back']
 const FACE_COLORS = ['#3373c5', '#2f6fc0', '#1f5d9c', '#3a7bd5', '#5a9be5', '#2b6cb0']
+const SYNC_MATRIX = new THREE.Matrix4()
 
 function makeFaceMaterial(label, color) {
   const size = 128
@@ -63,8 +64,8 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
       // Aim the cube's +Z at the viewer, using the camera's own up vector so the
       // cube cannot roll. setFromUnitVectors only constrains direction and would
       // leave an arbitrary twist whenever the view is not axis-aligned.
-      const m = new THREE.Matrix4().lookAt(mainCamera.position, target, mainCamera.up)
-      cube.quaternion.setFromRotationMatrix(m)
+      SYNC_MATRIX.lookAt(mainCamera.position, target, mainCamera.up)
+      cube.quaternion.setFromRotationMatrix(SYNC_MATRIX)
       render?.()
     },
   }))

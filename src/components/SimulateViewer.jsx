@@ -3,6 +3,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import ViewCube from './ViewCube'
 import { buildWireStack } from '../lib/simStack'
+import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
+import { disposeMaterial, disposeObject3D, disposeRenderer, disposeSceneContents } from '../lib/threeDispose.js'
 
 /**
  * Page 4 — stacked red wire paths + optional mesh (DevFoam-style sim view).
@@ -42,7 +44,7 @@ export default function SimulateViewer({
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(mount.clientWidth, mount.clientHeight)
-    renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.setPixelRatio(effectivePixelRatio())
     mount.appendChild(renderer.domElement)
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.55))
@@ -173,9 +175,16 @@ export default function SimulateViewer({
       controls.removeEventListener('end', onControlsEnd)
       window.removeEventListener('resize', onResize)
       controls.dispose()
-      renderer.dispose()
-      renderer.forceContextLoss()
-      mount.removeChild(renderer.domElement)
+      const st = stateRef.current
+      disposeSceneContents(scene, { keepGeometries: [st?.mesh?.geometry] })
+      disposeRenderer(renderer)
+      if (st) {
+        st.mesh = null
+        st.floorGrid = null
+        st.stockBox = null
+        st.wireLines = null
+        st.activeWire = null
+      }
     }
   }, [])
 
@@ -183,17 +192,11 @@ export default function SimulateViewer({
     const state = stateRef.current
     if (!state?.scene) return
 
-    const disposeObj = (obj) => {
-      if (!obj) return
-      state.scene.remove(obj)
-      obj.geometry?.dispose()
-      if (obj.material) {
-        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
-        else obj.material.dispose()
-      }
+    if (state.mesh) {
+      // Geometry is owned by AppState.
+      state.scene.remove(state.mesh)
+      disposeMaterial(state.mesh.material)
     }
-
-    disposeObj(state.mesh)
     state.mesh = null
 
     if (!geometry) return
@@ -226,11 +229,7 @@ export default function SimulateViewer({
       state.controls.update()
       state.frameInfo = { center: center.clone(), dist }
 
-      if (state.floorGrid) {
-        state.scene.remove(state.floorGrid)
-        state.floorGrid.geometry.dispose()
-        state.floorGrid.material.dispose()
-      }
+      disposeObject3D(state.floorGrid)
       const floorSize = Math.max(maxDim * 3, 50)
       const grid = new THREE.GridHelper(floorSize, Math.max(Math.floor(floorSize / 100), 2), 0x3a5a80, 0x2a3a50)
       state.scene.add(grid)
@@ -243,15 +242,7 @@ export default function SimulateViewer({
     const state = stateRef.current
     if (!state?.scene) return
 
-    const disposeObj = (obj) => {
-      if (!obj) return
-      state.scene.remove(obj)
-      obj.geometry?.dispose()
-      if (obj.material) {
-        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
-        else obj.material.dispose()
-      }
-    }
+    const disposeObj = disposeObject3D
 
     disposeObj(state.stockBox)
     disposeObj(state.wireLines)

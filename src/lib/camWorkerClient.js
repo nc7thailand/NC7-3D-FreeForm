@@ -112,12 +112,12 @@ export async function computeToolpathOnMainThread(geometry, params) {
  * @param {THREE.BufferGeometry|null} [geometry]
  */
 export function compileGcodeInWorker(cutJob, gcodeSettings, geometry = null) {
-  const { payload: geometryPayload } = serializeGeometryForWorker(geometry)
+  const { payload: geometryPayload, transferables } = serializeGeometryForWorker(geometry)
   return post('compileGcode', {
     cutJob,
     gcodeSettings,
     geometry: geometryPayload,
-  }).then((msg) => msg.gcodeResult)
+  }, { transferables }).then((msg) => msg.gcodeResult)
 }
 
 export function compileGcodeOnMainThread(cutJob, gcodeSettings, geometry = null) {

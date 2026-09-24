@@ -23,14 +23,6 @@ export const TOOLPATH_COMPUTE_TRIGGER = {
   ORIGIN_APPLY: 'origin-apply',
 }
 
-/** Clone geometry for hi-res storage — independent of the display mesh. */
-export function cloneStoredGeometry(geo) {
-  if (!geo) return null
-  const clone = geo.clone()
-  clone.userData = { ...geo.userData }
-  return clone
-}
-
 /** Bump when the hi-res model changes so a same-uuid cutJob is still detected stale. */
 export function bumpModelRevision(geo) {
   if (!geo) return 0

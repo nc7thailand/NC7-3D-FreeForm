@@ -4,7 +4,6 @@ import { attachIndexSafetyToJob } from './indexSafety.js'
 import { extractOverlayContour } from './cutOverlay.js'
 import { generateGcode } from './gcode.js'
 import { planePointFromStock, silhouetteOptsFromStock } from './toolpath.js'
-import { wirePathFromProfile } from './wirePath.js'
 import { deserializeGeometryFromWorker } from './geometryTransfer.js'
 
 /**
@@ -39,7 +38,6 @@ export async function runToolpathPipeline(geometry, {
   job.sourceModelRevision = geometry.userData?.nc7ModelRevision ?? 0
 
   for (const cut of job.cuts) {
-    cut.wirePath = wirePathFromProfile(cut.profile, stock, cut.thetaDeg)
     cut.overlayContour = extractOverlayContour(geometry, cut.thetaDeg)
   }
 

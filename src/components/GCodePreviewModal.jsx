@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { buildCutPathLayerStack, PREVIEW_VIEW } from '../lib/cutPathStack3d.js'
+import { disposeMaterial, disposeRenderer, disposeSceneContents } from '../lib/threeDispose.js'
 
 const COLOR_LEAD_IN = 0x22c55e
 const COLOR_CUT = 0x00f3ff
@@ -16,17 +17,20 @@ const VIEW_OPTIONS = [
   { id: PREVIEW_VIEW.ASSEMBLED, label: 'Assembled 3D' },
 ]
 
-function disposeObject3D(root) {
-  root.traverse((obj) => {
-    obj.geometry?.dispose()
-    if (obj.material) {
-      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
-      else obj.material.dispose()
-    }
-  })
+const EMPTY_STACK = { layers: [], bounds: null }
+
+function createLineMaterials() {
+  const mat = (color, opacity = 0.95) => new THREE.LineBasicMaterial({ color, transparent: true, opacity })
+  return {
+    leadIn: mat(COLOR_LEAD_IN),
+    cut: mat(COLOR_CUT, 0.92),
+    leadOut: mat(COLOR_LEAD_OUT),
+    simDot: mat(COLOR_SIM_DOT_LINK),
+    rotary: mat(COLOR_ROTARY_LINK),
+  }
 }
 
-function makeLine(points, color, opacity = 0.95) {
+function makeLine(points, material) {
   if (!points || points.length < 2) return null
   const verts = new Float32Array(points.length * 3)
   points.forEach((p, i) => {
@@ -36,8 +40,13 @@ function makeLine(points, color, opacity = 0.95) {
   })
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.BufferAttribute(verts, 3))
-  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity })
-  return new THREE.Line(geo, mat)
+  return new THREE.Line(geo, material)
+}
+
+/** Dispose line geometries only; the materials are shared and live with the scene. */
+function clearLines(group) {
+  for (const child of group.children) child.geometry?.dispose()
+  group.clear()
 }
 
 /**
@@ -58,8 +67,8 @@ export default function GCodePreviewModal({
   const [viewMode, setViewMode] = useState(PREVIEW_VIEW.STACK)
 
   const stack = useMemo(
-    () => buildCutPathLayerStack(cutJob, geometry, { viewMode }),
-    [cutJob, geometry, viewMode],
+    () => (open ? buildCutPathLayerStack(cutJob, geometry, { viewMode }) : EMPTY_STACK),
+    [open, cutJob, geometry, viewMode],
   )
 
   useEffect(() => {
@@ -100,6 +109,7 @@ export default function GCodePreviewModal({
 
     const linesGroup = new THREE.Group()
     scene.add(linesGroup)
+    const materials = createLineMaterials()
 
     let animId = 0
     let needsContinuousRender = false
@@ -147,16 +157,15 @@ export default function GCodePreviewModal({
     else window.addEventListener('resize', resize)
 
     const rebuildLayers = ({ layers, bounds }) => {
-      disposeObject3D(linesGroup)
-      linesGroup.clear()
+      clearLines(linesGroup)
 
       for (const layer of layers) {
         const parts = [
-          makeLine(layer.leadIn, COLOR_LEAD_IN),
-          makeLine(layer.cut, COLOR_CUT, 0.92),
-          makeLine(layer.leadOut, COLOR_LEAD_OUT),
-          ...layer.simDotLinks.map((l) => makeLine(l.points, COLOR_SIM_DOT_LINK)),
-          makeLine(layer.rotaryLink, COLOR_ROTARY_LINK),
+          makeLine(layer.leadIn, materials.leadIn),
+          makeLine(layer.cut, materials.cut),
+          makeLine(layer.leadOut, materials.leadOut),
+          ...layer.simDotLinks.map((l) => makeLine(l.points, materials.simDot)),
+          makeLine(layer.rotaryLink, materials.rotary),
         ]
         for (const line of parts) {
           if (!line) continue
@@ -210,12 +219,12 @@ export default function GCodePreviewModal({
       controls.removeEventListener('end', onControlsEnd)
       if (ro) ro.disconnect()
       else window.removeEventListener('resize', resize)
-      disposeObject3D(linesGroup)
+      clearLines(linesGroup)
+      Object.values(materials).forEach(disposeMaterial)
+      disposeSceneContents(scene)
+      lastBounds = null
       controls.dispose()
-      renderer.dispose()
-      if (renderer.domElement.parentNode === mount) {
-        mount.removeChild(renderer.domElement)
-      }
+      disposeRenderer(renderer)
     }
   }, [open])
 

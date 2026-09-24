@@ -15,6 +15,7 @@ import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
+import { disposeMaterial, disposeObject3D, disposeRenderer, disposeSceneContents } from '../lib/threeDispose'
 import {
   createNextDotGroup,
   createSimOverlayGroup,
@@ -652,10 +653,20 @@ export default forwardRef(function Viewer3D(
       renderer.domElement.removeEventListener('pointerdown', onMouseDown)
       controls.removeEventListener('change', requestRender)
       controls.dispose()
+      transform.detach()
       transform.dispose()
-      renderer.dispose()
-      renderer.forceContextLoss()
-      mount.removeChild(renderer.domElement)
+      const st = stateRef.current
+      if (st?.simOverlay) disposeSimOverlay(st.simOverlay)
+      disposeSceneContents(scene, { keepGeometries: [st?.mesh?.geometry] })
+      disposeRenderer(renderer)
+      if (st) {
+        st.mesh = null
+        st.objGizmo = null
+        st.selectionBox = null
+        st.floorGrid = null
+        st.floorAxes = null
+        st.simOverlay = null
+      }
     }
   }, [])
 
@@ -684,8 +695,8 @@ export default forwardRef(function Viewer3D(
       state.objGizmo = null
     }
     if (state.mesh) {
-      state.mesh.geometry.dispose()
-      state.mesh.material.dispose()
+      // Geometry is owned by AppState (it may still be shown on another page).
+      disposeMaterial(state.mesh.material)
       state.mesh = null
     }
 
@@ -833,29 +844,11 @@ export default forwardRef(function Viewer3D(
     const state = stateRef.current
     if (!state?.scene) return
 
-    const disposeObj = (obj) => {
-      if (!obj) return
-      if (obj.parent) obj.parent.remove(obj)
-      else state.scene.remove(obj)
-      if (obj.geometry) obj.geometry.dispose()
-      if (obj.material) {
-        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
-        else obj.material.dispose()
-      }
-    }
+    const disposeObj = disposeObject3D
 
     disposeObj(state.cutPlane)
     disposeObj(state.cutPlaneEdges)
-    if (state.middlePlaneGroup) {
-      state.scene.remove(state.middlePlaneGroup)
-      state.middlePlaneGroup.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose()
-        if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
-          else obj.material.dispose()
-        }
-      })
-    }
+    disposeObj(state.middlePlaneGroup)
     disposeObj(state.rotaryAxisLine)
     disposeObj(state.stockBox)
     disposeObj(state.profileLines)
@@ -880,9 +873,8 @@ export default forwardRef(function Viewer3D(
       ? Math.max(stock.w, stock.h) * 1.08
       : Math.max(extent, 200)
 
-    const planeGeo = new THREE.PlaneGeometry(planeSize, planeSize)
-
     if (SHOW_CUTTING_PLANE) {
+      const planeGeo = new THREE.PlaneGeometry(planeSize, planeSize)
       const planeMat = new THREE.MeshBasicMaterial({
         color: 0xff7722,
         transparent: true,
@@ -1067,24 +1059,13 @@ export default forwardRef(function Viewer3D(
     state.requestRender?.()
 
     return () => {
-      if (state.middlePlaneGroup) {
-        state.scene.remove(state.middlePlaneGroup)
-        state.middlePlaneGroup.traverse((obj) => {
-          if (obj.geometry) obj.geometry.dispose()
-          if (obj.material) {
-            if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
-            else obj.material.dispose()
-          }
-        })
-        state.middlePlaneGroup = null
+      for (const key of [
+        'middlePlaneGroup', 'cutPlane', 'cutPlaneEdges', 'rotaryAxisLine',
+        'stockBox', 'profileLines', 'shadowPlane', 'shadowPoints',
+      ]) {
+        disposeObj(state[key])
+        state[key] = null
       }
-      disposeObj(state.cutPlane)
-      disposeObj(state.cutPlaneEdges)
-      disposeObj(state.rotaryAxisLine)
-      disposeObj(state.stockBox)
-      disposeObj(state.profileLines)
-      disposeObj(state.shadowPlane)
-      disposeObj(state.shadowPoints)
     }
   }, [thetaDeg, stock, profile, silhouettePreview, cutMode, geometry, resetKey, showToolpathOverlay, combinedView])
 
@@ -1101,11 +1082,7 @@ export default forwardRef(function Viewer3D(
     const disposeGroup = () => {
       const g = state.overlayGroup
       if (!g) return
-      state.scene.remove(g)
-      g.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose()
-        if (obj.material) obj.material.dispose()
-      })
+      disposeObject3D(g)
       state.overlayGroup = null
       state.overlayMaterials = []
     }

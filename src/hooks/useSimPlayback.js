@@ -22,6 +22,7 @@ import {
 } from '../lib/turntablePhysics'
 import { wireFoamCollision } from '../lib/wireCollision'
 import { cutBoV } from '../lib/toolpath'
+import { pushSimLog } from '../lib/simLog'
 
 const SIM_SAMPLE_MS = 100
 
@@ -179,7 +180,8 @@ export function useSimPlayback({
 
   const publishWireState = useCallback((pt, trail) => {
     setWireUV(pt ? { u: pt.u, v: pt.v } : null)
-    setTrailUV(trail.map((p) => ({ u: p.u, v: p.v })))
+    // Trail points are never mutated after push, so a shallow copy is enough.
+    setTrailUV(trail.slice())
   }, [])
 
   /** Resolve the current cut's wire path (job cache or one-off build). */
@@ -523,7 +525,7 @@ export function useSimPlayback({
 
       if (now - simLastSampleRef.current >= SIM_SAMPLE_MS && pt) {
         simLastSampleRef.current = now
-        simLogRef.current.push({
+        pushSimLog(simLogRef.current, {
           n: cutIndexRef.current + 1,
           u: +pt.u.toFixed(2),
           v: +pt.v.toFixed(2),
