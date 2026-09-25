@@ -26,6 +26,7 @@ import {
   patchCutJobMarkerStock,
   patchCutJobOriginStock,
 } from '../lib/toolpathCompute'
+import { buildAutoFoamStock } from '../lib/autoFoamStock'
 import { shouldAutoOpenToolpathSetup } from '../lib/navigationLoad'
 import { ROUTES } from '../routes'
 
@@ -157,6 +158,13 @@ export function AppStateProvider({ children }) {
   const cutJobRef = useRef(null)
   /** In-flight saveToolpathStage promise — "recompute if needed" callers join it. */
   const toolpathComputeRef = useRef(null)
+  /** `${uuid}:${revision}` of the model the toolpath stage was last prepared for. */
+  const lastToolpathModelKeyRef = useRef(null)
+
+  const toolpathModelKey = useCallback((geo) => {
+    if (!geo) return null
+    return `${geo.uuid}:${modelRevisionOf(geo)}`
+  }, [])
 
   const setRotationN = useCallback((value) => {
     rotationNRef.current = typeof value === 'function' ? value(rotationNRef.current) : value
@@ -312,6 +320,7 @@ export function AppStateProvider({ children }) {
     setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
     setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
     updateStatsOnly(data.geometry)
+    lastToolpathModelKeyRef.current = toolpathModelKey(data.geometry)
     setResetKey((k) => k + 1)
     setToolpathTick((t) => t + 1)
   }, [updateStatsOnly, storeHighResGeometry])
@@ -505,6 +514,7 @@ export function AppStateProvider({ children }) {
       setGeometry(geo)
       updateStatsFrom(geo)
       setModelName(file.name)
+      lastToolpathModelKeyRef.current = null
       setCutJob(null)
       setCutIndex(0)
       setMenuOpen(false)
@@ -743,15 +753,6 @@ export function AppStateProvider({ children }) {
     return saveToolpathStage()
   }, [getHiResGeometryForCompute, saveToolpathStage])
 
-  /**
-   * Model → Toolpath trigger. First visit defers compute to Setup Apply;
-   * return visits recompute only if the saved job is stale.
-   */
-  const ensureToolpathOnModelEntry = useCallback(async () => {
-    if (shouldAutoOpenToolpathSetup()) return true
-    return refreshToolpathIfNeeded()
-  }, [refreshToolpathIfNeeded])
-
   /** Setup-close trigger — runs after the blocking setup panel dismisses. */
   const ensureToolpathAfterSetupClose = refreshToolpathIfNeeded
 
@@ -835,8 +836,57 @@ export function AppStateProvider({ children }) {
     applyModelBlockOffsetFromStock(newStock)
     const ok = await saveToolpathStage(newStock, newCutMode)
     if (ok) setCutIndex(0)
+    lastToolpathModelKeyRef.current = toolpathModelKey(workingRef.current)
     return ok
-  }, [applyModelBlockOffsetFromStock, saveToolpathStage])
+  }, [applyModelBlockOffsetFromStock, saveToolpathStage, toolpathModelKey])
+
+  /**
+   * Model → Toolpath. Always reset toolpath parameters, size the foam block
+   * from the settled bbox (+10 mm sides/top, +30 mm bottom), lift the model
+   * so the red base gap and green top gap match those offsets, then compute.
+   */
+  const ensureToolpathOnModelEntry = useCallback(async () => {
+    const geo = workingRef.current
+    if (!geo) return false
+
+    settleGeometry(geo)
+    geo.userData.nc7CentroidApplied = true
+    const freshStock = buildAutoFoamStock(geo, DEFAULT_STOCK)
+
+    setStock(freshStock)
+    setRotationN(DEFAULT_ROTATION_N)
+    setCutMode(CUT_MODE_LEFT_ONLY)
+    setCutIndex(0)
+    setCutJob(null)
+    setProfile(null)
+    setSilhouettePreview(null)
+
+    applyModelBlockOffset(
+      geo,
+      freshStock,
+      freshStock.modelOffsetType,
+      freshStock.modelOffsetMm,
+    )
+    const placed = geo.clone()
+    placed.userData = { ...geo.userData, nc7CentroidApplied: true }
+    bumpModelRevision(placed)
+    workingRef.current = placed
+    storeHighResGeometry(placed)
+    setGeometry(placed)
+    updateStatsOnly(placed)
+    setToolpathTick((t) => t + 1)
+    lastToolpathModelKeyRef.current = toolpathModelKey(placed)
+
+    setStatus('Foam block sized — computing toolpath…')
+    return saveToolpathStage(freshStock, CUT_MODE_LEFT_ONLY)
+  }, [
+    saveToolpathStage,
+    setCutMode,
+    setRotationN,
+    storeHighResGeometry,
+    toolpathModelKey,
+    updateStatsOnly,
+  ])
 
   const openToolpathSetup = useCallback(() => setToolpathSetupOpen(true), [])
   const closeToolpathSetup = useCallback(async () => {
@@ -907,6 +957,7 @@ export function AppStateProvider({ children }) {
       setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
       setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
       updateStatsOnly(data.geometry)
+      lastToolpathModelKeyRef.current = toolpathModelKey(data.geometry)
       viewerRef.current?.resetMeshTransform?.()
       setResetKey((k) => k + 1)
       setToolpathTick((t) => t + 1)

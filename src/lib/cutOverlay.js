@@ -54,7 +54,7 @@ export const OVERLAY_COLORS = {
   greenDark: '#15803d',
   red: '#ef4444',
   redDark: '#b91c1c',
-  block: '#8a9099',
+  block: '#000000',
   /** Model position gap — foam block floor up to model silhouette bottom. */
   modelBaseGapFill: 'rgba(239, 68, 68, 0.28)',
   /** Model position gap — model silhouette top up to foam block top (v = H). */

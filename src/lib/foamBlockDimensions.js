@@ -1,5 +1,24 @@
 /** CAD-style foam block dimension graphics for the 2D toolpath canvas. */
 
+const ORTHO_TOL_DEG = 0.1
+
+/** True when θ aligns with 0°, 90°, 180°, or 270° (hide dims at other angles). */
+export function isOrthogonalViewAngle(thetaDeg) {
+  const n = ((thetaDeg % 360) + 360) % 360
+  const mod90 = n % 90
+  return mod90 < ORTHO_TOL_DEG || mod90 > 90 - ORTHO_TOL_DEG
+}
+
+/** Horizontal dimension label + stock axis for the active orthogonal side view. */
+export function foamBlockHorizontalDimension(stock, thetaDeg) {
+  const n = ((thetaDeg % 360) + 360) % 360
+  const mod180 = n % 180
+  if (Math.abs(mod180 - 90) < ORTHO_TOL_DEG) {
+    return { value: stock?.t ?? 0, axis: 't' }
+  }
+  return { value: stock?.w ?? 0, axis: 'w' }
+}
+
 export const FOAM_DIM = {
   COLOR: '#5c6570',
   GAP: 14,
@@ -22,10 +41,12 @@ function drawDimTick(ctx, x, y, alongAngle) {
  * Draw W (bottom) and H (right-middle) dimensions; return hit targets for editing.
  *
  * @param {CanvasRenderingContext2D} ctx
- * @param {{ left:number, right:number, top:number, bottom:number, w:number, h:number }} layout
- * @returns {{ hitTargets: Array<{ axis:'w'|'h', value:number, label:string, hitRect: object, anchor: object }> }}
+ * @param {{ left:number, right:number, top:number, bottom:number, w:number, h:number, widthAxis?: 'w'|'t' }} layout
+ * @returns {{ hitTargets: Array<{ axis:'w'|'t'|'h', value:number, label:string, hitRect: object, anchor: object }> }}
  */
-export function drawFoamBlockDimensions(ctx, { left, right, top, bottom, w, h }) {
+export function drawFoamBlockDimensions(ctx, {
+  left, right, top, bottom, w, h, widthAxis = 'w',
+}) {
   const { COLOR, GAP, FONT, LABEL_PAD } = FOAM_DIM
   const hitTargets = []
 
@@ -58,7 +79,7 @@ export function drawFoamBlockDimensions(ctx, { left, right, top, bottom, w, h })
   ctx.fillText(wLabel, xMid, xDimY + LABEL_PAD)
   const wMetrics = ctx.measureText(wLabel)
   hitTargets.push({
-    axis: 'w',
+    axis: widthAxis,
     value: w,
     label: wLabel,
     anchor: { x: xMid, y: xDimY + LABEL_PAD },

@@ -151,7 +151,6 @@ export default function ToolpathPage() {
     cutJob,
     silhouettePreview,
     viewerRef,
-    stats,
     rotationN,
     cutCount,
     cutIndex,
@@ -228,11 +227,6 @@ export default function ToolpathPage() {
     if (shouldAutoOpenToolpathSetup()) return
     refreshToolpathRef.current()
   }, [sessionReady, geometry, rotationN, cutMode])
-
-  const wirePointCount = useMemo(() => {
-    if (!profile?.polylines?.length) return null
-    return wirePathFromProfile(profile, stock, thetaDeg).length
-  }, [profile, stock, thetaDeg])
 
   const is3d = viewMode === '3d'
   const show2d = viewMode === '2d'
@@ -347,15 +341,6 @@ export default function ToolpathPage() {
           </div>
           {status && !status.startsWith('Session restored') && !status.startsWith('Model saved') && (
             <div className="status-bar status-bar--above-nav">{status}</div>
-          )}
-          {stats && (
-            <div className="stats-inline">
-              <span>θ = {thetaDeg.toFixed(1)}° · {cutCount}/{rotationN} cuts</span>
-              {wirePointCount != null && (
-                <span>wire {wirePointCount} pts</span>
-              )}
-              <span>{stats.sizeMM.x.toFixed(0)}×{stats.sizeMM.y.toFixed(0)}×{stats.sizeMM.z.toFixed(0)} mm</span>
-            </div>
           )}
         </div>
         {simActive && (

@@ -1247,7 +1247,7 @@ export default forwardRef(function Viewer3D(
         { u: block.rightU, v: block.topV },
         { u: block.leftU, v: block.topV },
       ]
-      addLine(blockPts, '#8a9099', { closed: true, opacity: 0.45, dash: [2, 2], width: 1 })
+      addLine(blockPts, OVERLAY_COLORS.block, { closed: true, opacity: 0.9, dash: [4, 4], width: 2 })
     }
 
     addLine(contour, '#ffffff', { closed: true, opacity: 0.85, dash: [2.5, 2], width: 1.6 })

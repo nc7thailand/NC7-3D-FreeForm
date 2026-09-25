@@ -12,7 +12,6 @@ import {
   seekGlobal,
 } from '../lib/simJob'
 import {
-  OVERLAY_GRID_BINS,
   OVERLAY_COLORS,
   OVERLAY_LEAD_DASH,
   buildOverlayData,
@@ -21,7 +20,12 @@ import {
   modelTopGapRect,
   resolveOriginUV,
 } from '../lib/cutOverlay'
-import { drawFoamBlockDimensions, pickFoamDimensionHit } from '../lib/foamBlockDimensions'
+import {
+  drawFoamBlockDimensions,
+  foamBlockHorizontalDimension,
+  isOrthogonalViewAngle,
+  pickFoamDimensionHit,
+} from '../lib/foamBlockDimensions'
 import ModelGapOffsetOverlay from './ModelGapOffsetOverlay'
 import BottomSafePointOffsetOverlay from './BottomSafePointOffsetOverlay'
 import TopSafePointOffsetOverlay from './TopSafePointOffsetOverlay'
@@ -58,9 +62,6 @@ import {
   displayCoordY,
   displayPointLines,
 } from '../lib/uiAxesDisplay'
-
-// Quality is fixed at High (600 grid bins) for the Stage 1 preview.
-const GRID_BINS = OVERLAY_GRID_BINS
 
 // Zoom/pan limits for the 2D preview.
 const MIN_ZOOM = 0.5
@@ -1313,6 +1314,12 @@ export default function SilhouettePreviewPanel({
   }, [dimensionEdit])
 
   useEffect(() => {
+    if (!isOrthogonalViewAngle(activeThetaDeg) && dimensionEdit) {
+      setDimensionEdit(null)
+    }
+  }, [activeThetaDeg, dimensionEdit])
+
+  useEffect(() => {
     const mq = window.matchMedia('(hover: none) and (pointer: coarse)')
     const update = () => setIsCoarsePointer(mq.matches)
     update()
@@ -1581,13 +1588,11 @@ export default function SilhouettePreviewPanel({
       ctx.setLineDash([])
 
       // Foam block outline — dynamic projected width, centred on the MODEL's
-      // projected 3D-bbox centre (not on the rotation axis). Same numbers the
-      // 3D Combined overlay draws. Dashed grey, thin, no fill, behind the
-      // silhouette.
+      // projected 3D-bbox centre (not on the rotation axis). Dashed dark black.
       const { block } = annotations
-      ctx.strokeStyle = '#8a9099'
-      ctx.globalAlpha = 0.4
-      ctx.lineWidth = 1
+      ctx.strokeStyle = OVERLAY_COLORS.block
+      ctx.globalAlpha = 0.9
+      ctx.lineWidth = 2
       ctx.setLineDash([4, 4])
       ctx.strokeRect(
         X(block.leftU), Y(block.topV),
@@ -1633,15 +1638,21 @@ export default function SilhouettePreviewPanel({
       const blockRight = X(block.rightU)
       const blockTop = Y(block.topV)
       const blockBottom = Y(block.bottomV)
-      const { hitTargets: dimHits } = drawFoamBlockDimensions(ctx, {
-        left: blockLeft,
-        right: blockRight,
-        top: blockTop,
-        bottom: blockBottom,
-        w: stock?.w ?? 0,
-        h: stock?.h ?? 0,
-      })
-      dimensionHitsRef.current = dimHits
+      if (isOrthogonalViewAngle(activeThetaDeg)) {
+        const widthDim = foamBlockHorizontalDimension(stock, activeThetaDeg)
+        const { hitTargets: dimHits } = drawFoamBlockDimensions(ctx, {
+          left: blockLeft,
+          right: blockRight,
+          top: blockTop,
+          bottom: blockBottom,
+          w: widthDim.value,
+          h: stock?.h ?? 0,
+          widthAxis: widthDim.axis,
+        })
+        dimensionHitsRef.current = dimHits
+      } else {
+        dimensionHitsRef.current = []
+      }
 
       // Silhouette outline — dashed, 50% opacity.
       ctx.setLineDash([5, 4])
@@ -2613,8 +2624,6 @@ export default function SilhouettePreviewPanel({
 
   return (
     <section className="silhouette-preview-section">
-      <div className="section-label section-label-sub">2D Silhouette Preview (Stage 1)</div>
-
       <div
         className={`preview-wrap silhouette-preview-canvas-wrap${isCoarsePointer ? ' is-coarse-pointer' : ''}${canvasFocus ? ' is-canvas-focused' : ''}${markerPanelOpen ? ' is-marker-panel-open' : ''}`}
         ref={wrapRef}
@@ -2657,7 +2666,13 @@ export default function SilhouettePreviewPanel({
               step={1}
               defaultValue={dimensionEdit.value}
               autoFocus
-              aria-label={dimensionEdit.axis === 'w' ? 'Foam width (W)' : 'Foam height (H)'}
+              aria-label={
+                dimensionEdit.axis === 'h'
+                  ? 'Foam height (H)'
+                  : dimensionEdit.axis === 't'
+                    ? 'Foam depth (T)'
+                    : 'Foam width (W)'
+              }
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
@@ -2766,10 +2781,6 @@ export default function SilhouettePreviewPanel({
           onScrub={handleScrub}
         />
       )}
-
-      <div className="silhouette-preview-footer">
-        {contour.length > 0 ? `${contour.length} pts · bins ${GRID_BINS} · ${(zoom * 100).toFixed(0)}%` : '—'}
-      </div>
 
       {simLogOpen && (
         <div className="sim-log-backdrop" role="dialog" aria-label="Sim track log">
