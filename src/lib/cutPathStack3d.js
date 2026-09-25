@@ -2,6 +2,7 @@
 // Reads the same cutBlockForCut() chain the G-code emitter uses — no G-code parsing.
 
 import { cutBlockForCut } from './gcodePath.js'
+import { gcodeOriginFromStock, overlayPointToGcode } from './gcodeCoords.js'
 import { cuttingPlane, planePointMiddleFromStock } from './toolpath.js'
 import { buildIndexTransitionPlan, isLeftOnlyIndexPlan, isLRIndexPlan } from './indexing/indexRouter.js'
 
@@ -39,28 +40,38 @@ export function layerZForCut(cutJob, cut) {
   return cut.index * step
 }
 
-function assembledMapper(thetaDeg) {
-  // Same −θ axis extractOverlayContour projects with, so u unprojects onto the model.
+function assembledMapper(thetaDeg, stock) {
+  // Same −θ axis extractOverlayContour projects with; machine u/v include work origin.
   const { uAxis } = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
-  return (p) => ({ x: p.u * uAxis.x, y: p.v, z: p.u * uAxis.z })
+  return (p) => {
+    const { x: u, y: v } = overlayToGcodeXY(stock, p)
+    return { x: u * uAxis.x, y: v, z: u * uAxis.z }
+  }
 }
 
 const ROTARY_ARC_STEP_DEG = 2
 
 /** Fixed machine point (u, v) swept from θa to θb, seen in the assembled (foam) frame. */
-function assembledRotaryArc(p, thetaA, thetaB) {
+function assembledRotaryArc(p, thetaA, thetaB, stock) {
   const steps = Math.max(2, Math.ceil(Math.abs(thetaB - thetaA) / ROTARY_ARC_STEP_DEG))
   const pts = []
   for (let s = 0; s <= steps; s++) {
-    pts.push(assembledMapper(thetaA + ((thetaB - thetaA) * s) / steps)(p))
+    pts.push(assembledMapper(thetaA + ((thetaB - thetaA) * s) / steps, stock)(p))
   }
   return pts
 }
 
+/** Overlay middle-plane (u, v) → machine G-code (X, Y) using stock work origin. */
+function overlayToGcodeXY(stock, p) {
+  const g = overlayPointToGcode(p, gcodeOriginFromStock(stock))
+  return g ?? { x: p.u, y: p.v }
+}
+
 function layerMapper(viewMode, cutJob, cut) {
-  if (viewMode === PREVIEW_VIEW.ASSEMBLED) return assembledMapper(cut.thetaDeg)
+  const stock = cutJob.stock ?? {}
+  if (viewMode === PREVIEW_VIEW.ASSEMBLED) return assembledMapper(cut.thetaDeg, stock)
   const z = layerZForCut(cutJob, cut)
-  return (p) => ({ x: p.u, y: p.v, z })
+  return (p) => ({ ...overlayToGcodeXY(stock, p), z })
 }
 
 /**
@@ -176,20 +187,21 @@ function attachTransitionLinks(layers, cutJob, ctx, viewMode) {
     const turnAt = k && plan.preMoveToK ? k : red
 
     if (viewMode === PREVIEW_VIEW.ASSEMBLED) {
-      layer.rotaryLink = assembledRotaryArc(turnAt, layer.thetaDeg, next.thetaDeg)
+      layer.rotaryLink = assembledRotaryArc(turnAt, layer.thetaDeg, next.thetaDeg, ctx.stock)
       continue
     }
 
+    const turnXY = overlayToGcodeXY(ctx.stock, turnAt)
     layer.rotaryLink = [
-      { x: turnAt.u, y: turnAt.v, z: layer.layerZ },
-      { x: turnAt.u, y: turnAt.v, z: next.layerZ },
+      { x: turnXY.x, y: turnXY.y, z: layer.layerZ },
+      { x: turnXY.x, y: turnXY.y, z: next.layerZ },
     ]
 
     if (!k || Math.hypot(red.u - k.u, red.v - k.v) < 1e-6) continue
     const owner = plan.preMoveToK ? layer : next
     owner.simDotLinks.push({
       fromIndex: layer.index,
-      points: [red, k].map((p) => ({ x: p.u, y: p.v, z: owner.layerZ })),
+      points: [red, k].map((p) => ({ ...overlayToGcodeXY(ctx.stock, p), z: owner.layerZ })),
     })
   }
 }

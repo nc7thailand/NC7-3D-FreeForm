@@ -22,7 +22,9 @@ import {
   resolveOriginUV,
 } from '../lib/cutOverlay'
 import { drawFoamBlockDimensions, pickFoamDimensionHit } from '../lib/foamBlockDimensions'
-import DirectionMarkerOverlayPanel from './DirectionMarkerOverlayPanel'
+import ModelGapOffsetOverlay from './ModelGapOffsetOverlay'
+import BottomSafePointOffsetOverlay from './BottomSafePointOffsetOverlay'
+import TopSafePointOffsetOverlay from './TopSafePointOffsetOverlay'
 import OriginPositionOverlayPanel from './OriginPositionOverlayPanel'
 import Minimap2DOverlay from './Minimap2DOverlay'
 import {
@@ -45,7 +47,6 @@ import {
   SAFE_ZONE_STATE,
   safeZoneBlinkOpacity,
   safeZoneBubbleText,
-  safeZoneFieldLabel,
   safeZonePanelTitle,
 } from '../lib/safeZoneManager'
 import { cutBoV } from '../lib/toolpath'
@@ -143,6 +144,26 @@ function uvToScreen(u, v, w, h, stock, zoom, pan) {
   return {
     x: w / 2 + u * scale + pan.x,
     y: h * 0.8 - v * scale + pan.y,
+  }
+}
+
+/** Pan offset that places overlay (u, v) at the viewport centre for a given zoom. */
+function panForCenteredUV(u, v, w, h, stock, zoom) {
+  const scale = overlayStockScale(w, h, stock) * zoom
+  return {
+    x: -u * scale,
+    y: h * 0.5 - h * 0.8 + v * scale,
+  }
+}
+
+/** Keep floating overlay anchor inside the canvas wrap (room for panel below). */
+function clampOverlayScreenAnchor(sx, sy, wrapW, wrapH) {
+  const panelHalfW = Math.min(126, wrapW / 2 - 8)
+  const topRoom = 48
+  const bottomRoom = Math.min(200, wrapH * 0.45)
+  return {
+    sx: Math.min(wrapW - panelHalfW - 8, Math.max(panelHalfW + 8, sx)),
+    sy: Math.min(wrapH - bottomRoom, Math.max(topRoom, sy)),
   }
 }
 
@@ -313,6 +334,48 @@ function drawCanvasFocusStroke(ctx, highlight, blink = false) {
     highlight.h + pad * 2,
   )
   ctx.restore()
+}
+
+/** Recompute focus dashed rect from overlay UV — stays aligned during pan/zoom. */
+function focusHighlightScreen(hoverHit, originPt, w, h, stock, zoom, pan) {
+  if (!hoverHit) return null
+  if (hoverHit.kind === HOVER_KIND.ORIGIN && originPt) {
+    const { x: ox, y: oy } = uvToScreen(originPt.u, originPt.v, w, h, stock, zoom, pan)
+    const pad = 8
+    const baseLen = ORIGIN_GIZMO.LENGTH / 4
+    const axisLen = baseLen + baseLen * 0.5
+    return {
+      x: ox - pad,
+      y: oy - axisLen - pad,
+      w: axisLen + pad * 2 + 18,
+      h: axisLen + ORIGIN_GIZMO.LABEL_GAP + 18 + pad,
+    }
+  }
+  const half = hoverHit.half ?? MARKER_SIZE / 2 + 4
+  let sx = hoverHit.sx
+  let sy = hoverHit.sy
+  if (hoverHit.marker) {
+    ({ x: sx, y: sy } = uvToScreen(hoverHit.marker.u, hoverHit.marker.v, w, h, stock, zoom, pan))
+  } else if (hoverHit.hitRect) {
+    return { ...hoverHit.hitRect }
+  }
+  return {
+    x: sx - half - 2,
+    y: sy - half - 2,
+    w: (half + 2) * 2,
+    h: (half + 2) * 2,
+  }
+}
+
+function focusBubbleScreen(hoverHit, originPt, w, h, stock, zoom, pan) {
+  if (!hoverHit) return null
+  if (hoverHit.marker) {
+    return uvToScreen(hoverHit.marker.u, hoverHit.marker.v, w, h, stock, zoom, pan)
+  }
+  if (hoverHit.kind === HOVER_KIND.ORIGIN && originPt) {
+    return uvToScreen(originPt.u, originPt.v, w, h, stock, zoom, pan)
+  }
+  return { x: hoverHit.sx, y: hoverHit.sy }
 }
 
 function uvRectToScreen(rect, X, Y) {
@@ -507,6 +570,7 @@ export default function SilhouettePreviewPanel({
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const zoomRef = useRef(1)
   const panRef = useRef({ x: 0, y: 0 })
+  const viewportAnimRef = useRef(null)
   const dragRef = useRef(null) // { startX, startY, x, y, pointerId, panning } — left-drag pan
   const pointerTapEligibleRef = useRef(false)
   const pinchRef = useRef(null) // { startDist, startZoom, lastCx, lastCy }
@@ -735,9 +799,48 @@ export default function SilhouettePreviewPanel({
     setPan(nextPan)
   }, [])
 
+  const cancelViewportAnim = useCallback(() => {
+    if (viewportAnimRef.current) {
+      cancelAnimationFrame(viewportAnimRef.current)
+      viewportAnimRef.current = null
+    }
+  }, [])
+
+  const centerViewportOnUV = useCallback((u, v, { duration = 300, minZoom = 2.75 } = {}) => {
+    const wrap = wrapRef.current
+    if (!wrap || !Number.isFinite(u) || !Number.isFinite(v)) return
+    const w = wrap.clientWidth
+    const h = wrap.clientHeight
+    if (w < 10 || h < 10) return
+
+    cancelViewportAnim()
+    const stockSnap = stockRef.current ?? {}
+    const targetZoom = Math.min(MAX_ZOOM, Math.max(zoomRef.current, minZoom))
+    const targetPan = panForCenteredUV(u, v, w, h, stockSnap, targetZoom)
+    const startZoom = zoomRef.current
+    const startPan = { ...panRef.current }
+    const startTime = performance.now()
+
+    const tick = (now) => {
+      const t = Math.min(1, (now - startTime) / duration)
+      const ease = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2
+      setTransform(
+        startZoom + (targetZoom - startZoom) * ease,
+        {
+          x: startPan.x + (targetPan.x - startPan.x) * ease,
+          y: startPan.y + (targetPan.y - startPan.y) * ease,
+        },
+      )
+      if (t < 1) viewportAnimRef.current = requestAnimationFrame(tick)
+      else viewportAnimRef.current = null
+    }
+    viewportAnimRef.current = requestAnimationFrame(tick)
+  }, [cancelViewportAnim, setTransform])
+
   const resetView = useCallback(() => {
+    cancelViewportAnim()
     setTransform(1, { x: 0, y: 0 })
-  }, [setTransform])
+  }, [cancelViewportAnim, setTransform])
 
   const confirmDimensionEdit = useCallback(async (rawValue) => {
     const edit = dimensionEditRef.current
@@ -754,47 +857,70 @@ export default function SilhouettePreviewPanel({
     })
   }, [])
 
+  const bottomMarkerAnchorUV = useCallback((role, boMargin, hoverHit) => {
+    const ctx = overlayContextRef.current
+    if (ctx?.block && role) {
+      return { u: bottomMarkerU(role, ctx.block, boMargin), v: ctx.boV }
+    }
+    if (hoverHit?.marker) {
+      return { u: hoverHit.marker.u, v: hoverHit.marker.v }
+    }
+    return null
+  }, [])
+
+  const topMarkerAnchorUV = useCallback((topOffset, hoverHit) => {
+    const u = hoverHit?.marker?.u ?? 0
+    const v = topMarkerV(stockRef.current ?? {}, topOffset)
+    return { u, v }
+  }, [])
+
+  const modelGapAnchorUV = useCallback((zoneHit) => {
+    const rect = zoneHit?.rect
+    if (!rect) return null
+    return {
+      u: (rect.leftU + rect.rightU) / 2,
+      v: (rect.bottomV + rect.topV) / 2,
+    }
+  }, [])
+
   const openBottomMarkerPanel = useCallback((hoverHit, role) => {
     setModelGapPanel(null)
     setOriginPositionPanel(null)
     setTopMarkerPanel(null)
+    const boMargin = stock?.boMargin ?? 20
+    const anchorUv = bottomMarkerAnchorUV(role, boMargin, hoverHit)
+    if (anchorUv) centerViewportOnUV(anchorUv.u, anchorUv.v)
+    const wrap = wrapRef.current
+    const anchor = wrap
+      ? clampOverlayScreenAnchor(hoverHit.sx, hoverHit.sy, wrap.clientWidth, wrap.clientHeight)
+      : { sx: hoverHit.sx, sy: hoverHit.sy }
     setBottomMarkerPanel({
       key: `${hoverHit.kind}:${role}:${cutIndex}`,
-      kind: hoverHit.kind,
       role,
-      placement: 'bottom',
-      panelTitle: 'Wire Safe Offset',
-      caption: markerCaption(hoverHit.kind),
-      fieldLabel: 'Bottom safe offset (BO margin)',
-      sx: hoverHit.sx,
-      sy: hoverHit.sy,
-      draftValue: stock?.boMargin ?? 20,
-      appliedValue: stock?.boMargin ?? 20,
-      nudgeDownLabel: 'Move left 1 mm',
-      nudgeUpLabel: 'Move right 1 mm',
+      sx: anchor.sx,
+      sy: anchor.sy,
+      anchorUv,
+      draftValue: boMargin,
+      appliedValue: boMargin,
     })
-  }, [cutIndex, stock?.boMargin])
+  }, [bottomMarkerAnchorUV, centerViewportOnUV, cutIndex, stock?.boMargin])
 
   const openTopMarkerPanel = useCallback((hoverHit) => {
     setModelGapPanel(null)
     setOriginPositionPanel(null)
     setBottomMarkerPanel(null)
+    const topOffset = stock?.topOffset ?? 20
+    const anchorUv = topMarkerAnchorUV(topOffset, hoverHit)
+    if (anchorUv) centerViewportOnUV(anchorUv.u, anchorUv.v)
     setTopMarkerPanel({
       key: `${hoverHit.kind}:top:${cutIndex}`,
-      kind: hoverHit.kind,
-      role: 'top',
-      placement: 'top',
-      panelTitle: 'Wire Safe Offset',
-      caption: markerCaption(hoverHit.kind),
-      fieldLabel: 'Top safe offset',
       sx: hoverHit.sx,
       sy: hoverHit.sy,
-      draftValue: stock?.topOffset ?? 20,
-      appliedValue: stock?.topOffset ?? 20,
-      nudgeDownLabel: 'Move down 1 mm',
-      nudgeUpLabel: 'Move up 1 mm',
+      anchorUv,
+      draftValue: topOffset,
+      appliedValue: topOffset,
     })
-  }, [cutIndex, stock?.topOffset])
+  }, [centerViewportOnUV, cutIndex, stock?.topOffset, topMarkerAnchorUV])
 
   const openModelGapPanel = useCallback((zoneHit) => {
     setBottomMarkerPanel(null)
@@ -803,22 +929,19 @@ export default function SilhouettePreviewPanel({
     const zoneType = zoneHit.zoneType
     const offsetType = zoneType === SAFE_ZONE.TOP ? 'top' : 'bottom'
     const gapMm = Math.round(measureModelBlockOffset(geometry, stock, offsetType))
+    const anchorUv = modelGapAnchorUV(zoneHit)
+    if (anchorUv) centerViewportOnUV(anchorUv.u, anchorUv.v)
     setModelGapPanel({
       key: `modelgap:${zoneType}:${cutIndex}`,
       zoneType,
       offsetType,
-      placement: zoneType === SAFE_ZONE.TOP ? 'top' : 'bottom',
-      panelTitle: safeZonePanelTitle(zoneType),
-      caption: zoneType === SAFE_ZONE.TOP ? 'Model position (top)' : 'Model position (bottom)',
-      fieldLabel: safeZoneFieldLabel(zoneType),
       sx: zoneHit.sx,
       sy: zoneHit.sy,
+      anchorUv,
       draftValue: gapMm,
       appliedValue: gapMm,
-      nudgeDownLabel: 'Decrease gap 1 mm',
-      nudgeUpLabel: 'Increase gap 1 mm',
     })
-  }, [cutIndex, geometry, stock])
+  }, [centerViewportOnUV, cutIndex, geometry, modelGapAnchorUV, stock])
 
   const markerPanelOpen = !!(
     bottomMarkerPanel || topMarkerPanel || modelGapPanel || originPositionPanel
@@ -891,9 +1014,13 @@ export default function SilhouettePreviewPanel({
     if (!handled) return false
 
     const manager = controller.managerForZone(zoneType)
+    if (manager?.state === SAFE_ZONE_STATE.FOCUSED) {
+      const anchorUv = modelGapAnchorUV(zoneHit)
+      if (anchorUv) centerViewportOnUV(anchorUv.u, anchorUv.v)
+    }
     applySafeZoneFocusUi(focusState, manager)
     return true
-  }, [applySafeZoneFocusUi, openModelGapPanel])
+  }, [applySafeZoneFocusUi, centerViewportOnUV, modelGapAnchorUV, openModelGapPanel])
 
   const handleWireMarkerClick = useCallback((hoverHit, role, { direct = false } = {}) => {
     originManagerRef.current?.reset()
@@ -920,6 +1047,15 @@ export default function SilhouettePreviewPanel({
 
     const manager = controller.managerForRole(role)
     if (manager?.state === SAFE_ZONE_STATE.FOCUSED && focusState) {
+      if (role === 'top') {
+        const topOffset = stockRef.current?.topOffset ?? 20
+        const anchorUv = topMarkerAnchorUV(topOffset, hoverHit)
+        if (anchorUv) centerViewportOnUV(anchorUv.u, anchorUv.v)
+      } else if (role === 'leftBottom' || role === 'rightBottom') {
+        const boMargin = stockRef.current?.boMargin ?? 20
+        const anchorUv = bottomMarkerAnchorUV(role, boMargin, hoverHit)
+        if (anchorUv) centerViewportOnUV(anchorUv.u, anchorUv.v)
+      }
       setCanvasFocus(focusState)
       wrapRef.current?.classList.add('is-canvas-focused')
       setHoverBubble({
@@ -936,7 +1072,7 @@ export default function SilhouettePreviewPanel({
     }
     simDrawRef.current?.()
     return true
-  }, [openBottomMarkerPanel, openTopMarkerPanel])
+  }, [bottomMarkerAnchorUV, centerViewportOnUV, openBottomMarkerPanel, openTopMarkerPanel, topMarkerAnchorUV])
 
   const openOriginPositionPanel = useCallback(() => {
     setBottomMarkerPanel(null)
@@ -1000,8 +1136,10 @@ export default function SilhouettePreviewPanel({
       const w = wrap.clientWidth
       const h = wrap.clientHeight
       const u = bottomMarkerU(prev.role, ctx.block, n)
-      const { x, y } = uvToScreen(u, ctx.boV, w, h, stock, zoomRef.current, panRef.current)
-      return { ...prev, draftValue: n, sx: x, sy: y }
+      const v = ctx.boV
+      const raw = uvToScreen(u, v, w, h, stock, zoomRef.current, panRef.current)
+      const { sx, sy } = clampOverlayScreenAnchor(raw.x, raw.y, w, h)
+      return { ...prev, draftValue: n, sx, sy, anchorUv: { u, v } }
     })
   }, [stock])
 
@@ -1014,9 +1152,10 @@ export default function SilhouettePreviewPanel({
       if (!wrap) return { ...prev, draftValue: n }
       const w = wrap.clientWidth
       const h = wrap.clientHeight
+      const u = prev.anchorUv?.u ?? 0
       const v = topMarkerV(stock, n)
-      const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, panRef.current)
-      return { ...prev, draftValue: n, sx: x, sy: y }
+      const { x, y } = uvToScreen(u, v, w, h, stock, zoomRef.current, panRef.current)
+      return { ...prev, draftValue: n, sx: x, sy: y, anchorUv: { u, v } }
     })
   }, [stock])
 
@@ -1045,8 +1184,10 @@ export default function SilhouettePreviewPanel({
       const w = wrap.clientWidth
       const h = wrap.clientHeight
       const u = bottomMarkerU(prev.role, ctx.block, n)
-      const { x, y } = uvToScreen(u, ctx.boV, w, h, stock, zoomRef.current, panRef.current)
-      return { ...prev, draftValue: n, sx: x, sy: y }
+      const v = ctx.boV
+      const raw = uvToScreen(u, v, w, h, stock, zoomRef.current, panRef.current)
+      const { sx, sy } = clampOverlayScreenAnchor(raw.x, raw.y, w, h)
+      return { ...prev, draftValue: n, sx, sy, anchorUv: { u, v } }
     })
   }, [stock])
 
@@ -1060,9 +1201,10 @@ export default function SilhouettePreviewPanel({
       if (!wrap) return { ...prev, draftValue: n }
       const w = wrap.clientWidth
       const h = wrap.clientHeight
+      const u = prev.anchorUv?.u ?? 0
       const v = topMarkerV(stock, n)
-      const { x, y } = uvToScreen(0, v, w, h, stock, zoomRef.current, panRef.current)
-      return { ...prev, draftValue: n, sx: x, sy: y }
+      const { x, y } = uvToScreen(u, v, w, h, stock, zoomRef.current, panRef.current)
+      return { ...prev, draftValue: n, sx: x, sy: y, anchorUv: { u, v } }
     })
   }, [stock])
 
@@ -1146,13 +1288,14 @@ export default function SilhouettePreviewPanel({
   }, [])
 
   const closeBottomMarkerPanel = useCallback(() => {
+    cancelViewportAnim()
     wireSafeControllerRef.current.bottom.cancelEdit()
     setBottomMarkerPanel(null)
     setCanvasFocus(null)
     setHoverBubble(null)
     wrapRef.current?.classList.remove('is-canvas-focused')
     simDrawRef.current?.()
-  }, [])
+  }, [cancelViewportAnim])
 
   const closeTopMarkerPanel = useCallback(() => {
     wireSafeControllerRef.current.top.cancelEdit()
@@ -1180,6 +1323,96 @@ export default function SilhouettePreviewPanel({
   useEffect(() => {
     simDrawRef.current?.()
   }, [canvasFocus])
+
+  useEffect(() => {
+    const focus = canvasFocusRef.current
+    if (!focus?.hoverHit) return
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const w = wrap.clientWidth
+    const h = wrap.clientHeight
+    if (w < 10 || h < 10) return
+    const origin = hoverContextRef.current.originPt
+    const pt = focusBubbleScreen(focus.hoverHit, origin, w, h, stock, zoom, pan)
+    if (!pt) return
+    setHoverBubble((prev) => (prev ? { ...prev, x: pt.x, y: pt.y } : prev))
+  }, [zoom, pan, stock, canvasFocus?.key])
+
+  useEffect(() => {
+    if (!bottomMarkerPanel) return undefined
+    const wrap = wrapRef.current
+    if (!wrap) return undefined
+
+    const syncPosition = () => {
+      const ctx = overlayContextRef.current
+      setBottomMarkerPanel((prev) => {
+        if (!prev) return prev
+        const boMargin = prev.draftValue ?? 20
+        const u = ctx?.block && prev.role
+          ? bottomMarkerU(prev.role, ctx.block, boMargin)
+          : prev.anchorUv?.u ?? 0
+        const v = ctx?.boV ?? prev.anchorUv?.v ?? 0
+        const w = wrap.clientWidth
+        const h = wrap.clientHeight
+        const raw = uvToScreen(u, v, w, h, stock, zoom, pan)
+        const { sx, sy } = clampOverlayScreenAnchor(raw.x, raw.y, w, h)
+        return { ...prev, sx, sy, anchorUv: { u, v } }
+      })
+    }
+
+    syncPosition()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncPosition) : null
+    ro?.observe(wrap)
+    return () => ro?.disconnect()
+  }, [bottomMarkerPanel?.key, bottomMarkerPanel?.draftValue, pan, stock, zoom])
+
+  useEffect(() => {
+    if (!topMarkerPanel) return undefined
+    const wrap = wrapRef.current
+    if (!wrap) return undefined
+
+    const syncPosition = () => {
+      setTopMarkerPanel((prev) => {
+        if (!prev) return prev
+        const topOffset = prev.draftValue ?? 20
+        const u = prev.anchorUv?.u ?? 0
+        const v = topMarkerV(stock, topOffset)
+        const w = wrap.clientWidth
+        const h = wrap.clientHeight
+        const { x, y } = uvToScreen(u, v, w, h, stock, zoom, pan)
+        return { ...prev, sx: x, sy: y, anchorUv: { u, v } }
+      })
+    }
+
+    syncPosition()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncPosition) : null
+    ro?.observe(wrap)
+    return () => ro?.disconnect()
+  }, [topMarkerPanel?.key, topMarkerPanel?.draftValue, pan, stock, zoom])
+
+  useEffect(() => {
+    if (!modelGapPanel) return undefined
+    const wrap = wrapRef.current
+    if (!wrap) return undefined
+
+    const syncPosition = () => {
+      setModelGapPanel((prev) => {
+        if (!prev) return prev
+        const zoneHit = safeZoneHitsRef.current.find((z) => z.zoneType === prev.zoneType)
+        const anchorUv = zoneHit ? modelGapAnchorUV(zoneHit) : prev.anchorUv
+        if (!anchorUv) return prev
+        const w = wrap.clientWidth
+        const h = wrap.clientHeight
+        const { x, y } = uvToScreen(anchorUv.u, anchorUv.v, w, h, stock, zoom, pan)
+        return { ...prev, sx: x, sy: y, anchorUv }
+      })
+    }
+
+    syncPosition()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncPosition) : null
+    ro?.observe(wrap)
+    return () => ro?.disconnect()
+  }, [modelGapPanel?.key, modelGapAnchorUV, pan, stock, zoom])
 
   const activateCanvasFocus = useCallback((focus) => {
     if (!focus) return
@@ -1555,9 +1788,13 @@ export default function SilhouettePreviewPanel({
         const zoneScreen = safeZoneHitsRef.current.find((z) => z.zoneType === focusedZone)?.screenRect
         drawSafeZoneFocusFill(ctx, zoneScreen, focusedZone, true)
       } else {
+        const focusHit = canvasFocusRef.current?.hoverHit
+        const liveHighlight = focusHit
+          ? focusHighlightScreen(focusHit, originPt, w, h, stock, z, pn)
+          : canvasFocusRef.current?.highlight
         drawCanvasFocusStroke(
           ctx,
-          canvasFocusRef.current?.highlight,
+          liveHighlight,
           wireFocused || modelGapControllerRef.current?.isAnyFocused?.(),
         )
       }
@@ -1826,6 +2063,9 @@ export default function SilhouettePreviewPanel({
       || e.target?.closest?.('.canvas-dimension-editor')
       || e.target?.closest?.('.canvas-marker-editor')
       || e.target?.closest?.('.canvas-direction-marker-panel')
+      || e.target?.closest?.('.bottom-safe-offset-anchor')
+      || e.target?.closest?.('.top-safe-offset-anchor')
+      || e.target?.closest?.('.model-gap-offset-anchor')
       || e.target?.closest?.('.minimap-2d-widget')
       || e.target?.closest?.('.centered-modal-backdrop')
       || e.target?.closest?.('.centered-overlay-panel')
@@ -2433,21 +2673,21 @@ export default function SilhouettePreviewPanel({
             <span className="canvas-dimension-unit">mm</span>
           </div>
         )}
-        <DirectionMarkerOverlayPanel
+        <BottomSafePointOffsetOverlay
           panel={bottomMarkerPanel}
           onClose={closeBottomMarkerPanel}
           onApply={applyBottomMarkerPanel}
           onDraftChange={updateBottomMarkerDraft}
           onNudge={nudgeBottomMarkerDraft}
         />
-        <DirectionMarkerOverlayPanel
+        <TopSafePointOffsetOverlay
           panel={topMarkerPanel}
           onClose={closeTopMarkerPanel}
           onApply={applyTopMarkerPanel}
           onDraftChange={updateTopMarkerDraft}
           onNudge={nudgeTopMarkerDraft}
         />
-        <DirectionMarkerOverlayPanel
+        <ModelGapOffsetOverlay
           panel={modelGapPanel}
           onClose={closeModelGapPanel}
           onApply={applyModelGapPanel}

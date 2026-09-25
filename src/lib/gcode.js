@@ -2,6 +2,11 @@
 
 import { buildIndexTransitionPlan, isLeftOnlyIndexPlan, isLRIndexPlan } from './indexing/indexRouter.js'
 import { cutBlockForCut } from './gcodePath.js'
+import {
+  gcodeOriginFromStock,
+  gcodeOriginLabel,
+  overlayPointToGcode,
+} from './gcodeCoords.js'
 import { extendX, topSafeY } from './wirePath.js'
 
 export const ROTARY_AXIS_OPTIONS = ['Z', 'A', 'B', 'C', 'U', 'V']
@@ -246,6 +251,7 @@ function appendTransitionBlock({
   nextRotary,
   nextGreen,
   fallbackStart,
+  toGcode,
 }) {
   lines.push(cmt.line('Move rotary axis'))
   pushBlockGap(lines)
@@ -254,7 +260,7 @@ function appendTransitionBlock({
 
   if (isLeftOnlyIndexPlan(indexPlan) || isLRIndexPlan(indexPlan)) {
     appendMarkerTransition({
-      lines, cmt, appendRapid, appendIndex, pos, indexPlan, nextRotary, target,
+      lines, cmt, appendRapid, appendIndex, pos, indexPlan, nextRotary, target, toGcode,
     })
     return
   }
@@ -266,11 +272,12 @@ function appendTransitionBlock({
   appendIndex(nextRotary)
 
   lines.push(cmt.line('Rapid reposition after index to next green marker'))
-  if (target && Math.abs(pos.x - target.u) > 1e-6) {
-    appendRapid([{ x: target.u, y: safeY }], pos)
+  const targetXY = target ? toGcode(target) : null
+  if (targetXY && Math.abs(pos.x - targetXY.x) > 1e-6) {
+    appendRapid([{ x: targetXY.x, y: safeY }], pos)
   }
-  if (target) {
-    appendRapid([{ x: target.u, y: target.v }], pos)
+  if (targetXY) {
+    appendRapid([{ x: targetXY.x, y: targetXY.y }], pos)
   }
 }
 
@@ -282,12 +289,13 @@ function appendTransitionBlock({
  *   otherwise:   turn at red, G0 → K (next green)
  */
 function appendMarkerTransition({
-  lines, cmt, appendRapid, appendIndex, pos, indexPlan, nextRotary, target,
+  lines, cmt, appendRapid, appendIndex, pos, indexPlan, nextRotary, target, toGcode,
 }) {
   const k = indexPlan.k ?? target
   if (indexPlan.preMoveToK && k) {
     lines.push(cmt.line('Rapid from red marker to simDot K before turn'))
-    appendRapid([{ x: k.u, y: k.v }], pos)
+    const kXY = toGcode(k)
+    if (kXY) appendRapid([kXY], pos)
   }
 
   lines.push(cmt.line(`Rotary index to ${nextRotary.toFixed(4)} deg equivalent`))
@@ -295,7 +303,8 @@ function appendMarkerTransition({
 
   if (target) {
     lines.push(cmt.line('Rapid to next green marker'))
-    appendRapid([{ x: target.u, y: target.v }], pos)
+    const targetXY = toGcode(target)
+    if (targetXY) appendRapid([targetXY], pos)
   }
 }
 
@@ -347,7 +356,10 @@ export function generateGcode(cutJob, settings = {}, options = {}) {
     cmt.inline('Cut feed mm/min'),
   )
   const stepRotary = 360 / cutJob.rotationN
-  const topY = topSafeY(stock)
+  const origin = gcodeOriginFromStock(stock)
+  const toGcode = (pt) => overlayPointToGcode(pt, origin)
+  const topY = topSafeY(stock) - origin.v
+  lines.push(cmt.block(`Work origin: ${gcodeOriginLabel(stock)} (u=${fmt(origin.u)}, v=${fmt(origin.v)})`))
   const appendIndex = cfg.indexMotion === INDEX_MOTION_G0
     ? (z) => appendRapid([{ z }], pos)
     : (z) => appendMoves([{ z, f: cfg.indexFeed }], pos, cfg.feedRate)
@@ -369,17 +381,18 @@ export function generateGcode(cutJob, settings = {}, options = {}) {
 
     if (i === 0 && block.green) {
       lines.push(cmt.line('Move to wire start - green marker'))
+      const greenXY = toGcode(block.green)
       appendMovesWithModalReset(
-        [{ x: block.green.u, y: block.green.v, z: 0 }],
+        [{ ...greenXY, z: 0 }],
         pos,
         cfg.feedRate,
       )
       lines.push(cmt.line('Lead-in from green marker'))
-      appendMoves([{ x: path[0].u, y: path[0].v }], pos, cfg.feedRate)
+      appendMoves([toGcode(path[0])], pos, cfg.feedRate)
     } else {
       lines.push(cmt.line(block.green ? 'Lead-in from green marker' : 'Move to cut start'))
       appendMovesWithModalReset(
-        [{ x: path[0].u, y: path[0].v, ...(i === 0 ? { z: 0 } : {}) }],
+        [{ ...toGcode(path[0]), ...(i === 0 ? { z: 0 } : {}) }],
         pos,
         cfg.feedRate,
       )
@@ -387,12 +400,12 @@ export function generateGcode(cutJob, settings = {}, options = {}) {
 
     lines.push(cmt.line('Toolpath pass - overlay cut path'))
     for (let p = 1; p < path.length; p++) {
-      appendMoves([{ x: path[p].u, y: path[p].v }], pos, cfg.feedRate)
+      appendMoves([toGcode(path[p])], pos, cfg.feedRate)
     }
 
     if (block.red) {
       lines.push(cmt.line('Lead-out to red marker'))
-      appendMoves([{ x: block.red.u, y: block.red.v }], pos, cfg.feedRate)
+      appendMoves([toGcode(block.red)], pos, cfg.feedRate)
     }
 
     pushBlockGap(lines)
@@ -425,7 +438,8 @@ export function generateGcode(cutJob, settings = {}, options = {}) {
         safeY: topY,
         nextRotary: nextCut.index * stepRotary,
         nextGreen,
-        fallbackStart: nextBlock?.cut?.[0] ?? { u: -extendX(stock, nextCut.thetaDeg), v: topY },
+        fallbackStart: nextBlock?.cut?.[0] ?? { u: -extendX(stock, nextCut.thetaDeg), v: topSafeY(stock) },
+        toGcode,
       })
 
       pushBlockGap(lines)

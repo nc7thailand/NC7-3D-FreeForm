@@ -11,7 +11,7 @@ import { attachIndexSafetyToJob } from './indexSafety.js'
  *
  * Overlay-only (no buildSectionProfile — see patchCutJob* helpers):
  *   marker-apply  — boMargin / topOffset on green/red wire markers
- *   origin-apply  — originDisplay / originU / originV (display-only)
+ *   origin-apply  — originDisplay / originU / originV (G-code work origin + overlay marker)
  */
 export const TOOLPATH_COMPUTE_TRIGGER = {
   MODEL_ENTRY: 'model-entry',
@@ -93,7 +93,7 @@ export function patchCutJobMarkerStock(job, stock, geometry, cutMode) {
 }
 
 /**
- * Update display-only origin fields on a saved cut job (no geometry work).
+ * Update origin fields on a saved cut job (no geometry work).
  *
  * @param {object} job
  * @param {object} stock - merged stock snapshot

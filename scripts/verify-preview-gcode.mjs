@@ -11,6 +11,7 @@ import { buildCutJob, CUT_MODE_LEFT_TO_RIGHT, CUT_MODE_LEFT_ONLY } from '../src/
 import { extractOverlayContour } from '../src/lib/cutOverlay.js'
 import { attachIndexSafetyToJob } from '../src/lib/indexSafety.js'
 import { generateGcode, DEFAULT_GCODE_SETTINGS } from '../src/lib/gcode.js'
+import { gcodeOriginFromStock, overlayPointToGcode } from '../src/lib/gcodeCoords.js'
 import { buildCutPathLayerStack, PREVIEW_VIEW } from '../src/lib/cutPathStack3d.js'
 
 const TOL = 1e-3
@@ -132,7 +133,7 @@ function interpretProgram(program, rotaryAxis) {
  * rotary index must be the white rotary link (same XY, layer N → N+1) using
  * the selected index motion.
  */
-function verifyTransitions(layers, transitions, settings, fail) {
+function verifyTransitions(layers, transitions, settings, stock, fail) {
   let linksChecked = 0
   let rotaryChecked = 0
   for (let k = 0; k < layers.length - 1; k++) {
@@ -167,7 +168,8 @@ function verifyTransitions(layers, transitions, settings, fail) {
     }
 
     for (const mv of rapids) {
-      if (mv.to.v > maxV + TOL) {
+      const maxGcodeV = toGcodeUV(stock, { u: 0, v: maxV })?.v ?? maxV
+      if (mv.to.v > maxGcodeV + TOL) {
         fail(`${tag}: rapid climbs to Y${mv.to.v} (red Y${layer.chain.red.v}, next green Y${next.chain.green.v})`)
       }
     }
@@ -183,13 +185,14 @@ function verifyTransitions(layers, transitions, settings, fail) {
       continue
     }
     const mv = rapids[0]
+    const nextGreenG = toGcodeUV(stock, next.chain.green)
     const ok = near(mv.from.u, a.x) && near(mv.from.v, a.y)
       && near(mv.to.u, b.x) && near(mv.to.v, b.y)
       && near(mv.r, owner.layerZ)
     if (!ok) {
       fail(`${tag}: rapid (${mv.from.u},${mv.from.v})→(${mv.to.u},${mv.to.v}) @${mv.r} ≠ link (${a.x.toFixed(4)},${a.y.toFixed(4)})→(${b.x.toFixed(4)},${b.y.toFixed(4)}) @${owner.layerZ}`)
     }
-    if (!nearUV({ u: b.x, v: b.y }, next.chain.green)) {
+    if (!nextGreenG || !nearUV({ u: b.x, v: b.y }, nextGreenG)) {
       fail(`${tag}: simDot K is not the next green marker`)
     }
     linksChecked += 1
@@ -200,11 +203,20 @@ function verifyTransitions(layers, transitions, settings, fail) {
 const near = (a, b) => Math.abs(a - b) <= TOL
 const nearUV = (a, b) => near(a.u, b.u) && near(a.v, b.v)
 
-function verifyMode(label, mode, geo, job, settingsPatch = {}) {
+/** Overlay (u,v) → machine (X,Y) for comparison with parsed G-code. */
+function toGcodeUV(stock, pt) {
+  if (!pt) return null
+  const uv = Number.isFinite(pt.u) ? pt : { u: pt.x, v: pt.y }
+  const g = overlayPointToGcode(uv, gcodeOriginFromStock(stock))
+  return g ? { u: g.x, v: g.y } : null
+}
+
+function verifyMode(label, mode, geo, job, settingsPatch = {}, stockPatch = {}) {
   const errors = []
   const fail = (msg) => { if (errors.length < 20) errors.push(msg) }
 
-  const cutJob = { ...job, stock: STOCK, mode }
+  const stock = { ...STOCK, ...stockPatch }
+  const cutJob = { ...job, stock, mode }
   const settings = { ...DEFAULT_GCODE_SETTINGS, ...settingsPatch }
   const { program } = generateGcode(cutJob, settings, { geometry: geo })
   const rotaryAxis = settings.rotaryAxis ?? 'Z'
@@ -244,7 +256,8 @@ function verifyMode(label, mode, geo, job, settingsPatch = {}) {
     }
     previewPath.forEach((p, i) => {
       const c = chainPath[i]
-      if (!c || !near(p.x, c.u) || !near(p.y, c.v) || !near(p.z, layer.layerZ)) {
+      const want = toGcodeUV(stock, c)
+      if (!c || !want || !near(p.x, want.u) || !near(p.y, want.v) || !near(p.z, layer.layerZ)) {
         fail(`${tag}: preview point ${i} mismatch`)
       }
     })
@@ -252,7 +265,8 @@ function verifyMode(label, mode, geo, job, settingsPatch = {}) {
     // G-code: block 0 feeds green → cut → red; later blocks enter at green via G0.
     const expected = k === 0 ? chainPath : [...cut, red]
     if (k > 0) {
-      if (!block.entry || !nearUV({ u: block.entry.x, v: block.entry.y }, green)) {
+      const entryG = toGcodeUV(stock, green)
+      if (!block.entry || !entryG || !nearUV({ u: block.entry.x, v: block.entry.y }, entryG)) {
         fail(`${tag}: G0 approach ends at (${block.entry?.x}, ${block.entry?.y}), green marker is (${green.u.toFixed(4)}, ${green.v.toFixed(4)})`)
       }
     }
@@ -261,7 +275,8 @@ function verifyMode(label, mode, geo, job, settingsPatch = {}) {
     }
     const m = Math.min(block.feeds.length, expected.length)
     for (let i = 0; i < m; i++) {
-      if (!nearUV(block.feeds[i], expected[i])) {
+      const want = toGcodeUV(stock, expected[i])
+      if (!want || !nearUV(block.feeds[i], want)) {
         fail(`${tag}: feed ${i} G-code (${block.feeds[i].u}, ${block.feeds[i].v}) ≠ preview (${expected[i].u.toFixed(4)}, ${expected[i].v.toFixed(4)})`)
         break
       }
@@ -272,9 +287,21 @@ function verifyMode(label, mode, geo, job, settingsPatch = {}) {
     if (rotary.length !== 1 || !near(rotary[0], layer.layerZ)) {
       fail(`${tag}: rotary ${rotary.join(',')} ≠ preview layerZ ${layer.layerZ}`)
     }
+
+    const assembledLayer = assembled.layers[k]
+    if (assembledLayer?.cut?.length) {
+      for (let i = 0; i < assembledLayer.cut.length; i++) {
+        const want = toGcodeUV(stock, cut[i])
+        const pt = assembledLayer.cut[i]
+        if (!want || !near(pt.y, want.v) || !near(layer.cut[i].y, want.v)) {
+          fail(`${tag}: assembled/stack Y at cut ${i} (${pt.y}/${layer.cut[i].y}) ≠ G-code Y (${want?.v})`)
+          break
+        }
+      }
+    }
   }
 
-  const transitionStats = verifyTransitions(stack.layers, transitions, settings, fail)
+  const transitionStats = verifyTransitions(stack.layers, transitions, settings, stock, fail)
 
   return { label, blocks: blocks.length, layers: stack.layers.length, comparedPoints, transitionStats, errors }
 }
@@ -299,9 +326,14 @@ async function main() {
     }
     attachIndexSafetyToJob(job, geo, STOCK, mode)
 
-    const variants = [['index G0', { indexMotion: 'G0' }], ['index G1', { indexMotion: 'G1' }]]
-    for (const [variant, patch] of variants) {
-      const r = verifyMode(label, mode, geo, job, patch)
+    const variants = [
+      ['index G0 / bottom origin', { indexMotion: 'G0' }, { originDisplay: 'bottom' }],
+      ['index G1 / bottom origin', { indexMotion: 'G1' }, { originDisplay: 'bottom' }],
+      ['index G0 / top origin', { indexMotion: 'G0' }, { originDisplay: 'top' }],
+      ['index G1 / top origin', { indexMotion: 'G1' }, { originDisplay: 'top' }],
+    ]
+    for (const [variant, patch, stockPatch] of variants) {
+      const r = verifyMode(label, mode, geo, job, patch, stockPatch)
       const status = r.errors.length ? 'FAIL' : 'PASS'
       const t = r.transitionStats
       const extra = t ? `, ${t.linksChecked} yellow X-rapid links, ${t.rotaryChecked} white rotary links matched` : ''

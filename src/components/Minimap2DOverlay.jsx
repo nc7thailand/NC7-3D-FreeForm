@@ -97,7 +97,16 @@ export default function Minimap2DOverlay({
                 width: foamLayout.widthPx,
                 height: foamLayout.heightPx,
               }}
-            />
+            >
+              <svg
+                className="minimap-foam-origin"
+                viewBox="0 0 12 16"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
+                <polygon points="0,8 12,1 12,15" fill="#1d5cff" />
+              </svg>
+            </div>
           </div>
         </div>
 
