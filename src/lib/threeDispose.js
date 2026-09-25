@@ -21,6 +21,12 @@ export function disposeMaterial(material) {
   for (const key of TEXTURE_KEYS) {
     material[key]?.dispose?.()
   }
+  // ShaderMaterial / LineMaterial textures live in uniforms.
+  if (material.uniforms) {
+    for (const u of Object.values(material.uniforms)) {
+      if (u?.value?.isTexture) u.value.dispose()
+    }
+  }
   material.dispose?.()
 }
 
@@ -49,6 +55,8 @@ export function disposeSceneContents(scene, options) {
   for (const child of [...scene.children]) disposeObject3D(child, options)
   if (scene.background?.isTexture) scene.background.dispose()
   if (scene.environment?.isTexture) scene.environment.dispose()
+  scene.background = null
+  scene.environment = null
 }
 
 /**
@@ -59,10 +67,33 @@ export function disposeSceneContents(scene, options) {
  */
 export function disposeRenderer(renderer, { loseContext = true } = {}) {
   if (!renderer) return
+  renderer.setAnimationLoop?.(null)
   renderer.renderLists?.dispose?.()
   renderer.dispose()
   if (loseContext) renderer.forceContextLoss?.()
-  renderer.domElement?.parentNode?.removeChild(renderer.domElement)
+  const canvas = renderer.domElement
+  canvas?.parentNode?.removeChild(canvas)
+  // A zero-size canvas lets the browser drop its backing store right away
+  // instead of waiting for GC of the element.
+  if (canvas) {
+    canvas.width = 1
+    canvas.height = 1
+  }
+}
+
+/**
+ * Null every reference held by a viewer's mutable state object (scene,
+ * renderer, overlays, sim playback, trail arrays, model geometry) so nothing
+ * stays reachable after unmount. Arrays are replaced, never emptied in place,
+ * because one may be shared with app data (e.g. a cut job's point list).
+ */
+export function releaseViewerState(state) {
+  if (!state) return
+  for (const key of Object.keys(state)) {
+    const value = state[key]
+    if (Array.isArray(value)) state[key] = []
+    else if (value && (typeof value === 'object' || typeof value === 'function')) state[key] = null
+  }
 }
 
 /**

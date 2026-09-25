@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { buildCutJob } from './cutJob.js'
 import { attachIndexSafetyToJob } from './indexSafety.js'
-import { extractOverlayContour } from './cutOverlay.js'
+import { extractOverlayContour, OVERLAY_CONTOUR_VERSION } from './cutOverlay.js'
 import { generateGcode } from './gcode.js'
 import { planePointFromStock, silhouetteOptsFromStock } from './toolpath.js'
 import { deserializeGeometryFromWorker } from './geometryTransfer.js'
@@ -40,6 +40,7 @@ export async function runToolpathPipeline(geometry, {
   for (const cut of job.cuts) {
     cut.overlayContour = extractOverlayContour(geometry, cut.thetaDeg)
   }
+  job.overlayContourVersion = OVERLAY_CONTOUR_VERSION
 
   attachIndexSafetyToJob(job, geometry, stock, cutMode)
   return job

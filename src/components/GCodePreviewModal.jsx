@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { buildCutPathLayerStack, PREVIEW_VIEW } from '../lib/cutPathStack3d.js'
+import { PREVIEW_VIEW } from '../lib/cutPathStack3d.js'
 import { disposeMaterial, disposeRenderer, disposeSceneContents } from '../lib/threeDispose.js'
 
 const COLOR_LEAD_IN = 0x22c55e
@@ -17,7 +17,7 @@ const VIEW_OPTIONS = [
   { id: PREVIEW_VIEW.ASSEMBLED, label: 'Assembled 3D' },
 ]
 
-const EMPTY_STACK = { layers: [], bounds: null }
+const EMPTY_STACK = { layers: [], pointCount: 0, bounds: null }
 
 function createLineMaterials() {
   const mat = (color, opacity = 0.95) => new THREE.LineBasicMaterial({ color, transparent: true, opacity })
@@ -56,20 +56,16 @@ function clearLines(group) {
 export default function GCodePreviewModal({
   open,
   onClose,
-  cutJob = null,
-  geometry = null,
+  stack: stackProp = null,
+  viewMode = PREVIEW_VIEW.STACK,
+  onViewModeChange = null,
   rotaryAxis = 'Z',
   program = null,
   onDownload = null,
 }) {
   const mountRef = useRef(null)
   const viewerRef = useRef(null)
-  const [viewMode, setViewMode] = useState(PREVIEW_VIEW.STACK)
-
-  const stack = useMemo(
-    () => (open ? buildCutPathLayerStack(cutJob, geometry, { viewMode }) : EMPTY_STACK),
-    [open, cutJob, geometry, viewMode],
-  )
+  const stack = open && stackProp ? stackProp : EMPTY_STACK
 
   useEffect(() => {
     if (!open) return undefined
@@ -113,9 +109,11 @@ export default function GCodePreviewModal({
 
     let animId = 0
     let needsContinuousRender = false
+    let disposed = false
 
     // Never call controls.update() here: it emits 'change' → requestRender → recursion.
     const renderFrame = () => {
+      if (disposed) return
       renderer.render(scene, camera)
     }
 
@@ -206,13 +204,15 @@ export default function GCodePreviewModal({
     }
 
     viewerRef.current = { rebuildLayers }
-    requestAnimationFrame(() => {
+    const bootId = requestAnimationFrame(() => {
       resize()
       frameOrigin()
     })
 
     return () => {
+      disposed = true
       viewerRef.current = null
+      cancelAnimationFrame(bootId)
       cancelAnimationFrame(animId)
       controls.removeEventListener('change', requestRender)
       controls.removeEventListener('start', onControlsStart)
@@ -280,7 +280,7 @@ export default function GCodePreviewModal({
                   type="button"
                   className={viewMode === opt.id ? 'is-active' : ''}
                   aria-pressed={viewMode === opt.id}
-                  onClick={() => setViewMode(opt.id)}
+                  onClick={() => { if (opt.id !== viewMode) onViewModeChange?.(opt.id) }}
                 >
                   {opt.label}
                 </button>

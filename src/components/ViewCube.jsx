@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react'
 import * as THREE from 'three'
+import { disposeRenderer, disposeSceneContents } from '../lib/threeDispose'
 
 // Order follows BoxGeometry's material groups, verified against three r160:
 //   0:+X  1:−X  2:−Y  3:+Z  4:+Y  5:−Z
@@ -55,6 +56,10 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
   const cubeRef = useRef(null)
   const renderRef = useRef(null)
   const dragRef = useRef({ dragging: false, moved: false, x: 0, y: 0 })
+  // Callbacks live in a ref so the WebGL setup below runs once per mount; a
+  // parent passing inline callbacks must not rebuild the renderer each render.
+  const callbacksRef = useRef({ onSetView, onOrbit })
+  callbacksRef.current = { onSetView, onOrbit }
 
   useImperativeHandle(ref, () => ({
     sync(mainCamera, target) {
@@ -120,11 +125,12 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
       d.x = e.clientX
       d.y = e.clientY
       if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true
-      if (onOrbit) onOrbit(dx * 0.012, dy * 0.012)
+      callbacksRef.current.onOrbit?.(dx * 0.012, dy * 0.012)
     }
 
     const onPointerUp = (e) => {
       const d = dragRef.current
+      const { onSetView } = callbacksRef.current
       if (!d.moved && onSetView) {
         const rect = renderer.domElement.getBoundingClientRect()
         pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
@@ -156,18 +162,12 @@ const ViewCube = forwardRef(function ViewCube({ onSetView, onOrbit, onFlip, onHo
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       renderer.domElement.removeEventListener('pointercancel', onPointerUp)
-      geo.dispose()
-      materials.forEach((m) => { m.map?.dispose(); m.dispose() })
-      edges.geometry.dispose()
-      edges.material.dispose()
-      renderer.dispose()
-      // No forceContextLoss() here: this widget remounts whenever its callback
-      // props change, and forcing a context loss each time destroys a context
-      // the main viewport is still drawing with.
-      mount.removeChild(renderer.domElement)
+      disposeSceneContents(scene)
+      // Own canvas and context, so releasing it cannot affect the main viewport.
+      disposeRenderer(renderer)
       cubeRef.current = null
     }
-  }, [onSetView, onOrbit])
+  }, [])
 
   return (
     <div className={`view-cube-widget${hidden ? ' view-cube-widget--hidden' : ''}`}>

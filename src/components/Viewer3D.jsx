@@ -15,7 +15,13 @@ import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
-import { disposeMaterial, disposeObject3D, disposeRenderer, disposeSceneContents } from '../lib/threeDispose'
+import {
+  disposeMaterial,
+  disposeObject3D,
+  disposeRenderer,
+  disposeSceneContents,
+  releaseViewerState,
+} from '../lib/threeDispose'
 import {
   createNextDotGroup,
   createSimOverlayGroup,
@@ -1403,6 +1409,13 @@ export default forwardRef(function Viewer3D(
       if (state.snapCamera) state.snapCamera('front')
     }
   }, [combinedView, geometry, resetKey])
+
+  // Declared last so its cleanup runs after every other effect's teardown on
+  // unmount (3D → 2D switch): drop scene, overlay, sim and model references.
+  useEffect(() => () => {
+    releaseViewerState(stateRef.current)
+    if (window.__nc7shadow) delete window.__nc7shadow
+  }, [])
 
   const updateToolbar = (mode) => {
     const toolbar = toolbarRef.current

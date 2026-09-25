@@ -70,38 +70,73 @@ function layerMapper(viewMode, cutJob, cut) {
  * @returns {{ layers: CutPathLayer[], pointCount: number, bounds: object|null }}
  */
 export function buildCutPathLayerStack(cutJob, geometry = null, { viewMode = PREVIEW_VIEW.STACK } = {}) {
-  if (!cutJob?.cuts?.length) {
-    return { layers: [], pointCount: 0, bounds: null }
+  if (!cutJob?.cuts?.length) return emptyStack()
+  const ctx = stackContext(cutJob, geometry)
+  const layers = []
+  for (const cut of cutJob.cuts) {
+    const layer = buildLayer(cutJob, cut, ctx, viewMode)
+    if (layer) layers.push(layer)
   }
+  return finishStack(layers, cutJob, ctx, viewMode)
+}
 
-  const ctx = {
+/**
+ * Same result as buildCutPathLayerStack, built one cut at a time so a caller
+ * can show progress. `onProgress(done, total)` may return a promise (e.g. a
+ * paint yield); total = cuts + 1 for the transition-link pass.
+ */
+export async function buildCutPathLayerStackAsync(cutJob, geometry = null, {
+  viewMode = PREVIEW_VIEW.STACK,
+  onProgress = null,
+} = {}) {
+  if (!cutJob?.cuts?.length) return emptyStack()
+  const ctx = stackContext(cutJob, geometry)
+  const total = cutJob.cuts.length + 1
+  const layers = []
+  for (let i = 0; i < cutJob.cuts.length; i++) {
+    const layer = buildLayer(cutJob, cutJob.cuts[i], ctx, viewMode)
+    if (layer) layers.push(layer)
+    await onProgress?.(i + 1, total)
+  }
+  const stack = finishStack(layers, cutJob, ctx, viewMode)
+  await onProgress?.(total, total)
+  return stack
+}
+
+function emptyStack() {
+  return { layers: [], pointCount: 0, bounds: null }
+}
+
+function stackContext(cutJob, geometry) {
+  return {
     geometry: geometry ?? cutJob.geometry ?? null,
     stock: cutJob.stock ?? {},
     cutMode: cutJob.mode,
   }
-  const layers = []
-  let pointCount = 0
+}
 
-  for (const cut of cutJob.cuts) {
-    const chain = cutBlockForCut(cutJob, cut, ctx)
-    if (!chain || chain.cut.length < 2) continue
-    const map = layerMapper(viewMode, cutJob, cut)
-    const layer = {
-      index: cut.index,
-      thetaDeg: cut.thetaDeg,
-      layerZ: layerZForCut(cutJob, cut),
-      leadIn: chain.leadIn.map(map),
-      cut: chain.cut.map(map),
-      leadOut: chain.leadOut.map(map),
-      simDotLinks: [],
-      chain,
-    }
-    layers.push(layer)
+function buildLayer(cutJob, cut, ctx, viewMode) {
+  const chain = cutBlockForCut(cutJob, cut, ctx)
+  if (!chain || chain.cut.length < 2) return null
+  const map = layerMapper(viewMode, cutJob, cut)
+  return {
+    index: cut.index,
+    thetaDeg: cut.thetaDeg,
+    layerZ: layerZForCut(cutJob, cut),
+    leadIn: chain.leadIn.map(map),
+    cut: chain.cut.map(map),
+    leadOut: chain.leadOut.map(map),
+    simDotLinks: [],
+    chain,
+  }
+}
+
+function finishStack(layers, cutJob, ctx, viewMode) {
+  attachTransitionLinks(layers, cutJob, ctx, viewMode)
+  let pointCount = 0
+  for (const layer of layers) {
     pointCount += layer.cut.length + Math.max(layer.leadIn.length - 1, 0) + Math.max(layer.leadOut.length - 1, 0)
   }
-
-  attachTransitionLinks(layers, cutJob, ctx, viewMode)
-
   return {
     layers,
     pointCount,

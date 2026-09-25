@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import SmartNumberInput from '../components/SmartNumberInput'
 import PageNav from '../components/PageNav'
 import { useAppState } from '../context/AppState'
 import { compileGcodeInWorker } from '../lib/camWorkerClient'
 import GCodePreviewModal from '../components/GCodePreviewModal'
+import { PREVIEW_VIEW, buildCutPathLayerStackAsync } from '../lib/cutPathStack3d.js'
 import {
   downloadGcode,
   defaultGcodeFilename,
@@ -19,8 +20,14 @@ import { effectiveBottomSafeOffset } from '../lib/toolpath'
 const GCODE_COMPILE_DEBOUNCE_MS = 200
 
 export default function GcodePage() {
-  const { cutJob, stock, geometry, modelName, gcodeSettings, setGcodeSettings } = useAppState()
+  const {
+    cutJob, stock, geometry, modelName, gcodeSettings, setGcodeSettings,
+    beginBusy, setBusyProgress, endBusy, yieldToPaint,
+  } = useAppState()
   const [preview3dOpen, setPreview3dOpen] = useState(false)
+  const [previewViewMode, setPreviewViewMode] = useState(PREVIEW_VIEW.STACK)
+  const [previewStack, setPreviewStack] = useState(null)
+  const [previewPreparing, setPreviewPreparing] = useState(false)
 
   const { feedRate, indexFeed, spindle, rotaryAxis, postProcess } = gcodeSettings
   const indexMotion = gcodeSettings.indexMotion ?? INDEX_MOTION_G0
@@ -70,6 +77,42 @@ export default function GcodePage() {
       defaultGcodeFilename(modelName, postProcess ?? POST_PROCESS_GRBL),
     )
   }
+
+  const openPreview = useCallback(async (mode = previewViewMode) => {
+    if (!cutJob?.cuts?.length || previewPreparing) return
+    setPreviewPreparing(true)
+    const total = cutJob.cuts.length + 1
+    beginBusy('Preparing G-code preview…', { done: 0, total })
+    await yieldToPaint()
+    try {
+      const stack = await buildCutPathLayerStackAsync(cutJob, geometry, {
+        viewMode: mode,
+        onProgress: async (done, count) => {
+          setBusyProgress(done, count)
+          await yieldToPaint()
+        },
+      })
+      setPreviewViewMode(mode)
+      setPreviewStack(stack)
+      setPreview3dOpen(true)
+    } finally {
+      await endBusy()
+      setPreviewPreparing(false)
+    }
+  }, [
+    beginBusy, cutJob, endBusy, geometry, previewPreparing, previewViewMode,
+    setBusyProgress, yieldToPaint,
+  ])
+
+  const closePreview = useCallback(() => {
+    setPreview3dOpen(false)
+    setPreviewStack(null)
+  }, [])
+
+  const changePreviewView = useCallback((mode) => {
+    if (mode === previewViewMode) return
+    openPreview(mode)
+  }, [openPreview, previewViewMode])
 
   const handleIndexMotionChange = (value) => {
     setGcodeSettings((prev) => ({
@@ -165,8 +208,8 @@ export default function GcodePage() {
                   <button
                     type="button"
                     className="header-next-btn"
-                    onClick={() => setPreview3dOpen(true)}
-                    disabled={!cutJob?.cuts?.length}
+                    onClick={() => openPreview()}
+                    disabled={!cutJob?.cuts?.length || previewPreparing}
                   >
                     Preview G-code
                   </button>
@@ -179,9 +222,10 @@ export default function GcodePage() {
       <PageNav page="gcode" />
       <GCodePreviewModal
         open={preview3dOpen}
-        onClose={() => setPreview3dOpen(false)}
-        cutJob={cutJob}
-        geometry={geometry}
+        onClose={closePreview}
+        stack={previewStack}
+        viewMode={previewViewMode}
+        onViewModeChange={changePreviewView}
         rotaryAxis={rotaryAxis ?? 'Z'}
         program={gcodeCompiling ? null : gcodeResult?.program ?? null}
         onDownload={handleDownload}

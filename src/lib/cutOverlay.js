@@ -10,14 +10,39 @@
 //
 // This module is pure arithmetic — no canvas, no THREE, no rendering.
 
-import { densifyPolyline, extractFullSilhouette } from './silhouette.js'
+import { extractFullSilhouette } from './silhouette.js'
+import { simplifyRasterContour } from './polylineSimplify.js'
 import { cuttingPlane, cutBoV, planePointMiddleFromStock } from './toolpath.js'
 import { CUT_MODE_LEFT_ONLY } from './cutJob.js'
 
 // Quality is fixed at High (1200 grid bins) for the preview overlay.
 export const OVERLAY_GRID_BINS = 1200
-/** Max segment length when smoothing the displayed cut path (mm). */
-export const OVERLAY_CUT_PATH_STEP_MM = 0.5
+/**
+ * Chord tolerance for the traced contour (mm). Matches DevFoam's density on
+ * its example model (~140 G1 moves per cut) while staying closer to a 3×
+ * finer reference grid on average than the unreduced 1200-bin staircase.
+ */
+export const OVERLAY_CONTOUR_TOLERANCE_MM = 0.15
+/** Bumped when the stored contour format changes; older jobs are migrated. */
+export const OVERLAY_CONTOUR_VERSION = 2
+
+/** Reduce a raw grid-traced contour to the stored/emitted resolution. */
+export function simplifyOverlayContour(contour) {
+  return simplifyRasterContour(contour, OVERLAY_CONTOUR_TOLERANCE_MM)
+}
+
+/**
+ * Bring contours saved by an older version (raw 1200-bin staircase) to the
+ * current resolution. Mutates and returns `job`.
+ */
+export function migrateOverlayContours(job) {
+  if (!job?.cuts || job.overlayContourVersion === OVERLAY_CONTOUR_VERSION) return job
+  for (const cut of job.cuts) {
+    if (cut.overlayContour?.length >= 3) cut.overlayContour = simplifyOverlayContour(cut.overlayContour)
+  }
+  job.overlayContourVersion = OVERLAY_CONTOUR_VERSION
+  return job
+}
 
 // Colours shared by the 2D canvas and the 3D overlay so the two views read as
 // the same drawing.
@@ -232,9 +257,9 @@ export function extractOverlayContour(geometry, thetaDeg) {
     // turns on a fixed wire, which mirrored the 2D/Combined drawing against
     // the 3D view at θ ≠ 0.
     const frame = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
-    return extractFullSilhouette(geometry, frame, {
+    return simplifyOverlayContour(extractFullSilhouette(geometry, frame, {
       gridBins: OVERLAY_GRID_BINS,
-    })
+    }))
   } catch (err) {
     console.warn('overlay silhouette failed:', err)
     return []
@@ -403,8 +428,7 @@ export function buildOverlayData({
   const storedContour = overlayContourFromCutJob(cutJob, cutIndex)
   const contour = storedContour ?? extractOverlayContour(geometry, thetaDeg)
   const boV = cutBoV(stock, geometry)
-  const rawCutPath = buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY)
-  const cutPath = densifyPolyline(rawCutPath, OVERLAY_CUT_PATH_STEP_MM)
+  const cutPath = buildCutPath(contour, boV, cutMode === CUT_MODE_LEFT_ONLY)
   const annotations = buildOverlayAnnotations({
     cutPath, cutMode, stock, cutIndex, geometry, thetaDeg, boV,
     boMarginOverride, topOffsetOverride,

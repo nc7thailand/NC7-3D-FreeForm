@@ -3,6 +3,7 @@ import { zip, unzip } from 'fflate'
 import { toBinarySTL } from './export.js'
 import { loadSTLFromArrayBuffer } from './stl.js'
 import { cutJobHasProfile } from './cutJob.js'
+import { migrateOverlayContours } from './cutOverlay.js'
 
 export const PROJECT_FORMAT = 'nc7studio3d-project'
 export const PROJECT_VERSION = 1
@@ -53,6 +54,7 @@ function serializeCutJob(cutJob) {
     sourceGeometryUuid: cutJob.sourceGeometryUuid ?? null,
     sourceModelRevision: cutJob.sourceModelRevision ?? null,
     stock: cutJob.stock ? { ...cutJob.stock } : null,
+    overlayContourVersion: cutJob.overlayContourVersion ?? null,
     cuts: cutJob.cuts.map((cut) => ({
       index: cut.index,
       thetaDeg: cut.thetaDeg,
@@ -70,14 +72,15 @@ function deserializeCutJob(data) {
     profile: deserializeProfile(cut.profile),
     overlayContour: cut.overlayContour ?? null,
   }))
-  return {
+  return migrateOverlayContours({
     rotationN: data.rotationN,
     mode: data.mode ?? null,
     sourceGeometryUuid: data.sourceGeometryUuid ?? null,
     sourceModelRevision: data.sourceModelRevision ?? null,
     stock: data.stock ? { ...data.stock } : null,
+    overlayContourVersion: data.overlayContourVersion ?? null,
     cuts,
-  }
+  })
 }
 
 function buildManifest({ modelName, stock, rotationN, cutIndex, cutJob, gcodeSettings }) {

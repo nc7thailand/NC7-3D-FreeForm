@@ -8,6 +8,7 @@ import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
+import { migrateOverlayContours } from '../lib/cutOverlay'
 import { computeToolpathInWorker } from '../lib/camWorkerClient'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
@@ -306,7 +307,7 @@ export function AppStateProvider({ children }) {
     setStock({ ...DEFAULT_STOCK, ...data.stock })
     setRotationN(data.rotationN)
     setCutIndex(data.cutIndex)
-    setCutJob(data.cutJob)
+    setCutJob(migrateOverlayContours(data.cutJob))
     if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
     setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
     setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
@@ -901,7 +902,7 @@ export function AppStateProvider({ children }) {
       setStock({ ...DEFAULT_STOCK, ...data.stock })
       setRotationN(data.rotationN)
       setCutIndex(data.cutIndex)
-      setCutJob(data.cutJob)
+      setCutJob(migrateOverlayContours(data.cutJob))
       if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
       setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
       setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)

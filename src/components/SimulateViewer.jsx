@@ -4,7 +4,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import ViewCube from './ViewCube'
 import { buildWireStack } from '../lib/simStack'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
-import { disposeMaterial, disposeObject3D, disposeRenderer, disposeSceneContents } from '../lib/threeDispose.js'
+import {
+  disposeMaterial,
+  disposeObject3D,
+  disposeRenderer,
+  disposeSceneContents,
+  releaseViewerState,
+} from '../lib/threeDispose.js'
 
 /**
  * Page 4 — stacked red wire paths + optional mesh (DevFoam-style sim view).
@@ -264,22 +270,35 @@ export default function SimulateViewer({
     }
 
     const stack = buildWireStack(cutJob, geometry)
-    const inactivePos = []
-    const activePos = []
+    let inactiveSegs = 0
+    let activeSegs = 0
+    for (const path of stack) {
+      const segs = Math.max(0, path.points.length - 1)
+      if (path.index === activeCutIndex) activeSegs += segs
+      else inactiveSegs += segs
+    }
+    const inactivePos = new Float32Array(inactiveSegs * 6)
+    const activePos = new Float32Array(activeSegs * 6)
+    let ia = 0
+    let aa = 0
 
     for (const path of stack) {
       const isActive = path.index === activeCutIndex
+      const arr = isActive ? activePos : inactivePos
+      let o = isActive ? aa : ia
       for (let i = 0; i < path.points.length - 1; i++) {
         const a = path.points[i]
         const b = path.points[i + 1]
-        const arr = isActive ? activePos : inactivePos
-        arr.push(a.x, a.y, a.z, b.x, b.y, b.z)
+        arr[o++] = a.x; arr[o++] = a.y; arr[o++] = a.z
+        arr[o++] = b.x; arr[o++] = b.y; arr[o++] = b.z
       }
+      if (isActive) aa = o
+      else ia = o
     }
 
     if (inactivePos.length) {
       const geo = new THREE.BufferGeometry()
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(inactivePos, 3))
+      geo.setAttribute('position', new THREE.BufferAttribute(inactivePos, 3))
       const lines = new THREE.LineSegments(
         geo,
         new THREE.LineBasicMaterial({ color: 0xe84040, transparent: true, opacity: 0.35 }),
@@ -290,7 +309,7 @@ export default function SimulateViewer({
 
     if (activePos.length) {
       const geo = new THREE.BufferGeometry()
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(activePos, 3))
+      geo.setAttribute('position', new THREE.BufferAttribute(activePos, 3))
       const lines = new THREE.LineSegments(
         geo,
         new THREE.LineBasicMaterial({ color: 0xff3333 }),
@@ -324,6 +343,9 @@ export default function SimulateViewer({
     }
     state.requestRender?.()
   }, [playbackPoint])
+
+  // Declared last so it runs after every other teardown on unmount.
+  useEffect(() => () => releaseViewerState(stateRef.current), [])
 
   const setView = (view) => stateRef.current?.frameCamera?.(view)
   const orbitView = (dAzimuth, dPolar) => stateRef.current?.orbitCamera?.(dAzimuth, dPolar)
