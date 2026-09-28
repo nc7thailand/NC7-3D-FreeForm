@@ -5,6 +5,51 @@ import ProjectPanel from '../components/ProjectPanel'
 import PageNav from '../components/PageNav'
 import { useAppState } from '../context/AppState'
 
+function SplitPanel() {
+  const {
+    sceneObjects,
+    selectedObjectId,
+    splitPlaneOffsetY,
+    setSplitPlaneOffsetY,
+    handleSelectObject,
+    handlePlaneSplit,
+  } = useAppState()
+
+  if (!sceneObjects.length) return null
+
+  return (
+    <>
+      {sceneObjects.length > 1 && (
+        <div className="split-object-list">
+          {sceneObjects.filter((o) => !o.parentId).map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              className={`split-object-btn${o.id === selectedObjectId ? ' is-selected' : ''}`}
+              onClick={() => handleSelectObject(o.id)}
+            >
+              <span className="split-color-swatch" style={{ background: o.color }} />
+              {o.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <label className="split-offset-label">
+        Plane offset Y (mm)
+        <SmartNumberInput
+          value={splitPlaneOffsetY}
+          onChange={(v) => setSplitPlaneOffsetY(Number(v) || 0)}
+        />
+      </label>
+      <div className="split-actions">
+        <button type="button" onClick={() => handlePlaneSplit('top')}>Keep Top</button>
+        <button type="button" onClick={() => handlePlaneSplit('bottom')}>Keep Bottom</button>
+        <button type="button" onClick={() => handlePlaneSplit('both')}>Keep Both</button>
+      </div>
+    </>
+  )
+}
+
 function ModelPanel() {
   const {
     menuOpen,
@@ -58,6 +103,12 @@ function ModelPanel() {
         </section>
 
         <section className="panel">
+          <h2>Plane Split</h2>
+          <p className="panel-hint">Move the split plane, then keep one side or both parts.</p>
+          <SplitPanel />
+        </section>
+
+        <section className="panel">
           <h2>Settle</h2>
           <p className="panel-hint">Drop model so the lowest point sits on the floor (Y=0).</p>
           <button type="button" onClick={handleSettle}>Settle</button>
@@ -85,6 +136,9 @@ function ModelPanel() {
 export default function ModelPage() {
   const {
     geometry,
+    sceneObjects,
+    selectedObjectId,
+    splitPlane,
     resetKey,
     status,
     viewerRef,
@@ -105,6 +159,9 @@ export default function ModelPage() {
             <Viewer3D
               ref={viewerRef}
               geometry={geometry}
+              sceneObjects={sceneObjects}
+              selectedObjectId={selectedObjectId}
+              splitPlane={splitPlane}
               resetKey={resetKey}
               showModelBBox={stock.showModelBBox !== false}
               onSettle={handleSettle}

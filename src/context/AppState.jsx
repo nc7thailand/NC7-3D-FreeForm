@@ -6,7 +6,20 @@ import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
-import { geometryToCutPart, cutPartsMetadata } from '../lib/cutParts'
+import { geometryToCutPart, cutPartsMetadata, filterCutIncludedParts } from '../lib/cutParts'
+import {
+  createBasePlateForParent,
+  createBridgeBarForParent,
+  createDefaultCylinderForParent,
+} from '../lib/helperPrimitives'
+import {
+  addHelperObject,
+  computeSplitPlane,
+  findSceneObject,
+  geometryForSelection,
+  initSceneFromGeometry,
+  splitSceneObject,
+} from '../lib/sceneState'
 import {
   buildSectionProfileFromParts,
   buildFullSilhouettePreviewFromParts,
@@ -135,6 +148,11 @@ export function AppStateProvider({ children }) {
   const [gcodeSettings, setGcodeSettings] = useState(DEFAULT_GCODE_SETTINGS)
   const [toolpathTick, setToolpathTick] = useState(0)
   const [modelName, setModelName] = useState(DUMMY_STL_NAME)
+  const [sceneObjects, setSceneObjects] = useState([])
+  const [selectedObjectId, setSelectedObjectId] = useState(null)
+  const [toolpathObjectId, setToolpathObjectId] = useState(null)
+  const [splitPlaneOffsetY, setSplitPlaneOffsetY] = useState(0)
+  const [placementRevision, setPlacementRevision] = useState(0)
   const [sessionReady, setSessionReady] = useState(false)
   const [hydrating, setHydrating] = useState(true)
   const [toolpathSetupOpen, setToolpathSetupOpen] = useState(false)
@@ -221,12 +239,62 @@ export function AppStateProvider({ children }) {
     return stored
   }, [])
 
-  /** Cut-included parts for silhouette/toolpath (single artwork mesh until P4). */
+  const applySceneSelection = useCallback((objects, selectedId, toolpathId = selectedId) => {
+    const geo = geometryForSelection(objects, selectedId)
+    if (geo) {
+      workingRef.current = geo
+      setGeometry(geo)
+    }
+    setSceneObjects(objects)
+    setSelectedObjectId(selectedId)
+    setToolpathObjectId(toolpathId)
+    setResetKey((k) => k + 1)
+  }, [])
+
+  const loadSceneFromGeometry = useCallback((geo, name = 'part') => {
+    const scene = initSceneFromGeometry(geo, name)
+    applySceneSelection(scene.objects, scene.selectedId, scene.toolpathId)
+  }, [applySceneSelection])
+
+  /** Artwork + helpers for silhouette/toolpath (Approach 4). */
   const getCutPartsForCompute = useCallback(() => {
-    const geo = getHiResGeometryForCompute()
-    if (!geo) return []
-    return [geometryToCutPart(geo, { includeInCut: true, role: 'artwork' })]
-  }, [getHiResGeometryForCompute])
+    const targetId = toolpathObjectId ?? selectedObjectId
+    const artwork = sceneObjects.find((o) => o.id === targetId && !o.parentId)
+      ?? sceneObjects.find((o) => o.type === 'artwork' && !o.parentId)
+      ?? sceneObjects[0]
+    if (!artwork?.geometry) {
+      const geo = getHiResGeometryForCompute()
+      if (!geo) return []
+      return [geometryToCutPart(geo, {
+        includeInCut: true,
+        role: 'artwork',
+        objectId: geo.uuid,
+        placementRevision,
+      })]
+    }
+    const helpers = sceneObjects.filter((o) => o.parentId === artwork.id && o.includeInCut !== false)
+    const parts = [
+      geometryToCutPart(artwork.geometry, {
+        includeInCut: true,
+        role: artwork.type,
+        objectId: artwork.id,
+        placementRevision,
+      }),
+      ...helpers.map((h) => geometryToCutPart(h.geometry, {
+        includeInCut: true,
+        role: h.type,
+        objectId: h.id,
+        placementRevision,
+      })),
+    ]
+    return filterCutIncludedParts(parts)
+  }, [
+    getHiResGeometryForCompute,
+    placementRevision,
+    sceneObjects,
+    selectedObjectId,
+    toolpathObjectId,
+  ])
 
   const cutCount = effectiveCutCount(rotationN, { mode: cutMode })
   const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / cutCount : 0
@@ -321,6 +389,7 @@ export function AppStateProvider({ children }) {
     workingRef.current = data.geometry
     storeHighResGeometry(data.geometry)
     setGeometry(data.geometry)
+    loadSceneFromGeometry(data.geometry, data.modelName?.replace(/\.stl$/i, '') ?? 'part')
     setModelName(data.modelName)
     // Merge over defaults: a session saved before a stock field existed omits
     // that key, and replacing wholesale would drop it — which also hid the new
@@ -336,7 +405,7 @@ export function AppStateProvider({ children }) {
     lastToolpathModelKeyRef.current = toolpathModelKey(data.geometry)
     setResetKey((k) => k + 1)
     setToolpathTick((t) => t + 1)
-  }, [updateStatsOnly, storeHighResGeometry])
+  }, [updateStatsOnly, storeHighResGeometry, loadSceneFromGeometry])
 
   useEffect(() => {
     if (!status || statusShouldPersist(status)) return undefined
@@ -378,7 +447,7 @@ export function AppStateProvider({ children }) {
         const geo = prepareRawGeometry(rawGeo)
         workingRef.current = geo
         storeHighResGeometry(geo)
-        setGeometry(geo)
+        loadSceneFromGeometry(geo, 'part')
         updateStatsFrom(geo)
         setModelName(DUMMY_STL_NAME)
         setStatus(`Loaded dummy ${DUMMY_STL_NAME} (${geo.attributes.position.count / 3} triangles)`)
@@ -393,7 +462,7 @@ export function AppStateProvider({ children }) {
 
     initSession()
     return () => { cancelled = true }
-  }, [applyRestoredSession, storeHighResGeometry, updateStatsFrom])
+  }, [applyRestoredSession, storeHighResGeometry, updateStatsFrom, loadSceneFromGeometry])
 
   // Preview the buffered cut for the current index. Everything is computed in
   // one batch on Apply, so stepping through cuts never re-runs a silhouette.
@@ -420,7 +489,8 @@ export function AppStateProvider({ children }) {
         viewerRef.current?.refreshMeshPivot?.()
       }
       planePoint.current.copy(planePointFromStock(stock))
-      const parts = [geometryToCutPart(geo, { includeInCut: true, role: 'artwork' })]
+      const parts = getCutPartsForCompute()
+      if (!parts.length) return undefined
       const silhouetteOpts = silhouetteOptsFromStock(stock)
       try {
         setProfile(buildSectionProfileFromParts(parts, thetaDeg, planePoint.current, silhouetteOpts))
@@ -435,7 +505,7 @@ export function AppStateProvider({ children }) {
     }, 300)
 
     return () => clearTimeout(timer)
-  }, [cutIndex, cutJob, thetaDeg, stock.t, stock.w, stock.h, stock.lo, stock.kerf, stock.profileAccuracy, geometry, toolpathTick, updateStatsFrom])
+  }, [cutIndex, cutJob, thetaDeg, stock.t, stock.w, stock.h, stock.lo, stock.kerf, stock.profileAccuracy, geometry, toolpathTick, updateStatsFrom, getCutPartsForCompute])
 
   // Changing settings only clamps which cut is previewed. The buffered job is
   // kept until the user presses Apply, so ◀ ▶ stays instant in the meantime.
@@ -524,9 +594,11 @@ export function AppStateProvider({ children }) {
       const geo = prepareRawGeometry(rawGeo)
       workingRef.current = geo
       storeHighResGeometry(geo)
-      setGeometry(geo)
+      loadSceneFromGeometry(geo, file.name.replace(/\.stl$/i, ''))
       updateStatsFrom(geo)
       setModelName(file.name)
+      setSplitPlaneOffsetY(0)
+      setPlacementRevision(0)
       lastToolpathModelKeyRef.current = null
       setCutJob(null)
       setCutIndex(0)
@@ -578,6 +650,92 @@ export function AppStateProvider({ children }) {
     setStatus('Centred on turntable: centre of mass moved to X0, Z0 (Y unchanged).')
   }
 
+  const handleSelectObject = useCallback((objectId, asToolpathTarget = false) => {
+    if (!findSceneObject(sceneObjects, objectId)) return
+    const nextToolpathId = asToolpathTarget ? objectId : (toolpathObjectId ?? objectId)
+    applySceneSelection(sceneObjects, objectId, nextToolpathId)
+  }, [applySceneSelection, sceneObjects, toolpathObjectId])
+
+  const handlePlaneSplit = useCallback((keep) => {
+    if (!workingRef.current || !selectedObjectId) {
+      setStatus('Select a part to split.')
+      return
+    }
+    bakeModelTransform()
+    const plane = computeSplitPlane(workingRef.current, splitPlaneOffsetY)
+    const result = splitSceneObject(sceneObjects, selectedObjectId, keep, plane)
+    if (result?.error) {
+      setStatus(result.error)
+      return
+    }
+    storeHighResGeometry(geometryForSelection(result.objects, result.selectedId))
+    applySceneSelection(result.objects, result.selectedId, result.toolpathId)
+    setCutJob(null)
+    setSplitPlaneOffsetY(0)
+    setStatus(keep === 'both' ? 'Split into two parts — world positions kept.' : `Kept ${keep} side of split.`)
+  }, [
+    applySceneSelection,
+    bakeModelTransform,
+    sceneObjects,
+    selectedObjectId,
+    splitPlaneOffsetY,
+    storeHighResGeometry,
+  ])
+
+  const handleAddHelper = useCallback((kind) => {
+    const parentId = toolpathObjectId ?? selectedObjectId
+    const parent = sceneObjects.find((o) => o.id === parentId && !o.parentId)
+    if (!parent?.geometry) {
+      setStatus('Select an artwork part first.')
+      return
+    }
+    bakeModelTransform()
+    let helperGeo = null
+    let type = 'helper-base'
+    if (kind === 'plate') {
+      helperGeo = createBasePlateForParent(parent.geometry)
+      type = 'helper-base'
+    } else if (kind === 'bar') {
+      helperGeo = createBridgeBarForParent(parent.geometry)
+      type = 'helper-bridge'
+    } else if (kind === 'cylinder') {
+      helperGeo = createDefaultCylinderForParent(parent.geometry)
+      type = 'helper-cylinder'
+    }
+    if (!helperGeo) return
+    helperGeo.userData.nc7CentroidApplied = true
+    const result = addHelperObject(sceneObjects, parent.id, helperGeo, { type })
+    if (!result) return
+    setPlacementRevision((r) => r + 1)
+    setCutJob(null)
+    applySceneSelection(result.objects, result.helperId, parent.id)
+    setStatus(`Added ${kind} helper — included in cut.`)
+  }, [applySceneSelection, bakeModelTransform, sceneObjects, selectedObjectId, toolpathObjectId])
+
+  const savePlacementStage = useCallback(async () => {
+    if (!workingRef.current) return false
+    bakeModelTransform()
+    const targetId = toolpathObjectId ?? selectedObjectId
+    const nextObjects = sceneObjects.map((o) => (
+      o.id === selectedObjectId
+        ? { ...o, geometry: workingRef.current }
+        : o
+    ))
+    applySceneSelection(nextObjects, selectedObjectId, targetId)
+    storeHighResGeometry(workingRef.current)
+    setPlacementRevision((r) => r + 1)
+    setCutJob(null)
+    setStatus('Placement saved — helpers committed for toolpath.')
+    return true
+  }, [
+    applySceneSelection,
+    bakeModelTransform,
+    sceneObjects,
+    selectedObjectId,
+    storeHighResGeometry,
+    toolpathObjectId,
+  ])
+
   const handleSimplify = (ratio) => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
     const result = simplifyGeometry(workingRef.current, { ratio })
@@ -586,6 +744,11 @@ export function AppStateProvider({ children }) {
     workingRef.current = result.geometry
     storeHighResGeometry(result.geometry)
     setGeometry(result.geometry)
+    if (selectedObjectId) {
+      setSceneObjects((objs) => objs.map((o) => (
+        o.id === selectedObjectId ? { ...o, geometry: result.geometry } : o
+      )))
+    }
     setCutJob(null)
     updateStatsFrom(result.geometry)
     setStatus(`Simplified: ${result.originalTriangles} → ${result.newTriangles} triangles`)
@@ -605,6 +768,11 @@ export function AppStateProvider({ children }) {
     workingRef.current = null
     highResStoredRef.current = null
     setGeometry(null)
+    setSceneObjects([])
+    setSelectedObjectId(null)
+    setToolpathObjectId(null)
+    setSplitPlaneOffsetY(0)
+    setPlacementRevision(0)
     setStats(null)
     setProfile(null)
     setSilhouettePreview(null)
@@ -618,7 +786,7 @@ export function AppStateProvider({ children }) {
       const geo = prepareRawGeometry(rawGeo)
       workingRef.current = geo
       storeHighResGeometry(geo)
-      setGeometry(geo)
+      loadSceneFromGeometry(geo, 'part')
       updateStatsFrom(geo)
       setModelName(DUMMY_STL_NAME)
       setStatus(`Loaded dummy ${DUMMY_STL_NAME}`)
@@ -862,8 +1030,12 @@ export function AppStateProvider({ children }) {
    * so the red base gap and green top gap match those offsets, then compute.
    */
   const ensureToolpathOnModelEntry = useCallback(async () => {
-    const geo = workingRef.current
+    const targetId = toolpathObjectId ?? selectedObjectId
+    const artwork = sceneObjects.find((o) => o.id === targetId && !o.parentId)
+      ?? sceneObjects.find((o) => !o.parentId)
+    const geo = artwork?.geometry ?? workingRef.current
     if (!geo) return false
+    workingRef.current = geo
 
     settleGeometry(geo)
     geo.userData.nc7CentroidApplied = true
@@ -897,10 +1069,13 @@ export function AppStateProvider({ children }) {
     return saveToolpathStage(freshStock, CUT_MODE_LEFT_ONLY)
   }, [
     saveToolpathStage,
+    sceneObjects,
+    selectedObjectId,
     setCutMode,
     setRotationN,
     storeHighResGeometry,
     toolpathModelKey,
+    toolpathObjectId,
     updateStatsOnly,
   ])
 
@@ -1027,7 +1202,17 @@ export function AppStateProvider({ children }) {
     workingRef,
     viewerRef,
     sessionReady,
-    hasModel: !!geometry,
+    hasModel: sceneObjects.length > 0 || !!geometry,
+    sceneObjects,
+    selectedObjectId,
+    toolpathObjectId,
+    splitPlaneOffsetY,
+    setSplitPlaneOffsetY,
+    splitPlane: geometry ? computeSplitPlane(geometry, splitPlaneOffsetY) : null,
+    handleSelectObject,
+    handlePlaneSplit,
+    handleAddHelper,
+    savePlacementStage,
     hasToolpath: cutJobHasProfile(cutJob) || !!profile?.polylines?.length,
     hasToolpathSaved: cutJobHasProfile(cutJob),
     handleFile,

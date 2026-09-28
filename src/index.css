@@ -3825,3 +3825,67 @@ button:hover {
 .origin-overlay-apply:hover {
   background: #2c7bd0;
 }
+
+.split-object-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.split-object-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #3a4555;
+  background: #1e2430;
+  color: #dbe4f0;
+  cursor: pointer;
+}
+
+.split-object-btn.is-selected {
+  border-color: #4a9eff;
+  background: #243248;
+}
+
+.split-color-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.split-offset-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #9aa8bc;
+}
+
+.split-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.split-actions button {
+  flex: 1 1 auto;
+}
+
+.helper-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.helper-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #b8c4d4;
+  padding: 4px 0;
+}

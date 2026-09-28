@@ -115,6 +115,10 @@ function placePivotAtGeometryCentre(state) {
 export default forwardRef(function Viewer3D(
   {
     geometry,
+    sceneObjects = null,
+    selectedObjectId = null,
+    splitPlane = null,
+    ghostOthers = false,
     resetKey,
     thetaDeg = 0,
     cutIndex = 0,
@@ -174,6 +178,8 @@ export default forwardRef(function Viewer3D(
     simActive: false,
     simPlayback: null,
     simOverlayCtx: null,
+    multiMeshGroup: null,
+    splitPlaneMesh: null,
   })
 
   const simPlaybackRef = useRef(simPlayback)
@@ -676,10 +682,118 @@ export default forwardRef(function Viewer3D(
     }
   }, [])
 
+  function clearEditMeshes(state) {
+    if (state.transform) state.transform.detach()
+    state.selected = null
+    if (state.selectionBox) {
+      if (state.selectionBox.parent) state.selectionBox.parent.remove(state.selectionBox)
+      state.selectionBox.geometry.dispose()
+      state.selectionBox.material.dispose()
+      state.selectionBox = null
+    }
+    if (state.objGizmo) {
+      if (state.mesh && state.objGizmo.children.includes(state.mesh)) {
+        state.objGizmo.remove(state.mesh)
+      }
+      state.scene.remove(state.objGizmo)
+      state.objGizmo = null
+    }
+    if (state.mesh) {
+      disposeMaterial(state.mesh.material)
+      state.mesh = null
+    }
+    if (state.multiMeshGroup) {
+      state.scene.remove(state.multiMeshGroup)
+      for (const child of state.multiMeshGroup.children) {
+        disposeObject3D(child)
+      }
+      state.multiMeshGroup = null
+    }
+  }
+
+  // Multi-object scene (Model split / Placement)
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.scene || !sceneObjects?.length) return undefined
+
+    clearEditMeshes(state)
+
+    const group = new THREE.Group()
+    group.name = 'SceneObjects'
+    let selectedGizmo = null
+    let selectedMesh = null
+
+    for (const obj of sceneObjects) {
+      if (!obj.geometry) continue
+      const geo = obj.geometry
+      geo.computeBoundingBox()
+      const com = geo.boundingBox.getCenter(new THREE.Vector3())
+      const isSelected = obj.id === selectedObjectId
+      const opacity = ghostOthers && !isSelected && !obj.parentId ? 0.25 : 1
+      const color = new THREE.Color(obj.color ?? '#7fb2d9')
+
+      const material = readOnly
+        ? new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, flatShading: true, transparent: opacity < 1, opacity })
+        : new THREE.MeshStandardMaterial({
+          color,
+          side: THREE.DoubleSide,
+          flatShading: true,
+          metalness: 0.1,
+          roughness: 0.6,
+          transparent: opacity < 1,
+          opacity,
+        })
+      const mesh = new THREE.Mesh(geo, material)
+      const objGizmo = new THREE.Object3D()
+      objGizmo.name = `OBJ_${obj.id}`
+      if (readOnly) {
+        const bb = geo.boundingBox
+        mesh.position.set(-(bb.min.x + bb.max.x) / 2, 0, -(bb.min.z + bb.max.z) / 2)
+      } else {
+        objGizmo.position.copy(com)
+        mesh.position.copy(com).negate()
+      }
+      objGizmo.add(mesh)
+      group.add(objGizmo)
+      if (isSelected) {
+        selectedGizmo = objGizmo
+        selectedMesh = mesh
+      }
+    }
+
+    state.scene.add(group)
+    state.multiMeshGroup = group
+    state.objGizmo = selectedGizmo
+    state.mesh = selectedMesh
+
+    if (!readOnly && state.transform && selectedGizmo) {
+      state.transform.attach(selectedGizmo)
+      state.selected = selectedGizmo
+      state.transform.setMode(state.mode === 'rotate' ? 'rotate' : 'translate')
+    }
+
+    if (showModelBBox && selectedMesh) {
+      const selectionBox = createDashedBBox(selectedMesh.geometry, 0xffcc33)
+      selectedMesh.add(selectionBox)
+      state.selectionBox = selectionBox
+    }
+
+    const worldBox = new THREE.Box3().setFromObject(group)
+    const center = worldBox.getCenter(new THREE.Vector3())
+    const size = worldBox.getSize(new THREE.Vector3())
+    const maxDim = Math.max(size.x, size.y, size.z) || 1
+    state.frameInfo = { center: center.clone(), dist: maxDim * 2.5 }
+    state.frameCamera?.('front')
+    state.requestRender?.()
+
+    return undefined
+  }, [sceneObjects, selectedObjectId, resetKey, readOnly, showModelBBox, ghostOthers])
+
   // Rebuild mesh when geometry changes
   useEffect(() => {
     const state = stateRef.current
     if (!state || !state.scene) return
+    if (sceneObjects?.length) return undefined
 
     // Detach gizmo & clear selection before removing old mesh
     if (state.transform) state.transform.detach()
@@ -825,7 +939,49 @@ export default forwardRef(function Viewer3D(
     state.scene.add(axes)
     state.floorAxes = axes
     state.requestRender?.()
-  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
+  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay, sceneObjects])
+
+  // Split plane visual (Model page)
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.scene) return undefined
+
+    if (state.splitPlaneMesh) {
+      state.scene.remove(state.splitPlaneMesh)
+      state.splitPlaneMesh.geometry.dispose()
+      state.splitPlaneMesh.material.dispose()
+      state.splitPlaneMesh = null
+    }
+
+    if (!splitPlane || readOnly) return undefined
+
+    const { point, normal } = splitPlane
+    const size = 500
+    const planeGeo = new THREE.PlaneGeometry(size, size)
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x44aaff,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+    const mesh = new THREE.Mesh(planeGeo, mat)
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal.clone().normalize())
+    mesh.quaternion.copy(quat)
+    mesh.position.copy(point)
+    state.scene.add(mesh)
+    state.splitPlaneMesh = mesh
+    state.requestRender?.()
+
+    return () => {
+      if (state.splitPlaneMesh) {
+        state.scene.remove(state.splitPlaneMesh)
+        state.splitPlaneMesh.geometry.dispose()
+        state.splitPlaneMesh.material.dispose()
+        state.splitPlaneMesh = null
+      }
+    }
+  }, [splitPlane, resetKey, readOnly])
 
   useEffect(() => {
     const state = stateRef.current

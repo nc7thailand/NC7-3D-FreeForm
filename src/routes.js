@@ -1,5 +1,6 @@
 export const ROUTES = {
   model: '/model',
+  placement: '/placement',
   toolpath: '/toolpath',
   gcode: '/gcode',
   /** Detached from the main pipeline — route kept for legacy / experimental use. */
@@ -9,6 +10,7 @@ export const ROUTES = {
 /** Main workflow steps in the header stepper (Simulate is not part of this flow). */
 export const STEPS = [
   { path: ROUTES.model, label: 'Model' },
+  { path: ROUTES.placement, label: 'Placement' },
   { path: ROUTES.toolpath, label: 'Toolpath' },
   { path: ROUTES.gcode, label: 'G-code' },
 ]

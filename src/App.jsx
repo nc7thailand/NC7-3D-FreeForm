@@ -5,6 +5,7 @@ import AppLayout from './components/AppLayout'
 import { RequireModel, RequireToolpath } from './components/RouteGuards'
 import { ROUTES } from './routes'
 import ModelPage from './pages/ModelPage'
+import PlacementPage from './pages/PlacementPage'
 import ToolpathPage from './pages/ToolpathPage'
 import GcodePage from './pages/GcodePage'
 import SimulatePage from './pages/SimulatePage'
@@ -18,6 +19,14 @@ export default function App() {
           <Route element={<AppLayout />}>
             <Route index element={<Navigate to={ROUTES.model} replace />} />
             <Route path={ROUTES.model} element={<ModelPage />} />
+            <Route
+              path={ROUTES.placement}
+              element={(
+                <RequireModel>
+                  <PlacementPage />
+                </RequireModel>
+              )}
+            />
             <Route
               path={ROUTES.toolpath}
               element={(

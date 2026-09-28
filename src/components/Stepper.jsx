@@ -11,21 +11,29 @@ export default function Stepper() {
     hasToolpath,
     hasToolpathSaved,
     saveModelStage,
+    savePlacementStage,
     refreshToolpathIfNeeded,
     ensureToolpathOnModelEntry,
   } = useAppState()
 
   const canVisit = (path) => {
     if (path.endsWith('/model')) return true
+    if (path.endsWith('/placement')) return hasModel
     if (path.endsWith('/toolpath')) return hasModel
     if (path.endsWith('/gcode')) return hasModel && hasToolpathSaved
     return false
   }
 
   const goTo = async (path, e) => {
-    if (pathname === ROUTES.model && path === ROUTES.toolpath) {
+    if (pathname === ROUTES.model && path === ROUTES.placement) {
       e.preventDefault()
       if (!(await saveModelStage())) return
+      navigate(path)
+      return
+    }
+    if (pathname === ROUTES.placement && path === ROUTES.toolpath) {
+      e.preventDefault()
+      if (!(await savePlacementStage())) return
       if (!(await ensureToolpathOnModelEntry())) return
       navigate(path)
       return

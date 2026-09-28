@@ -93,6 +93,7 @@ export default function PageNav({ page }) {
     hasModel,
     hasToolpath,
     saveModelStage,
+    savePlacementStage,
     refreshToolpathIfNeeded,
     ensureToolpathOnModelEntry,
     toolpathSetupOpen,
@@ -104,6 +105,13 @@ export default function PageNav({ page }) {
     model: {
       back: null,
       backLabel: null,
+      next: ROUTES.placement,
+      nextLabel: 'Next → Placement',
+      nextDisabled: !hasModel,
+    },
+    placement: {
+      back: ROUTES.model,
+      backLabel: '← Back to Model',
       next: ROUTES.toolpath,
       nextLabel: 'Next → Toolpath',
       nextDisabled: !hasModel,
@@ -136,6 +144,9 @@ export default function PageNav({ page }) {
   const goNext = async () => {
     if (page === 'model') {
       if (!(await saveModelStage())) return
+    }
+    if (page === 'placement') {
+      if (!(await savePlacementStage())) return
       if (!(await ensureToolpathOnModelEntry())) return
     }
     if (page === 'toolpath' && !(await refreshToolpathIfNeeded())) return
