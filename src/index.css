@@ -3889,3 +3889,50 @@ button:hover {
   color: #b8c4d4;
   padding: 4px 0;
 }
+
+.objects-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.objects-browser-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.objects-browser-row--helper {
+  padding-left: 16px;
+}
+
+.objects-browser-row .split-object-btn {
+  flex: 1;
+}
+
+.objects-browser-name {
+  flex: 1;
+}
+
+.objects-browser-type {
+  font-size: 10px;
+  color: #7a8899;
+  text-transform: uppercase;
+}
+
+.toolpath-target-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid #3a4555;
+  background: #1a2030;
+  color: #9aa8bc;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolpath-target-btn.is-target {
+  border-color: #e67e22;
+  color: #f39c12;
+  background: #2a2218;
+}

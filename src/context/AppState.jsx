@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useRef, useState, useCallback, useEffect } from 'react'
+import React, { createContext, useContext, useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../lib/stl'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
@@ -20,6 +20,15 @@ import {
   initSceneFromGeometry,
   splitSceneObject,
 } from '../lib/sceneState'
+import {
+  canRedoHistory,
+  canUndoHistory,
+  createHistoryStack,
+  createSceneSnapshot,
+  pushHistorySnapshot,
+  redoHistory,
+  undoHistory,
+} from '../lib/sceneHistory'
 import {
   buildSectionProfileFromParts,
   buildFullSilhouettePreviewFromParts,
@@ -184,6 +193,9 @@ export function AppStateProvider({ children }) {
   const toolpathComputeRef = useRef(null)
   /** `${uuid}:${revision}` of the model the toolpath stage was last prepared for. */
   const lastToolpathModelKeyRef = useRef(null)
+  const historyStackRef = useRef(createHistoryStack())
+  const gizmoDragSnapshotRef = useRef(null)
+  const [historyTick, setHistoryTick] = useState(0)
 
   const toolpathModelKey = useCallback((geo) => {
     if (!geo) return null
@@ -255,6 +267,57 @@ export function AppStateProvider({ children }) {
     const scene = initSceneFromGeometry(geo, name)
     applySceneSelection(scene.objects, scene.selectedId, scene.toolpathId)
   }, [applySceneSelection])
+
+  const getHistoryState = useCallback(() => ({
+    sceneObjects,
+    selectedObjectId,
+    toolpathObjectId,
+    placementRevision,
+    splitPlaneOffsetY,
+  }), [sceneObjects, selectedObjectId, toolpathObjectId, placementRevision, splitPlaneOffsetY])
+
+  const applyHistorySnapshot = useCallback((snap) => {
+    if (!snap?.sceneObjects?.length) return
+    for (const old of sceneObjects) {
+      if (!snap.sceneObjects.some((o) => o.geometry === old.geometry)) {
+        old.geometry?.dispose?.()
+      }
+    }
+    applySceneSelection(snap.sceneObjects, snap.selectedObjectId, snap.toolpathObjectId)
+    setPlacementRevision(snap.placementRevision ?? 0)
+    setSplitPlaneOffsetY(snap.splitPlaneOffsetY ?? 0)
+    storeHighResGeometry(geometryForSelection(snap.sceneObjects, snap.selectedObjectId))
+    setCutJob(null)
+    setHistoryTick((t) => t + 1)
+  }, [applySceneSelection, sceneObjects, storeHighResGeometry])
+
+  const pushHistory = useCallback(() => {
+    pushHistorySnapshot(historyStackRef.current, createSceneSnapshot(getHistoryState()))
+    setHistoryTick((t) => t + 1)
+  }, [getHistoryState])
+
+  const resetHistory = useCallback(() => {
+    historyStackRef.current = createHistoryStack()
+    pushHistorySnapshot(historyStackRef.current, createSceneSnapshot(getHistoryState()))
+    setHistoryTick((t) => t + 1)
+  }, [getHistoryState])
+
+  const handleUndo = useCallback(() => {
+    const snap = undoHistory(historyStackRef.current)
+    if (!snap) return
+    applyHistorySnapshot(snap)
+    setStatus('Undo.')
+  }, [applyHistorySnapshot])
+
+  const handleRedo = useCallback(() => {
+    const snap = redoHistory(historyStackRef.current)
+    if (!snap) return
+    applyHistorySnapshot(snap)
+    setStatus('Redo.')
+  }, [applyHistorySnapshot])
+
+  const canUndo = useMemo(() => canUndoHistory(historyStackRef.current), [historyTick])
+  const canRedo = useMemo(() => canRedoHistory(historyStackRef.current), [historyTick])
 
   /** Artwork + helpers for silhouette/toolpath (Approach 4). */
   const getCutPartsForCompute = useCallback(() => {
@@ -384,16 +447,20 @@ export function AppStateProvider({ children }) {
     return baked ? 'baked' : 'unchanged'
   }, [updateStatsFrom])
 
-  const applyRestoredSession = useCallback((data) => {
-    data.geometry.userData.nc7CentroidApplied = true
-    workingRef.current = data.geometry
-    storeHighResGeometry(data.geometry)
-    setGeometry(data.geometry)
-    loadSceneFromGeometry(data.geometry, data.modelName?.replace(/\.stl$/i, '') ?? 'part')
+  const restoreProjectData = useCallback((data) => {
+    if (data.sceneObjects?.length) {
+      applySceneSelection(
+        data.sceneObjects,
+        data.selectedObjectId ?? data.sceneObjects[0].id,
+        data.toolpathObjectId ?? data.selectedObjectId ?? data.sceneObjects[0].id,
+      )
+      setPlacementRevision(data.placementRevision ?? 0)
+      storeHighResGeometry(geometryForSelection(data.sceneObjects, data.toolpathObjectId ?? data.selectedObjectId))
+    } else if (data.geometry) {
+      loadSceneFromGeometry(data.geometry, data.modelName?.replace(/\.(stl|3mf|nc7project)$/i, '') ?? 'part')
+      storeHighResGeometry(data.geometry)
+    }
     setModelName(data.modelName)
-    // Merge over defaults: a session saved before a stock field existed omits
-    // that key, and replacing wholesale would drop it — which also hid the new
-    // field from the setup panel's dirty check, silently discarding its edits.
     setStock({ ...DEFAULT_STOCK, ...data.stock })
     setRotationN(data.rotationN)
     setCutIndex(data.cutIndex)
@@ -401,11 +468,28 @@ export function AppStateProvider({ children }) {
     if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
     setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
     setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
-    updateStatsOnly(data.geometry)
-    lastToolpathModelKeyRef.current = toolpathModelKey(data.geometry)
+    const statsGeo = data.geometry ?? geometryForSelection(data.sceneObjects, data.selectedObjectId)
+    if (statsGeo) updateStatsOnly(statsGeo)
+    lastToolpathModelKeyRef.current = toolpathModelKey(
+      data.geometry ?? geometryForSelection(data.sceneObjects, data.toolpathObjectId),
+    )
+    viewerRef.current?.resetMeshTransform?.()
+    resetHistory()
     setResetKey((k) => k + 1)
     setToolpathTick((t) => t + 1)
-  }, [updateStatsOnly, storeHighResGeometry, loadSceneFromGeometry])
+  }, [
+    applySceneSelection,
+    loadSceneFromGeometry,
+    resetHistory,
+    storeHighResGeometry,
+    toolpathModelKey,
+    updateStatsOnly,
+  ])
+
+  const applyRestoredSession = useCallback((data) => {
+    if (data.geometry) data.geometry.userData.nc7CentroidApplied = true
+    restoreProjectData(data)
+  }, [restoreProjectData])
 
   useEffect(() => {
     if (!status || statusShouldPersist(status)) return undefined
@@ -449,6 +533,7 @@ export function AppStateProvider({ children }) {
         storeHighResGeometry(geo)
         loadSceneFromGeometry(geo, 'part')
         updateStatsFrom(geo)
+        resetHistory()
         setModelName(DUMMY_STL_NAME)
         setStatus(`Loaded dummy ${DUMMY_STL_NAME} (${geo.attributes.position.count / 3} triangles)`)
       } catch (err) {
@@ -462,7 +547,7 @@ export function AppStateProvider({ children }) {
 
     initSession()
     return () => { cancelled = true }
-  }, [applyRestoredSession, storeHighResGeometry, updateStatsFrom, loadSceneFromGeometry])
+  }, [applyRestoredSession, storeHighResGeometry, updateStatsFrom, loadSceneFromGeometry, resetHistory])
 
   // Preview the buffered cut for the current index. Everything is computed in
   // one batch on Apply, so stepping through cuts never re-runs a silhouette.
@@ -552,6 +637,10 @@ export function AppStateProvider({ children }) {
       const geoToSave = workingRef.current || geometry
       saveBrowserSession({
         geometry: geoToSave,
+        sceneObjects,
+        selectedObjectId,
+        toolpathObjectId,
+        placementRevision,
         modelName,
         stock,
         rotationN,
@@ -572,6 +661,10 @@ export function AppStateProvider({ children }) {
     cutJob,
     gcodeSettings,
     bakeModelTransform,
+    placementRevision,
+    sceneObjects,
+    selectedObjectId,
+    toolpathObjectId,
   ])
 
   const handleFile = async (file) => {
@@ -599,6 +692,7 @@ export function AppStateProvider({ children }) {
       setModelName(file.name)
       setSplitPlaneOffsetY(0)
       setPlacementRevision(0)
+      resetHistory()
       lastToolpathModelKeyRef.current = null
       setCutJob(null)
       setCutIndex(0)
@@ -613,6 +707,7 @@ export function AppStateProvider({ children }) {
 
   const handleResize = () => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
+    pushHistory()
     const box = computeBoundingBox(workingRef.current)
     const size = getBoxSize(box)
     const targetMM = resolveTargetMM(target, unit)
@@ -629,6 +724,7 @@ export function AppStateProvider({ children }) {
 
   const handleSettle = () => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
+    pushHistory()
     // Bake the current gizmo pose into the vertices, drop the model so its
     // bounding box bottom touches Y=0, then restore the gizmo rest pose.
     // Resetting first would leave the baked pose applied twice.
@@ -656,11 +752,21 @@ export function AppStateProvider({ children }) {
     applySceneSelection(sceneObjects, objectId, nextToolpathId)
   }, [applySceneSelection, sceneObjects, toolpathObjectId])
 
+  const handleSetToolpathObject = useCallback((objectId) => {
+    const obj = findSceneObject(sceneObjects, objectId)
+    if (!obj || obj.parentId) return
+    setToolpathObjectId(objectId)
+    setCutJob(null)
+    setPlacementRevision((r) => r + 1)
+    setStatus(`Toolpath target: ${obj.name}`)
+  }, [sceneObjects])
+
   const handlePlaneSplit = useCallback((keep) => {
     if (!workingRef.current || !selectedObjectId) {
       setStatus('Select a part to split.')
       return
     }
+    pushHistory()
     bakeModelTransform()
     const plane = computeSplitPlane(workingRef.current, splitPlaneOffsetY)
     const result = splitSceneObject(sceneObjects, selectedObjectId, keep, plane)
@@ -680,6 +786,7 @@ export function AppStateProvider({ children }) {
     selectedObjectId,
     splitPlaneOffsetY,
     storeHighResGeometry,
+    pushHistory,
   ])
 
   const handleAddHelper = useCallback((kind) => {
@@ -689,6 +796,7 @@ export function AppStateProvider({ children }) {
       setStatus('Select an artwork part first.')
       return
     }
+    pushHistory()
     bakeModelTransform()
     let helperGeo = null
     let type = 'helper-base'
@@ -710,7 +818,7 @@ export function AppStateProvider({ children }) {
     setCutJob(null)
     applySceneSelection(result.objects, result.helperId, parent.id)
     setStatus(`Added ${kind} helper — included in cut.`)
-  }, [applySceneSelection, bakeModelTransform, sceneObjects, selectedObjectId, toolpathObjectId])
+  }, [applySceneSelection, bakeModelTransform, pushHistory, sceneObjects, selectedObjectId, toolpathObjectId])
 
   const savePlacementStage = useCallback(async () => {
     if (!workingRef.current) return false
@@ -738,6 +846,7 @@ export function AppStateProvider({ children }) {
 
   const handleSimplify = (ratio) => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
+    pushHistory()
     const result = simplifyGeometry(workingRef.current, { ratio })
     result.geometry.userData.nc7CentroidApplied = true
     bumpModelRevision(result.geometry)
@@ -815,9 +924,22 @@ export function AppStateProvider({ children }) {
     setStock((prev) => ({ ...prev, [key]: value }))
   }
 
-  const handleMeshTransformChange = () => {
+  const handleGizmoDragStart = useCallback(() => {
+    if (!gizmoDragSnapshotRef.current) {
+      gizmoDragSnapshotRef.current = true
+      pushHistory()
+    }
+  }, [pushHistory])
+
+  const handleGizmoDragEnd = useCallback(() => {
+    gizmoDragSnapshotRef.current = null
     setToolpathTick((t) => t + 1)
-  }
+    setCutJob(null)
+  }, [])
+
+  const handleMeshTransformChange = useCallback(() => {
+    setToolpathTick((t) => t + 1)
+  }, [])
 
   /** Commit gizmo transform into geometry before leaving Page 1. */
   const saveModelStage = useCallback(() => {
@@ -1105,6 +1227,10 @@ export function AppStateProvider({ children }) {
 
       const blob = await packProject({
         geometry: workingRef.current,
+        sceneObjects,
+        selectedObjectId,
+        toolpathObjectId,
+        placementRevision,
         modelName,
         stock,
         rotationN,
@@ -1128,31 +1254,13 @@ export function AppStateProvider({ children }) {
     } finally {
       await endBusy()
     }
-  }, [bakeModelTransform, computeCutJob, cutJob, cutIndex, cutMode, gcodeSettings, modelName, rotationN, stock, beginBusy, endBusy, yieldToPaint])
+  }, [bakeModelTransform, computeCutJob, cutJob, cutIndex, cutMode, gcodeSettings, modelName, placementRevision, rotationN, sceneObjects, selectedObjectId, stock, toolpathObjectId, beginBusy, endBusy, yieldToPaint])
 
   const handleOpenProject = useCallback(async (file) => {
     setStatus('Opening project…')
     try {
       const data = await unpackProject(file)
-      workingRef.current = data.geometry
-      storeHighResGeometry(data.geometry)
-      setGeometry(data.geometry)
-      setModelName(data.modelName)
-      // Same forward-compatibility merge as applyRestoredSession: an older
-      // .nc7project predates any stock field added since, and must not lose it.
-      setStock({ ...DEFAULT_STOCK, ...data.stock })
-      setRotationN(data.rotationN)
-      setCutIndex(data.cutIndex)
-      setCutJob(migrateOverlayContours(data.cutJob))
-      if (data.cutJob?.mode) setCutMode(data.cutJob.mode)
-      setGcodeSettings({ ...DEFAULT_GCODE_SETTINGS, ...data.gcodeSettings })
-      setProfile(data.cutJob?.cuts?.[data.cutIndex]?.profile ?? null)
-      updateStatsOnly(data.geometry)
-      lastToolpathModelKeyRef.current = toolpathModelKey(data.geometry)
-      viewerRef.current?.resetMeshTransform?.()
-      setResetKey((k) => k + 1)
-      setToolpathTick((t) => t + 1)
-
+      restoreProjectData(data)
       const route = data.hasToolpath ? ROUTES.gcode : ROUTES.model
       setStatus(`Opened ${file.name}${data.hasToolpath ? ' — toolpath restored.' : '.'}`)
       return { route }
@@ -1160,7 +1268,7 @@ export function AppStateProvider({ children }) {
       setStatus(`Open failed: ${err.message}`)
       return null
     }
-  }, [storeHighResGeometry, updateStatsOnly])
+  }, [restoreProjectData])
 
   const value = {
     geometry,
@@ -1210,9 +1318,16 @@ export function AppStateProvider({ children }) {
     setSplitPlaneOffsetY,
     splitPlane: geometry ? computeSplitPlane(geometry, splitPlaneOffsetY) : null,
     handleSelectObject,
+    handleSetToolpathObject,
     handlePlaneSplit,
     handleAddHelper,
     savePlacementStage,
+    handleUndo,
+    handleRedo,
+    canUndo,
+    canRedo,
+    handleGizmoDragStart,
+    handleGizmoDragEnd,
     hasToolpath: cutJobHasProfile(cutJob) || !!profile?.polylines?.length,
     hasToolpathSaved: cutJobHasProfile(cutJob),
     handleFile,

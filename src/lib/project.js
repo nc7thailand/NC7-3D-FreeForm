@@ -4,6 +4,13 @@ import { toBinarySTL } from './export.js'
 import { loadSTLFromArrayBuffer } from './stl.js'
 import { cutJobHasProfile } from './cutJob.js'
 import { migrateOverlayContours } from './cutOverlay.js'
+import {
+  is3mfFile,
+  pack3mfProject,
+  unpack3mfProject,
+  unpack3mfProjectBuffer,
+  THREEMF_EXTENSION,
+} from './3mf.js'
 
 export const PROJECT_FORMAT = 'nc7studio3d-project'
 export const PROJECT_VERSION = 1
@@ -144,9 +151,36 @@ function unzipFromBuffer(buffer) {
 }
 
 /**
- * Pack geometry and CAM settings into a .nc7project blob.
+ * Pack scene + CAM settings. Multi-object scenes use .3mf (v2); legacy single-mesh uses .nc7project v1.
  */
-export async function packProject({ geometry, modelName, stock, rotationN, cutIndex, cutJob, gcodeSettings }) {
+export async function packProject({
+  geometry,
+  sceneObjects,
+  selectedObjectId,
+  toolpathObjectId,
+  placementRevision,
+  modelName,
+  stock,
+  rotationN,
+  cutIndex,
+  cutJob,
+  gcodeSettings,
+}) {
+  if (sceneObjects?.length) {
+    return pack3mfProject({
+      sceneObjects,
+      modelName,
+      selectedObjectId,
+      toolpathObjectId,
+      placementRevision,
+      stock,
+      rotationN,
+      cutIndex,
+      cutJob,
+      gcodeSettings,
+    })
+  }
+
   if (!geometry) throw new Error('No model geometry to save.')
 
   const manifest = buildManifest({ modelName, stock, rotationN, cutIndex, cutJob, gcodeSettings })
@@ -194,17 +228,23 @@ function unpackProjectEntries(entries) {
 }
 
 /**
- * Unpack a .nc7project ArrayBuffer (browser session or file bytes).
+ * Unpack project ArrayBuffer — auto-detect .3mf (nc7.json) vs .nc7project v1.
  */
 export async function unpackProjectBuffer(buffer) {
   const entries = await unzipFromBuffer(buffer)
+  if (entries['Metadata/nc7.json']) {
+    return unpack3mfProjectBuffer(buffer)
+  }
   return unpackProjectEntries(entries)
 }
 
 /**
- * Unpack a .nc7project file into geometry and restored app state fields.
+ * Unpack a project file (.3mf or .nc7project).
  */
 export async function unpackProject(file) {
+  if (is3mfFile(file)) {
+    return unpack3mfProject(file)
+  }
   const buffer = await readFileAsArrayBuffer(file)
   return unpackProjectBuffer(buffer)
 }
@@ -223,10 +263,15 @@ export function downloadProjectBlob(blob, filename = `project${PROJECT_EXTENSION
   URL.revokeObjectURL(url)
 }
 
-export function defaultProjectFilename(modelName) {
-  const base = (modelName || 'project').replace(/\.stl$/i, '').replace(/\.nc7project$/i, '')
-  return `${base}${PROJECT_EXTENSION}`
+export function defaultProjectFilename(modelName, { use3mf = true } = {}) {
+  const base = (modelName || 'project')
+    .replace(/\.stl$/i, '')
+    .replace(/\.nc7project$/i, '')
+    .replace(/\.3mf$/i, '')
+  return use3mf ? `${base}${THREEMF_EXTENSION}` : `${base}${PROJECT_EXTENSION}`
 }
+
+export { THREEMF_EXTENSION }
 
 function readFileAsArrayBuffer(file) {
   return new Promise((resolve, reject) => {

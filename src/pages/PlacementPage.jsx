@@ -1,6 +1,7 @@
 import React from 'react'
 import Viewer3D from '../components/Viewer3D'
 import PageNav from '../components/PageNav'
+import ObjectsBrowser from '../components/ObjectsBrowser'
 import { useAppState } from '../context/AppState'
 
 function PlacementPanel() {
@@ -10,13 +11,11 @@ function PlacementPanel() {
     sceneObjects,
     selectedObjectId,
     toolpathObjectId,
-    handleSelectObject,
     handleAddHelper,
     handleSettle,
     handleCenter,
   } = useAppState()
 
-  const artworkParts = sceneObjects.filter((o) => !o.parentId)
   const helpers = sceneObjects.filter((o) => o.parentId === (toolpathObjectId ?? selectedObjectId))
 
   return (
@@ -35,19 +34,7 @@ function PlacementPanel() {
         <section className="panel">
           <h2>Selected Object</h2>
           <p className="panel-hint">Choose the artwork part to place and cut.</p>
-          <div className="split-object-list">
-            {artworkParts.map((o) => (
-              <button
-                key={o.id}
-                type="button"
-                className={`split-object-btn${o.id === (toolpathObjectId ?? selectedObjectId) ? ' is-selected' : ''}`}
-                onClick={() => handleSelectObject(o.id, true)}
-              >
-                <span className="split-color-swatch" style={{ background: o.color }} />
-                {o.name}
-              </button>
-            ))}
-          </div>
+          <ObjectsBrowser showToolpathTarget />
         </section>
 
         <section className="panel">
@@ -108,6 +95,7 @@ export default function PlacementPage() {
               geometry={geometry}
               sceneObjects={sceneObjects}
               selectedObjectId={focusId}
+              toolpathObjectId={toolpathObjectId}
               ghostOthers
               resetKey={resetKey}
               showModelBBox={stock.showModelBBox !== false}

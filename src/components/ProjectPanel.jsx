@@ -1,6 +1,6 @@
 import React, { useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PROJECT_EXTENSION } from '../lib/project'
+import { PROJECT_EXTENSION, THREEMF_EXTENSION } from '../lib/project'
 import { useAppState } from '../context/AppState'
 
 export default function ProjectPanel() {
@@ -20,7 +20,7 @@ export default function ProjectPanel() {
     <section className="panel panel-project">
       <h2>Project</h2>
       <p className="panel-hint">
-        Save or open a {PROJECT_EXTENSION} file (model + foam block + toolpath).
+        Save or open {THREEMF_EXTENSION} (multi-object) or legacy {PROJECT_EXTENSION}.
       </p>
       <div className="project-actions">
         <button type="button" onClick={handleSaveProject}>Save Project</button>
@@ -29,7 +29,7 @@ export default function ProjectPanel() {
       <input
         ref={fileRef}
         type="file"
-        accept={PROJECT_EXTENSION}
+        accept={`${THREEMF_EXTENSION},${PROJECT_EXTENSION}`}
         hidden
         onChange={onOpenSelected}
       />

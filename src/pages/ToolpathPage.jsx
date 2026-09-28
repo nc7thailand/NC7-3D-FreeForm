@@ -47,7 +47,12 @@ function ToolpathPanel() {
     profile,
     cutJob,
     applyToolpathSettings,
+    sceneObjects,
+    toolpathObjectId,
   } = useAppState()
+
+  const cutTarget = sceneObjects.find((o) => o.id === toolpathObjectId)
+    ?? sceneObjects.find((o) => !o.parentId)
 
   const wirePointCount = useMemo(() => {
     if (!profile?.polylines?.length) return null
@@ -72,6 +77,14 @@ function ToolpathPanel() {
 
         <section className="panel panel-toolpath">
           <h2>Rotation Cuts</h2>
+          {cutTarget && (
+            <p className="panel-hint">
+              Cut target: {cutTarget.name}
+              {sceneObjects.filter((o) => o.parentId === cutTarget.id).length > 0
+                ? ` (+${sceneObjects.filter((o) => o.parentId === cutTarget.id).length} helpers)`
+                : ''}
+            </p>
+          )}
           <div className="inputs">
             <label>Number of cuts (N)
               <SmartNumberInput

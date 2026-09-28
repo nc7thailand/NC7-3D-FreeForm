@@ -1,39 +1,20 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import SmartNumberInput from '../components/SmartNumberInput'
 import Viewer3D from '../components/Viewer3D'
 import ProjectPanel from '../components/ProjectPanel'
 import PageNav from '../components/PageNav'
+import ObjectsBrowser from '../components/ObjectsBrowser'
 import { useAppState } from '../context/AppState'
 
 function SplitPanel() {
   const {
-    sceneObjects,
-    selectedObjectId,
     splitPlaneOffsetY,
     setSplitPlaneOffsetY,
-    handleSelectObject,
     handlePlaneSplit,
   } = useAppState()
 
-  if (!sceneObjects.length) return null
-
   return (
     <>
-      {sceneObjects.length > 1 && (
-        <div className="split-object-list">
-          {sceneObjects.filter((o) => !o.parentId).map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              className={`split-object-btn${o.id === selectedObjectId ? ' is-selected' : ''}`}
-              onClick={() => handleSelectObject(o.id)}
-            >
-              <span className="split-color-swatch" style={{ background: o.color }} />
-              {o.name}
-            </button>
-          ))}
-        </div>
-      )}
       <label className="split-offset-label">
         Plane offset Y (mm)
         <SmartNumberInput
@@ -64,6 +45,10 @@ function ModelPanel() {
     handleSimplify,
     handleExport,
     handleReset,
+    handleUndo,
+    handleRedo,
+    canUndo,
+    canRedo,
   } = useAppState()
 
   return (
@@ -86,6 +71,20 @@ function ModelPanel() {
             accept=".stl"
             onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])}
           />
+        </section>
+
+        <section className="panel">
+          <h2>Objects</h2>
+          <p className="panel-hint">Select a part or set the toolpath cut target (● Cut).</p>
+          <ObjectsBrowser showToolpathTarget />
+        </section>
+
+        <section className="panel">
+          <h2>Undo / Redo</h2>
+          <div className="split-actions">
+            <button type="button" disabled={!canUndo} onClick={handleUndo}>Undo</button>
+            <button type="button" disabled={!canRedo} onClick={handleRedo}>Redo</button>
+          </div>
         </section>
 
         <section className="panel">
@@ -138,6 +137,7 @@ export default function ModelPage() {
     geometry,
     sceneObjects,
     selectedObjectId,
+    toolpathObjectId,
     splitPlane,
     resetKey,
     status,
@@ -146,7 +146,27 @@ export default function ModelPage() {
     handleSettle,
     handleReset,
     handleCenter,
+    handleMeshTransformChange,
+    handleGizmoDragStart,
+    handleGizmoDragEnd,
+    handleUndo,
+    handleRedo,
   } = useAppState()
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        handleUndo()
+      } else if (e.key === 'z' && e.shiftKey) {
+        e.preventDefault()
+        handleRedo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [handleUndo, handleRedo])
 
   return (
     <>
@@ -161,12 +181,16 @@ export default function ModelPage() {
               geometry={geometry}
               sceneObjects={sceneObjects}
               selectedObjectId={selectedObjectId}
+              toolpathObjectId={toolpathObjectId}
               splitPlane={splitPlane}
               resetKey={resetKey}
               showModelBBox={stock.showModelBBox !== false}
               onSettle={handleSettle}
               onReset={handleReset}
               onCenter={handleCenter}
+              onMeshTransformChange={handleMeshTransformChange}
+              onGizmoDragStart={handleGizmoDragStart}
+              onGizmoDragEnd={handleGizmoDragEnd}
             />
           </div>
           {status && <div className="status-bar status-bar--above-nav">{status}</div>}

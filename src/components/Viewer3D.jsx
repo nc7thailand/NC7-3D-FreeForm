@@ -119,6 +119,7 @@ export default forwardRef(function Viewer3D(
     selectedObjectId = null,
     splitPlane = null,
     ghostOthers = false,
+    toolpathObjectId = null,
     resetKey,
     thetaDeg = 0,
     cutIndex = 0,
@@ -131,6 +132,8 @@ export default forwardRef(function Viewer3D(
     onSettle,
     onReset,
     onCenter,
+    onGizmoDragStart,
+    onGizmoDragEnd,
     readOnly = false,
     showToolpathOverlay = false,
     showModelBBox = true,
@@ -306,6 +309,8 @@ export default forwardRef(function Viewer3D(
     transform.addEventListener('dragging-changed', (event) => {
       // Disable orbit interaction while dragging the gizmo
       controls.enabled = !event.value
+      if (event.value) onGizmoDragStart?.()
+      else onGizmoDragEnd?.()
     })
 
     // Live rotation readout (degrees) while dragging in rotate mode
@@ -729,7 +734,8 @@ export default forwardRef(function Viewer3D(
       geo.computeBoundingBox()
       const com = geo.boundingBox.getCenter(new THREE.Vector3())
       const isSelected = obj.id === selectedObjectId
-      const opacity = ghostOthers && !isSelected && !obj.parentId ? 0.25 : 1
+      const isCutTarget = toolpathObjectId && obj.id === toolpathObjectId
+      const opacity = ghostOthers && !isSelected && !isCutTarget && !obj.parentId ? 0.25 : 1
       const color = new THREE.Color(obj.color ?? '#7fb2d9')
 
       const material = readOnly
@@ -787,7 +793,7 @@ export default forwardRef(function Viewer3D(
     state.requestRender?.()
 
     return undefined
-  }, [sceneObjects, selectedObjectId, resetKey, readOnly, showModelBBox, ghostOthers])
+  }, [sceneObjects, selectedObjectId, toolpathObjectId, resetKey, readOnly, showModelBBox, ghostOthers])
 
   // Rebuild mesh when geometry changes
   useEffect(() => {
