@@ -12,7 +12,12 @@
 //   LB(θ)                  = Block_Bottom_Extent(θ) + BO
 
 import * as THREE from 'three'
-import { extractLeftSilhouette, extractFullSilhouette, silhouetteOptsFromStock } from './silhouette.js'
+import {
+  extractLeftSilhouetteFromGeometries,
+  extractFullSilhouetteFromGeometries,
+  silhouetteOptsFromStock,
+} from './silhouette.js'
+import { combinedWorldBBox, filterCutIncludedParts, normalizeCutParts } from './cutParts.js'
 
 export { silhouetteOptsFromStock }
 
@@ -100,14 +105,27 @@ export function modelBBoxBottomY(geometry) {
 }
 
 /**
+ * Combined bbox bottom Y for all cut-included parts (world space).
+ *
+ * @param {import('./cutParts.js').CutPart[]} parts
+ */
+export function modelBBoxBottomYFromParts(parts) {
+  const bb = combinedWorldBBox(normalizeCutParts(parts))
+  return bb?.min.y ?? 0
+}
+
+/**
  * Overlay cut-stop height: model bbox bottom + BO margin (mm above model base).
  * LB / machine retract still uses stock.bo in the block-floor formula.
  *
  * @param {object} [stock]
- * @param {THREE.BufferGeometry|null|undefined} geometry
+ * @param {THREE.BufferGeometry|import('./cutParts.js').CutPart[]|null|undefined} geometryOrParts
  */
-export function cutBoV(stock, geometry) {
-  return modelBBoxBottomY(geometry) + (stock?.bo ?? 0)
+export function cutBoV(stock, geometryOrParts) {
+  const bottomY = Array.isArray(geometryOrParts)
+    ? modelBBoxBottomYFromParts(geometryOrParts)
+    : modelBBoxBottomY(geometryOrParts)
+  return bottomY + (stock?.bo ?? 0)
 }
 
 /**
@@ -235,18 +253,48 @@ export function unprojectFromSection(p, frame) {
  * @param {THREE.Matrix4|null} [worldMatrix] - optional gizmo/world transform
  * @returns {{ polylines: Array<{u: number, v: number}[]>, pointCount: number, frame: object, source: string }}
  */
-export function buildSectionProfile(geometry, thetaDeg, planePoint, worldMatrix = null, opts = {}) {
-  const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
-  const frame = cuttingPlane(thetaDeg, planePoint)
-  const silhouette = extractLeftSilhouette(sliceGeo, frame, opts)
-  sliceGeo.dispose()
-  const polylines = silhouette.length >= 2 ? [silhouette] : []
-  return {
-    polylines,
-    pointCount: silhouette.length,
-    frame,
-    source: 'front-rear-shadow',
+function sliceGeometriesForToolpath(parts) {
+  const sliceGeos = []
+  for (const part of filterCutIncludedParts(normalizeCutParts(parts))) {
+    sliceGeos.push(geometryForToolpathSlicing(part.geometry, part.worldMatrix ?? null))
   }
+  return sliceGeos
+}
+
+function disposeSliceGeometries(sliceGeos) {
+  for (const g of sliceGeos) g.dispose()
+}
+
+/**
+ * Build the Method 1 left-side cut profile at θ from multiple meshes.
+ * Each includeInCut part is stamped into one shared shadow grid per θ.
+ *
+ * @param {import('./cutParts.js').CutPart[]} parts
+ */
+export function buildSectionProfileFromParts(parts, thetaDeg, planePoint, opts = {}) {
+  const sliceGeos = sliceGeometriesForToolpath(parts)
+  try {
+    const frame = cuttingPlane(thetaDeg, planePoint)
+    const silhouette = extractLeftSilhouetteFromGeometries(sliceGeos, frame, opts)
+    const polylines = silhouette.length >= 2 ? [silhouette] : []
+    return {
+      polylines,
+      pointCount: silhouette.length,
+      frame,
+      source: 'front-rear-shadow',
+    }
+  } finally {
+    disposeSliceGeometries(sliceGeos)
+  }
+}
+
+export function buildSectionProfile(geometry, thetaDeg, planePoint, worldMatrix = null, opts = {}) {
+  return buildSectionProfileFromParts(
+    [{ geometry, worldMatrix, includeInCut: true, role: 'artwork' }],
+    thetaDeg,
+    planePoint,
+    opts,
+  )
 }
 
 /**
@@ -275,29 +323,46 @@ export function shiftSectionToMiddleAnchor(points, rearFrame) {
  * @param {THREE.Vector3} rearPlanePoint - rear anchor (0, 0, −T/2)
  * @param {THREE.Matrix4|null} [worldMatrix]
  */
-export function buildFullSilhouettePreview(geometry, thetaDeg, rearPlanePoint, worldMatrix = null, opts = {}) {
-  const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
-  // DISPLAY-ONLY θ flip. The frame's normal/uAxis are built from θ as though
-  // the camera orbits the model by +θ, but physically the model turns by +θ on
-  // a fixed wire. The two agree only at θ = 0; at every other angle the display
-  // came out mirrored against the 3D view. Negating θ here corrects the 2D
-  // contour, its middle-plane anchor, and the u-shift between them together.
-  //
-  // buildSectionProfile is deliberately NOT flipped — it feeds the G-code
-  // pipeline, whose direction is reconciled against the DevFoam golden
-  // separately. Display and G-code therefore differ in orientation for now.
-  const displayTheta = -thetaDeg
-  const rearFrame = cuttingPlane(displayTheta, rearPlanePoint)
-  const outline = extractFullSilhouette(sliceGeo, rearFrame, opts)
-  sliceGeo.dispose()
-  const middleFrame = cuttingPlane(displayTheta, planePointMiddleFromStock())
-  const displayPoly = shiftSectionToMiddleAnchor(outline, rearFrame)
-  const polylines = displayPoly.length >= 2 ? [displayPoly] : []
-  return {
-    polylines,
-    pointCount: displayPoly.length,
-    frame: middleFrame,
-    rearFrame,
-    source: 'full-silhouette-preview',
+/**
+ * Combined 2D silhouette preview from multiple meshes (same stamping as G-code).
+ *
+ * @param {import('./cutParts.js').CutPart[]} parts
+ */
+export function buildFullSilhouettePreviewFromParts(parts, thetaDeg, rearPlanePoint, opts = {}) {
+  const sliceGeos = sliceGeometriesForToolpath(parts)
+  try {
+    // DISPLAY-ONLY θ flip. The frame's normal/uAxis are built from θ as though
+    // the camera orbits the model by +θ, but physically the model turns by +θ on
+    // a fixed wire. The two agree only at θ = 0; at every other angle the display
+    // came out mirrored against the 3D view. Negating θ here corrects the 2D
+    // contour, its middle-plane anchor, and the u-shift between them together.
+    //
+    // buildSectionProfile is deliberately NOT flipped — it feeds the G-code
+    // pipeline, whose direction is reconciled against the DevFoam golden
+    // separately. Display and G-code therefore differ in orientation for now.
+    const displayTheta = -thetaDeg
+    const rearFrame = cuttingPlane(displayTheta, rearPlanePoint)
+    const outline = extractFullSilhouetteFromGeometries(sliceGeos, rearFrame, opts)
+    const middleFrame = cuttingPlane(displayTheta, planePointMiddleFromStock())
+    const displayPoly = shiftSectionToMiddleAnchor(outline, rearFrame)
+    const polylines = displayPoly.length >= 2 ? [displayPoly] : []
+    return {
+      polylines,
+      pointCount: displayPoly.length,
+      frame: middleFrame,
+      rearFrame,
+      source: 'full-silhouette-preview',
+    }
+  } finally {
+    disposeSliceGeometries(sliceGeos)
   }
+}
+
+export function buildFullSilhouettePreview(geometry, thetaDeg, rearPlanePoint, worldMatrix = null, opts = {}) {
+  return buildFullSilhouettePreviewFromParts(
+    [{ geometry, worldMatrix, includeInCut: true, role: 'artwork' }],
+    thetaDeg,
+    rearPlanePoint,
+    opts,
+  )
 }

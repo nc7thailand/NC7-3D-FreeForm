@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { normalizeCutParts } from './cutParts.js'
 
 /**
  * Plain-object geometry payload for postMessage (optionally transferable).
@@ -42,4 +43,41 @@ export function deserializeGeometryFromWorker(payload) {
   if (payload.uuid) geometry.uuid = payload.uuid
   geometry.computeBoundingBox()
   return geometry
+}
+
+/**
+ * @param {import('./cutParts.js').CutPart[]} parts
+ */
+export function serializePartsForWorker(parts) {
+  const payloads = []
+  const transferables = []
+  for (const part of normalizeCutParts(parts)) {
+    const { payload, transferables: partTransferables } = serializeGeometryForWorker(part.geometry)
+    if (!payload) continue
+    payloads.push({
+      geometry: payload,
+      worldMatrix: part.worldMatrix ? Array.from(part.worldMatrix.elements) : null,
+      includeInCut: part.includeInCut !== false,
+      role: part.role ?? 'artwork',
+      objectId: part.objectId ?? payload.uuid,
+      placementRevision: part.placementRevision ?? 0,
+    })
+    transferables.push(...partTransferables)
+  }
+  return { parts: payloads, transferables }
+}
+
+/** @param {object[]|null|undefined} partsPayload */
+export function deserializePartsFromWorker(partsPayload) {
+  if (!partsPayload?.length) return []
+  return partsPayload.map((part) => ({
+    geometry: deserializeGeometryFromWorker(part.geometry),
+    worldMatrix: part.worldMatrix?.length === 16
+      ? new THREE.Matrix4().fromArray(part.worldMatrix)
+      : null,
+    includeInCut: part.includeInCut !== false,
+    role: part.role ?? 'artwork',
+    objectId: part.objectId ?? part.geometry?.uuid ?? null,
+    placementRevision: part.placementRevision ?? 0,
+  })).filter((part) => part.geometry)
 }

@@ -4,6 +4,7 @@
 // Left-Only Index Sequence logic lives in ./indexing/indexSequenceLeftOnly.js
 // Sim playback routes via buildIndexTransitionPlan (./indexing/indexRouter.js)
 
+import { normalizeCutParts, filterCutIncludedParts } from './cutParts.js'
 import { CUT_MODE_LEFT_ONLY } from './cutJob.js'
 import { assessLRIndexSafety, indexEntrySideLR } from './indexing/indexSequenceLR.js'
 
@@ -56,12 +57,14 @@ export function assessIndexSafety(params) {
  * Left-only job attachment is deferred to Phase E.
  *
  * @param {object} job - cut job from buildCutJob
- * @param {import('three').BufferGeometry} geometry
+ * @param {import('three').BufferGeometry|import('./cutParts.js').CutPart[]} partsOrGeometry
  * @param {object} stock
  * @param {string} cutMode
  */
-export function attachIndexSafetyToJob(job, geometry, stock, cutMode) {
+export function attachIndexSafetyToJob(job, partsOrGeometry, stock, cutMode) {
   if (cutMode === CUT_MODE_LEFT_ONLY) return
+  const parts = normalizeCutParts(partsOrGeometry)
+  const geometry = filterCutIncludedParts(parts)[0]?.geometry ?? null
   if (!job?.cuts?.length || !geometry) return
   for (let i = 0; i < job.cuts.length - 1; i++) {
     job.cuts[i].indexSafety = assessLRIndexSafety({

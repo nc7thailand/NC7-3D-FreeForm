@@ -51,6 +51,8 @@ function serializeCutJob(cutJob) {
   return {
     rotationN: cutJob.rotationN,
     mode: cutJob.mode ?? null,
+    sourceObjectId: cutJob.sourceObjectId ?? null,
+    sourcePlacementRevision: cutJob.sourcePlacementRevision ?? null,
     sourceGeometryUuid: cutJob.sourceGeometryUuid ?? null,
     sourceModelRevision: cutJob.sourceModelRevision ?? null,
     stock: cutJob.stock ? { ...cutJob.stock } : null,
@@ -75,6 +77,8 @@ function deserializeCutJob(data) {
   return migrateOverlayContours({
     rotationN: data.rotationN,
     mode: data.mode ?? null,
+    sourceObjectId: data.sourceObjectId ?? null,
+    sourcePlacementRevision: data.sourcePlacementRevision ?? null,
     sourceGeometryUuid: data.sourceGeometryUuid ?? null,
     sourceModelRevision: data.sourceModelRevision ?? null,
     stock: data.stock ? { ...data.stock } : null,

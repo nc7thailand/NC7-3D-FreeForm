@@ -6,7 +6,13 @@ import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
-import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
+import { geometryToCutPart, cutPartsMetadata } from '../lib/cutParts'
+import {
+  buildSectionProfileFromParts,
+  buildFullSilhouettePreviewFromParts,
+  planePointFromStock,
+  silhouetteOptsFromStock,
+} from '../lib/toolpath'
 import { cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 import { migrateOverlayContours } from '../lib/cutOverlay'
 import { computeToolpathInWorker } from '../lib/camWorkerClient'
@@ -215,6 +221,13 @@ export function AppStateProvider({ children }) {
     return stored
   }, [])
 
+  /** Cut-included parts for silhouette/toolpath (single artwork mesh until P4). */
+  const getCutPartsForCompute = useCallback(() => {
+    const geo = getHiResGeometryForCompute()
+    if (!geo) return []
+    return [geometryToCutPart(geo, { includeInCut: true, role: 'artwork' })]
+  }, [getHiResGeometryForCompute])
+
   const cutCount = effectiveCutCount(rotationN, { mode: cutMode })
   const thetaDeg = rotationN >= 1 ? (cutIndex * 360) / cutCount : 0
 
@@ -407,12 +420,12 @@ export function AppStateProvider({ children }) {
         viewerRef.current?.refreshMeshPivot?.()
       }
       planePoint.current.copy(planePointFromStock(stock))
-      const worldMatrix = null
+      const parts = [geometryToCutPart(geo, { includeInCut: true, role: 'artwork' })]
       const silhouetteOpts = silhouetteOptsFromStock(stock)
       try {
-        setProfile(buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts))
+        setProfile(buildSectionProfileFromParts(parts, thetaDeg, planePoint.current, silhouetteOpts))
         setSilhouettePreview(
-          buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
+          buildFullSilhouettePreviewFromParts(parts, thetaDeg, planePoint.current, silhouetteOpts)
         )
       } catch (err) {
         setProfile(null)
@@ -675,18 +688,18 @@ export function AppStateProvider({ children }) {
     stockOverride = null,
     cutModeOverride = null,
   ) => {
-    const geo = getHiResGeometryForCompute()
-    if (!geo) return null
+    const parts = getCutPartsForCompute()
+    if (!parts.length) return null
     const s = stockOverride ?? stock
     const mode = cutModeOverride ?? cutModeRef.current
     planePoint.current.copy(planePointFromStock(s))
-    return computeToolpathInWorker(geo, {
+    return computeToolpathInWorker(parts, {
       rotationN: rotationNRef.current,
       stock: s,
       cutMode: mode,
       onProgress,
     })
-  }, [getHiResGeometryForCompute, stock])
+  }, [getCutPartsForCompute, stock])
 
   /** @deprecated internal alias — callers should use computeToolpathFromHiRes. */
   const computeCutJob = computeToolpathFromHiRes
@@ -740,18 +753,21 @@ export function AppStateProvider({ children }) {
     while (toolpathComputeRef.current) {
       await toolpathComputeRef.current.catch(() => {})
     }
-    const hiRes = getHiResGeometryForCompute()
-    if (!hiRes) return false
+    const parts = getCutPartsForCompute()
+    if (!parts.length) return false
+    const meta = cutPartsMetadata(parts)
     if (!cutJobNeedsRecompute(cutJobRef.current, {
       rotationN: rotationNRef.current,
       cutMode: cutModeRef.current,
-      sourceGeometryUuid: hiRes.uuid,
-      sourceModelRevision: modelRevisionOf(hiRes),
+      sourceObjectId: meta.sourceObjectId,
+      sourcePlacementRevision: meta.sourcePlacementRevision,
+      sourceGeometryUuid: meta.sourceGeometryUuid,
+      sourceModelRevision: meta.sourceModelRevision,
     })) {
       return true
     }
     return saveToolpathStage()
-  }, [getHiResGeometryForCompute, saveToolpathStage])
+  }, [getCutPartsForCompute, saveToolpathStage])
 
   /** Setup-close trigger — runs after the blocking setup panel dismisses. */
   const ensureToolpathAfterSetupClose = refreshToolpathIfNeeded

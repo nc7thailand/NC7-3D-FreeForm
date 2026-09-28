@@ -1,4 +1,5 @@
-import { buildSectionProfile } from './toolpath.js'
+import { normalizeCutParts } from './cutParts.js'
+import { buildSectionProfileFromParts } from './toolpath.js'
 
 /**
  * Cut modes:
@@ -56,13 +57,14 @@ export function cutAnglesForN(n, options = {}) {
  * Async so a caller can paint progress between cuts: each silhouette pass is a
  * synchronous sweep over every triangle and can stall the frame on dense meshes.
  *
- * @param {THREE.BufferGeometry} geometry
+ * @param {THREE.BufferGeometry|import('./cutParts.js').CutPart[]} partsOrGeometry
  * @param {number} rotationN - user-facing N
  * @param {THREE.Vector3} planePoint
  * @param {{ mode?: string, onProgress?: (done: number, total: number) => void|Promise<void> }} [options]
  * @returns {Promise<{ rotationN: number, cutCount: number, mode: string, cuts: Array }>}
  */
-export async function buildCutJob(geometry, rotationN, planePoint, options = {}) {
+export async function buildCutJob(partsOrGeometry, rotationN, planePoint, options = {}) {
+  const parts = normalizeCutParts(partsOrGeometry)
   const userN = clampRotationN(rotationN)
   const mode = options.mode ?? CUT_MODE_LEFT_TO_RIGHT
   const silhouetteOpts = options.silhouetteOpts ?? {}
@@ -71,7 +73,7 @@ export async function buildCutJob(geometry, rotationN, planePoint, options = {})
   const cuts = []
   for (let index = 0; index < angles.length; index++) {
     const thetaDeg = angles[index]
-    const profile = buildSectionProfile(geometry, thetaDeg, planePoint, null, silhouetteOpts)
+    const profile = buildSectionProfileFromParts(parts, thetaDeg, planePoint, silhouetteOpts)
     cuts.push({ index, thetaDeg, profile })
     if (onProgress) await onProgress(index + 1, angles.length)
   }

@@ -10,9 +10,10 @@
 //
 // This module is pure arithmetic — no canvas, no THREE, no rendering.
 
-import { extractFullSilhouette } from './silhouette.js'
+import { extractFullSilhouetteFromGeometries } from './silhouette.js'
+import { combinedWorldBBox, filterCutIncludedParts, normalizeCutParts } from './cutParts.js'
 import { simplifyRasterContour } from './polylineSimplify.js'
-import { cuttingPlane, cutBoV, planePointMiddleFromStock } from './toolpath.js'
+import { cuttingPlane, cutBoV, geometryForToolpathSlicing, planePointMiddleFromStock } from './toolpath.js'
 import { CUT_MODE_LEFT_ONLY } from './cutJob.js'
 
 // Quality is fixed at High (1200 grid bins) for the preview overlay.
@@ -249,20 +250,32 @@ export function buildCutPath(contour, boV, leftOnly) {
  * Extract the closed silhouette contour on the middle plane at θ.
  * Identical inputs to the 2D preview, so both views show the same loop.
  */
-export function extractOverlayContour(geometry, thetaDeg) {
-  if (!geometry) return []
+function sliceGeometriesForOverlay(parts) {
+  const sliceGeos = []
+  for (const part of filterCutIncludedParts(normalizeCutParts(parts))) {
+    sliceGeos.push(geometryForToolpathSlicing(part.geometry, part.worldMatrix ?? null))
+  }
+  return sliceGeos
+}
+
+export function extractOverlayContour(partsOrGeometry, thetaDeg) {
+  const parts = normalizeCutParts(partsOrGeometry)
+  if (!parts.length) return []
+  const sliceGeos = sliceGeometriesForOverlay(parts)
   try {
     // DISPLAY-ONLY θ flip — see buildFullSilhouettePreview. The frame's
     // normal/uAxis assume a camera orbiting by +θ while the model physically
     // turns on a fixed wire, which mirrored the 2D/Combined drawing against
     // the 3D view at θ ≠ 0.
     const frame = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
-    return simplifyOverlayContour(extractFullSilhouette(geometry, frame, {
+    return simplifyOverlayContour(extractFullSilhouetteFromGeometries(sliceGeos, frame, {
       gridBins: OVERLAY_GRID_BINS,
     }))
   } catch (err) {
     console.warn('overlay silhouette failed:', err)
     return []
+  } finally {
+    for (const g of sliceGeos) g.dispose()
   }
 }
 
@@ -277,16 +290,19 @@ export function projectedBlockWidth(thetaDeg, stock) {
  * u of the model bbox centre, projected with the same axis the silhouette uses.
  * The foam block is centred on this, not on the rotation axis.
  */
-export function blockCenterU(geometry, thetaDeg) {
-  if (!geometry) return 0
-  geometry.computeBoundingBox()
-  const bb = geometry.boundingBox
+export function blockCenterUFromParts(parts, thetaDeg) {
+  const bb = combinedWorldBBox(normalizeCutParts(parts))
   if (!bb || bb.isEmpty()) return 0
   const c = bb.getCenter(new (bb.min.constructor)())
   // DISPLAY-ONLY θ flip — must match extractOverlayContour's axis, otherwise
   // the foam block detaches from the silhouette it is drawn around.
   const uAxis = cuttingPlane(-thetaDeg, planePointMiddleFromStock()).uAxis
   return c.x * uAxis.x + c.z * uAxis.z
+}
+
+export function blockCenterU(geometry, thetaDeg) {
+  if (!geometry) return 0
+  return blockCenterUFromParts([{ geometry, includeInCut: true }], thetaDeg)
 }
 
 /**

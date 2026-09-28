@@ -44,6 +44,8 @@ export function modelRevisionOf(geo) {
  *   cutMode: string,
  *   sourceGeometryUuid?: string|null,
  *   sourceModelRevision?: number,
+ *   sourceObjectId?: string|null,
+ *   sourcePlacementRevision?: number,
  * }} ctx
  */
 export function cutJobNeedsRecompute(job, {
@@ -51,10 +53,22 @@ export function cutJobNeedsRecompute(job, {
   cutMode,
   sourceGeometryUuid,
   sourceModelRevision,
+  sourceObjectId,
+  sourcePlacementRevision,
 }) {
   if (!cutJobHasProfile(job)) return true
   if (job.rotationN !== rotationN) return true
   if ((job.mode ?? cutMode) !== cutMode) return true
+  if (sourceObjectId && job.sourceObjectId && job.sourceObjectId !== sourceObjectId) {
+    return true
+  }
+  if (
+    sourcePlacementRevision != null
+    && job.sourcePlacementRevision != null
+    && job.sourcePlacementRevision !== sourcePlacementRevision
+  ) {
+    return true
+  }
   if (sourceGeometryUuid && job.sourceGeometryUuid && job.sourceGeometryUuid !== sourceGeometryUuid) {
     return true
   }

@@ -1,4 +1,5 @@
-import { serializeGeometryForWorker } from './geometryTransfer.js'
+import { normalizeCutParts } from './cutParts.js'
+import { serializeGeometryForWorker, serializePartsForWorker } from './geometryTransfer.js'
 import {
   runGcodePipeline,
   runGcodePipelineFromPayload,
@@ -72,21 +73,22 @@ async function runOnMainThread(action, payload, onProgress) {
 }
 
 /**
- * @param {THREE.BufferGeometry} geometry
+ * @param {THREE.BufferGeometry|import('./cutParts.js').CutPart[]} partsOrGeometry
  * @param {object} params
  * @param {(done: number, total: number) => void} [params.onProgress]
  */
-export function computeToolpathInWorker(geometry, {
+export function computeToolpathInWorker(partsOrGeometry, {
   rotationN,
   stock,
   cutMode,
   onProgress,
 }) {
-  const { payload: geometryPayload, transferables } = serializeGeometryForWorker(geometry)
+  const parts = normalizeCutParts(partsOrGeometry)
+  const { parts: partsPayload, transferables } = serializePartsForWorker(parts)
   const pp = planePointFromStock(stock)
 
   return post('computeToolpath', {
-    geometry: geometryPayload,
+    parts: partsPayload,
     rotationN,
     stock,
     cutMode,
@@ -95,9 +97,9 @@ export function computeToolpathInWorker(geometry, {
 }
 
 /** Main-thread fallback for tests and worker-less environments. */
-export async function computeToolpathOnMainThread(geometry, params) {
+export async function computeToolpathOnMainThread(partsOrGeometry, params) {
   const pp = planePointFromStock(params.stock)
-  return runToolpathPipeline(geometry, {
+  return runToolpathPipeline(partsOrGeometry, {
     rotationN: params.rotationN,
     stock: params.stock,
     cutMode: params.cutMode,

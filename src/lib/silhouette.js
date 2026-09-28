@@ -156,15 +156,9 @@ function extentsFromShadowGrid(grid, spec) {
   return { left, right, occupied }
 }
 
-function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy) {
-  const bounds = sectionBounds(bbox, frame)
-  if (bounds.vMax <= bounds.vMin + 1e-6) return { left: [], right: [], occupied: 0 }
-
-  const spec = shadowGridSpec(bounds, profileAccuracy)
-  const grid = new Uint8Array(spec.uBins * spec.vBins)
-
+function stampGeometryIntoGrid(grid, width, spec, geometry, frame) {
   const pos = geometry.attributes.position?.array
-  if (!pos || pos.length < 9) return { left: [], right: [], occupied: 0 }
+  if (!pos || pos.length < 9) return
 
   const index = geometry.index?.array
   const triCount = index ? index.length / 3 : pos.length / 9
@@ -179,10 +173,99 @@ function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy) {
     v0.fromArray(pos, i0 * 3)
     v1.fromArray(pos, i1 * 3)
     v2.fromArray(pos, i2 * 3)
-    fillProjectedTriangle(grid, spec.uBins, spec, projectToSection(v0, frame), projectToSection(v1, frame), projectToSection(v2, frame))
+    fillProjectedTriangle(
+      grid,
+      width,
+      spec,
+      projectToSection(v0, frame),
+      projectToSection(v1, frame),
+      projectToSection(v2, frame),
+    )
+  }
+}
+
+function combinedGeometryBBox(geometries) {
+  const box = new THREE.Box3()
+  let hasAny = false
+  for (const geometry of geometries) {
+    geometry.computeBoundingBox()
+    const bb = geometry.boundingBox
+    if (!bb || bb.isEmpty()) continue
+    box.union(bb)
+    hasAny = true
+  }
+  return hasAny ? box : null
+}
+
+function mergeEnvelopeSides(sideArrays) {
+  const byV = new Map()
+  for (const side of sideArrays) {
+    for (const p of side) {
+      const key = Math.round(p.v * 1000)
+      const prev = byV.get(key)
+      if (!prev) {
+        byV.set(key, { u: p.u, v: p.v })
+      } else {
+        prev.u = Math.min(prev.u, p.u)
+      }
+    }
+  }
+  return [...byV.values()].sort((a, b) => a.v - b.v || a.u - b.u)
+}
+
+function mergeEnvelopeRightSides(sideArrays) {
+  const byV = new Map()
+  for (const side of sideArrays) {
+    for (const p of side) {
+      const key = Math.round(p.v * 1000)
+      const prev = byV.get(key)
+      if (!prev) {
+        byV.set(key, { u: p.u, v: p.v })
+      } else {
+        prev.u = Math.max(prev.u, p.u)
+      }
+    }
+  }
+  return [...byV.values()].sort((a, b) => a.v - b.v || a.u - b.u)
+}
+
+function buildCombinedShadowGrid(geometries, frame, bbox, profileAccuracy, gridBins = null) {
+  const bounds = sectionBounds(bbox, frame)
+  if (bounds.vMax <= bounds.vMin + 1e-6) {
+    return { grid: null, spec: null, bounds, occupied: 0 }
   }
 
-  return extentsFromShadowGrid(grid, spec)
+  const spec = shadowGridSpec(bounds, profileAccuracy, gridBins)
+  const grid = new Uint8Array(spec.uBins * spec.vBins)
+  for (const geometry of geometries) {
+    stampGeometryIntoGrid(grid, spec.uBins, spec, geometry, frame)
+  }
+  const { occupied } = extentsFromShadowGrid(grid, spec)
+  return { grid, spec, bounds, occupied }
+}
+
+function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy) {
+  const { grid, spec, occupied } = buildCombinedShadowGrid(
+    [geometry],
+    frame,
+    bbox,
+    profileAccuracy,
+  )
+  if (!grid || !spec) return { left: [], right: [], occupied: 0 }
+  const extents = extentsFromShadowGrid(grid, spec)
+  return { ...extents, occupied }
+}
+
+function projectFrontToRearShadowFromGeometries(geometries, frame, bbox, profileAccuracy) {
+  const { grid, spec, occupied } = buildCombinedShadowGrid(
+    geometries,
+    frame,
+    bbox,
+    profileAccuracy,
+  )
+  if (!grid || !spec) return { left: [], right: [], occupied: 0 }
+  const extents = extentsFromShadowGrid(grid, spec)
+  return { ...extents, occupied }
 }
 
 function stampBinMin(minU, vMin, vStep, u, v) {
@@ -286,12 +369,35 @@ function projectFrontToRearEnvelope(geometry, frame, bbox, vTol = 0.06) {
 }
 
 function projectFrontToRearExtents(geometry, frame, bbox, opts = {}) {
-  const shadow = projectFrontToRearShadow(geometry, frame, bbox, opts.profileAccuracy ?? 5)
+  return projectFrontToRearExtentsFromGeometries([geometry], frame, bbox, opts)
+}
+
+function projectFrontToRearExtentsFromGeometries(geometries, frame, bbox, opts = {}) {
+  const shadow = projectFrontToRearShadowFromGeometries(
+    geometries,
+    frame,
+    bbox,
+    opts.profileAccuracy ?? 5,
+  )
   if (shadow.occupied > 0) {
     return { left: shadow.left, right: shadow.right, source: 'shadow' }
   }
-  const envelope = projectFrontToRearEnvelope(geometry, frame, bbox, opts.vTol ?? 0.06)
-  return { left: envelope.left, right: envelope.right, source: 'envelope-fallback' }
+
+  const leftSides = []
+  const rightSides = []
+  for (const geometry of geometries) {
+    geometry.computeBoundingBox()
+    const geoBbox = geometry.boundingBox
+    if (!geoBbox || geoBbox.isEmpty()) continue
+    const envelope = projectFrontToRearEnvelope(geometry, frame, geoBbox, opts.vTol ?? 0.06)
+    leftSides.push(envelope.left)
+    rightSides.push(envelope.right)
+  }
+  return {
+    left: mergeEnvelopeSides(leftSides),
+    right: mergeEnvelopeRightSides(rightSides),
+    source: 'envelope-fallback',
+  }
 }
 
 function mergeFullOutline({ left, right }) {
@@ -311,31 +417,18 @@ function mergeFullOutline({ left, right }) {
  * Returns empty array when the grid is unoccupied or tracing fails.
  */
 function projectShadowContour(geometry, frame, bbox, profileAccuracy, gridBins = null) {
-  const bounds = sectionBounds(bbox, frame)
-  if (bounds.vMax <= bounds.vMin + 1e-6) return []
+  return projectShadowContourFromGeometries([geometry], frame, bbox, profileAccuracy, gridBins)
+}
 
-  const spec = shadowGridSpec(bounds, profileAccuracy, gridBins)
-  const grid = new Uint8Array(spec.uBins * spec.vBins)
-
-  const pos = geometry.attributes.position?.array
-  if (!pos || pos.length < 9) return []
-
-  const index = geometry.index?.array
-  const triCount = index ? index.length / 3 : pos.length / 9
-  const v0 = new THREE.Vector3()
-  const v1 = new THREE.Vector3()
-  const v2 = new THREE.Vector3()
-
-  for (let t = 0; t < triCount; t++) {
-    const i0 = index ? index[t * 3] : t * 3
-    const i1 = index ? index[t * 3 + 1] : t * 3 + 1
-    const i2 = index ? index[t * 3 + 2] : t * 3 + 2
-    v0.fromArray(pos, i0 * 3)
-    v1.fromArray(pos, i1 * 3)
-    v2.fromArray(pos, i2 * 3)
-    fillProjectedTriangle(grid, spec.uBins, spec, projectToSection(v0, frame), projectToSection(v1, frame), projectToSection(v2, frame))
-  }
-
+function projectShadowContourFromGeometries(geometries, frame, bbox, profileAccuracy, gridBins = null) {
+  const { grid, spec } = buildCombinedShadowGrid(
+    geometries,
+    frame,
+    bbox,
+    profileAccuracy,
+    gridBins,
+  )
+  if (!grid || !spec) return []
   const contour = traceGridBoundary(grid, spec)
   return dedupePoints(contour, Math.max(spec.uStep, spec.vStep))
 }
@@ -345,22 +438,34 @@ function projectShadowContour(geometry, frame, bbox, profileAccuracy, gridBins =
  * Prefers the true shadow contour; falls back to the per-v envelope.
  */
 export function extractLeftSilhouette(geometry, frame, opts = {}) {
-  const pos = geometry.attributes.position
-  if (!pos || pos.count < 3) return []
+  return extractLeftSilhouetteFromGeometries([geometry], frame, opts)
+}
 
-  geometry.computeBoundingBox()
-  const bbox = geometry.boundingBox
-  if (!bbox || bbox.isEmpty()) return []
+/**
+ * Left-side cut silhouette from one shared shadow grid stamped by every geometry.
+ *
+ * @param {THREE.BufferGeometry[]} geometries - pre-sliced meshes (caller disposes)
+ */
+export function extractLeftSilhouetteFromGeometries(geometries, frame, opts = {}) {
+  const valid = geometries.filter((g) => g?.attributes?.position?.count >= 3)
+  if (!valid.length) return []
+
+  const bbox = combinedGeometryBBox(valid)
+  if (!bbox) return []
 
   const uMax = opts.uMax ?? 1e-3
-
-  const contour = projectShadowContour(geometry, frame, bbox, opts.profileAccuracy ?? 5)
+  const contour = projectShadowContourFromGeometries(
+    valid,
+    frame,
+    bbox,
+    opts.profileAccuracy ?? 5,
+  )
   if (contour.length >= 3) {
     const left = contour.filter((p) => p.u <= uMax)
     if (left.length >= 2) return left
   }
 
-  const { left } = projectFrontToRearExtents(geometry, frame, bbox, opts)
+  const { left } = projectFrontToRearExtentsFromGeometries(valid, frame, bbox, opts)
   return dedupePoints(left.filter((p) => p.u <= uMax))
 }
 
@@ -369,17 +474,31 @@ export function extractLeftSilhouette(geometry, frame, opts = {}) {
  * falling back to the per-v min/max envelope when no clean loop is found.
  */
 export function extractFullSilhouette(geometry, frame, opts = {}) {
-  const pos = geometry.attributes.position
-  if (!pos || pos.count < 3) return []
+  return extractFullSilhouetteFromGeometries([geometry], frame, opts)
+}
 
-  geometry.computeBoundingBox()
-  const bbox = geometry.boundingBox
-  if (!bbox || bbox.isEmpty()) return []
+/**
+ * Full front-to-rear silhouette from one shared shadow grid.
+ *
+ * @param {THREE.BufferGeometry[]} geometries - pre-sliced meshes (caller disposes)
+ */
+export function extractFullSilhouetteFromGeometries(geometries, frame, opts = {}) {
+  const valid = geometries.filter((g) => g?.attributes?.position?.count >= 3)
+  if (!valid.length) return []
 
-  const contour = projectShadowContour(geometry, frame, bbox, opts.profileAccuracy ?? 5, opts.gridBins ?? null)
+  const bbox = combinedGeometryBBox(valid)
+  if (!bbox) return []
+
+  const contour = projectShadowContourFromGeometries(
+    valid,
+    frame,
+    bbox,
+    opts.profileAccuracy ?? 5,
+    opts.gridBins ?? null,
+  )
   if (contour.length >= 3) return contour
 
-  const extents = projectFrontToRearExtents(geometry, frame, bbox, opts)
+  const extents = projectFrontToRearExtentsFromGeometries(valid, frame, bbox, opts)
   return mergeFullOutline(extents)
 }
 
