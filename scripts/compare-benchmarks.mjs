@@ -72,7 +72,7 @@ function main() {
   console.log('')
   console.log('Peak JS heap (phased run)')
   console.log('-------------------------')
-  row('Peak heap (MiB)', roundMiB(bm.peakBytes), roundMiB(cm.peakBytes), { invertGood: true })
+  row('Peak heap (MiB)', roundMiB(bm.peakBytes), roundMiB(cm.peakBytes), { unit: ' MiB', invertGood: true })
   console.log(`  Baseline peak at:  "${bm.peakMark}" (${roundMiB(bm.peakBytes)} MiB)`)
   console.log(`  Candidate peak at: "${cm.peakMark}" (${roundMiB(cm.peakBytes)} MiB)`)
   const heapSaved = bm.peakBytes - cm.peakBytes
