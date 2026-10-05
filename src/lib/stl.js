@@ -2,6 +2,7 @@
 
 import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { importSizeError } from './importLimit.js'
 
 /**
  * Orient a freshly-parsed STL so its height axis is +Y (app convention).
@@ -46,6 +47,9 @@ export function orientGeometryUp(geometry) {
  * @returns {Promise<THREE.BufferGeometry>}
  */
 export function loadSTLFile(file, hooks = {}) {
+  const tooLarge = importSizeError(file)
+  if (tooLarge) return Promise.reject(new Error(tooLarge))
+
   const { onReadProgress, onStage } = hooks
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

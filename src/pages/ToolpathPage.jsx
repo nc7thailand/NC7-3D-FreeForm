@@ -327,6 +327,7 @@ export default function ToolpathPage() {
                       silhouettePreview={silhouettePreview}
                       cutMode={cutMode}
                       readOnly
+                      displayProxy
                       showToolpathOverlay
                       showModelBBox={false}
                       combinedView={is3d}

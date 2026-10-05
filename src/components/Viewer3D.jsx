@@ -15,6 +15,7 @@ import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
+import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
 import {
   disposeMaterial,
   disposeObject3D,
@@ -128,6 +129,7 @@ export default forwardRef(function Viewer3D(
     onReset,
     onCenter,
     readOnly = false,
+    displayProxy = false,
     showToolpathOverlay = false,
     showModelBBox = true,
     combinedView = false,
@@ -663,7 +665,9 @@ export default forwardRef(function Viewer3D(
       transform.dispose()
       const st = stateRef.current
       if (st?.simOverlay) disposeSimOverlay(st.simOverlay)
-      disposeSceneContents(scene, { keepGeometries: [st?.mesh?.geometry] })
+      disposeSceneContents(scene, {
+        keepGeometries: st?.ownedDisplayGeometry ? [] : [st?.mesh?.geometry],
+      })
       disposeRenderer(renderer)
       if (st) {
         st.mesh = null
@@ -701,9 +705,13 @@ export default forwardRef(function Viewer3D(
       state.objGizmo = null
     }
     if (state.mesh) {
-      // Geometry is owned by AppState (it may still be shown on another page).
+      // App-owned geometry stays alive. A display proxy is freed here.
       disposeMaterial(state.mesh.material)
       state.mesh = null
+    }
+    if (state.ownedDisplayGeometry) {
+      state.ownedDisplayGeometry.dispose()
+      state.ownedDisplayGeometry = null
     }
 
     if (!geometry) return
@@ -718,6 +726,12 @@ export default forwardRef(function Viewer3D(
       geometry.userData.nc7CentroidApplied = true
       geometry.computeBoundingBox()
     }
+
+    const display = displayProxy
+      ? resolveToolpathDisplayGeometry(geometry)
+      : { geometry, owned: false }
+    const meshGeometry = display.geometry
+    if (display.owned) state.ownedDisplayGeometry = meshGeometry
 
     // Compute center of mass from geometry bounding box
     geometry.computeBoundingBox()
@@ -736,7 +750,7 @@ export default forwardRef(function Viewer3D(
         metalness: 0.1,
         roughness: 0.6,
       })
-    const mesh = new THREE.Mesh(geometry, material)
+    const mesh = new THREE.Mesh(meshGeometry, material)
     state.mesh = mesh
     // Position the mesh relative to the OBJ_Gizmo pivot.
     //
@@ -825,7 +839,7 @@ export default forwardRef(function Viewer3D(
     state.scene.add(axes)
     state.floorAxes = axes
     state.requestRender?.()
-  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
+  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay, displayProxy])
 
   useEffect(() => {
     const state = stateRef.current

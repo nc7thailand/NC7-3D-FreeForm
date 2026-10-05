@@ -2,6 +2,8 @@ import * as THREE from 'three'
 
 /**
  * Plain-object geometry payload for postMessage (optionally transferable).
+ * One position copy per job. The buffer is transferred, then every cut angle
+ * reads that same worker geometry. Do not copy again inside the slice loop.
  *
  * @param {THREE.BufferGeometry|null} geometry
  * @returns {{ payload: object|null, transferables: ArrayBuffer[] }}

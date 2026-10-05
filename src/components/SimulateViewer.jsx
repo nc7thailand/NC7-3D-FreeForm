@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import ViewCube from './ViewCube'
 import { buildWireStack } from '../lib/simStack'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
+import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
 import {
   disposeMaterial,
   disposeObject3D,
@@ -182,7 +183,9 @@ export default function SimulateViewer({
       window.removeEventListener('resize', onResize)
       controls.dispose()
       const st = stateRef.current
-      disposeSceneContents(scene, { keepGeometries: [st?.mesh?.geometry] })
+      disposeSceneContents(scene, {
+        keepGeometries: st?.ownedDisplayGeometry ? [] : [st?.mesh?.geometry],
+      })
       disposeRenderer(renderer)
       if (st) {
         st.mesh = null
@@ -199,13 +202,21 @@ export default function SimulateViewer({
     if (!state?.scene) return
 
     if (state.mesh) {
-      // Geometry is owned by AppState.
+      // App-owned geometry stays alive. A display proxy is freed here.
       state.scene.remove(state.mesh)
       disposeMaterial(state.mesh.material)
     }
     state.mesh = null
+    if (state.ownedDisplayGeometry) {
+      state.ownedDisplayGeometry.dispose()
+      state.ownedDisplayGeometry = null
+    }
 
     if (!geometry) return
+
+    const display = resolveToolpathDisplayGeometry(geometry)
+    const meshGeometry = display.geometry
+    if (display.owned) state.ownedDisplayGeometry = meshGeometry
 
     geometry.computeBoundingBox()
 
@@ -218,7 +229,7 @@ export default function SimulateViewer({
       transparent: true,
       opacity: 0.85,
     })
-    const mesh = new THREE.Mesh(geometry, mat)
+    const mesh = new THREE.Mesh(meshGeometry, mat)
     state.mesh = mesh
     state.scene.add(mesh)
 

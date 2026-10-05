@@ -3,7 +3,7 @@ import { buildCutJob } from './cutJob.js'
 import { attachIndexSafetyToJob } from './indexSafety.js'
 import { extractOverlayContour, OVERLAY_CONTOUR_VERSION } from './cutOverlay.js'
 import { generateGcode } from './gcode.js'
-import { planePointFromStock, silhouetteOptsFromStock } from './toolpath.js'
+import { geometryForToolpathSlicing, planePointFromStock, silhouetteOptsFromStock } from './toolpath.js'
 import { deserializeGeometryFromWorker } from './geometryTransfer.js'
 
 /**
@@ -19,6 +19,7 @@ export async function runToolpathPipeline(geometry, {
   cutMode,
   planePoint: planePointInput,
   onProgress,
+  adoptSlice = false,
 }) {
   if (!geometry) return null
 
@@ -26,24 +27,34 @@ export async function runToolpathPipeline(geometry, {
     ? planePointInput
     : new THREE.Vector3(...(planePointInput ?? [0, 0, 0]))
 
-  const job = await buildCutJob(geometry, rotationN, planePoint, {
-    silhouetteOpts: silhouetteOptsFromStock(stock),
-    mode: cutMode,
-    onProgress,
-  })
+  // One position buffer for every angle. The worker path adopts the buffer
+  // it already received; the main-thread path copies positions once.
+  const sliceGeo = geometryForToolpathSlicing(geometry, null, { adopt: adoptSlice })
+  const rasterScratch = { grid: null }
+  try {
+    const job = await buildCutJob(sliceGeo, rotationN, planePoint, {
+      silhouetteOpts: silhouetteOptsFromStock(stock),
+      mode: cutMode,
+      onProgress,
+      prepared: true,
+      rasterScratch,
+    })
 
-  job.stock = { ...stock }
-  job.mode = cutMode
-  job.sourceGeometryUuid = geometry.uuid
-  job.sourceModelRevision = geometry.userData?.nc7ModelRevision ?? 0
+    job.stock = { ...stock }
+    job.mode = cutMode
+    job.sourceGeometryUuid = geometry.uuid
+    job.sourceModelRevision = geometry.userData?.nc7ModelRevision ?? 0
 
-  for (const cut of job.cuts) {
-    cut.overlayContour = extractOverlayContour(geometry, cut.thetaDeg)
+    for (const cut of job.cuts) {
+      cut.overlayContour = extractOverlayContour(sliceGeo, cut.thetaDeg, { rasterScratch })
+    }
+    job.overlayContourVersion = OVERLAY_CONTOUR_VERSION
+
+    attachIndexSafetyToJob(job, sliceGeo, stock, cutMode)
+    return job
+  } finally {
+    sliceGeo?.dispose()
   }
-  job.overlayContourVersion = OVERLAY_CONTOUR_VERSION
-
-  attachIndexSafetyToJob(job, geometry, stock, cutMode)
-  return job
 }
 
 /**
@@ -76,6 +87,7 @@ export async function runToolpathPipelineFromPayload(payload, onProgress) {
     cutMode: payload.cutMode,
     planePoint: pp,
     onProgress,
+    adoptSlice: true,
   })
 }
 

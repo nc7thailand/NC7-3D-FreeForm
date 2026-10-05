@@ -249,9 +249,13 @@ export function buildCutPath(contour, boV, leftOnly) {
  * Extract the closed silhouette contour on the middle plane at θ.
  * Identical inputs to the 2D preview, so both views show the same loop.
  */
-export function extractOverlayContour(geometry, thetaDeg) {
+export function extractOverlayContour(geometry, thetaDeg, opts = {}) {
   if (!geometry) return []
   try {
+    // Reads the caller's buffer in place. A toolpath job passes the single
+    // position slice shared with every profile angle, so this pass does not
+    // clone the mesh again.
+    //
     // DISPLAY-ONLY θ flip — see buildFullSilhouettePreview. The frame's
     // normal/uAxis assume a camera orbiting by +θ while the model physically
     // turns on a fixed wire, which mirrored the 2D/Combined drawing against
@@ -259,6 +263,7 @@ export function extractOverlayContour(geometry, thetaDeg) {
     const frame = cuttingPlane(-thetaDeg, planePointMiddleFromStock())
     return simplifyOverlayContour(extractFullSilhouette(geometry, frame, {
       gridBins: OVERLAY_GRID_BINS,
+      rasterScratch: opts.rasterScratch,
     }))
   } catch (err) {
     console.warn('overlay silhouette failed:', err)

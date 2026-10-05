@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useRef, useState, useCallback, useEffect } from 'react'
 import * as THREE from 'three'
 import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../lib/stl'
+import { load3MFFile } from '../lib/threemf'
+import { importSizeError, meshImportKind } from '../lib/importLimit'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
-import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
+import { buildSectionProfile, buildFullSilhouettePreview, geometryForToolpathSlicing, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 import { migrateOverlayContours } from '../lib/cutOverlay'
 import { computeToolpathInWorker } from '../lib/camWorkerClient'
@@ -107,6 +109,7 @@ export function AppStateProvider({ children }) {
   const [geometry, setGeometry] = useState(null)
   const [stats, setStats] = useState(null)
   const [status, setStatus] = useState('')
+  const [importAlert, setImportAlert] = useState(null)
   const [unit, setUnit] = useState('mm')
   const [target, setTarget] = useState({ x: 100, y: 100, z: 100 })
   const [resetKey, setResetKey] = useState(0)
@@ -409,15 +412,20 @@ export function AppStateProvider({ children }) {
       planePoint.current.copy(planePointFromStock(stock))
       const worldMatrix = null
       const silhouetteOpts = silhouetteOptsFromStock(stock)
+      const sliceGeo = geometryForToolpathSlicing(geo, worldMatrix)
+      const rasterScratch = { grid: null }
       try {
-        setProfile(buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts))
+        const preparedOpts = { ...silhouetteOpts, prepared: true, rasterScratch }
+        setProfile(buildSectionProfile(sliceGeo, thetaDeg, planePoint.current, null, preparedOpts))
         setSilhouettePreview(
-          buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
+          buildFullSilhouettePreview(sliceGeo, thetaDeg, planePoint.current, null, preparedOpts)
         )
       } catch (err) {
         setProfile(null)
         setSilhouettePreview(null)
         setStatus(`Toolpath error: ${err.message}`)
+      } finally {
+        sliceGeo.dispose()
       }
     }, 300)
 
@@ -492,11 +500,27 @@ export function AppStateProvider({ children }) {
   ])
 
   const handleFile = async (file) => {
-    setStatus('Loading STL...')
+    const kind = meshImportKind(file?.name)
+    if (!kind) {
+      const message = `${file?.name || 'That file'} is not an .stl or .3mf file.`
+      setImportAlert(message)
+      setStatus(message)
+      return
+    }
+    const tooLarge = importSizeError(file)
+    if (tooLarge) {
+      setImportAlert(tooLarge)
+      setStatus(tooLarge)
+      return
+    }
+
+    setImportAlert(null)
+    setStatus(kind === '3mf' ? 'Loading 3MF...' : 'Loading STL...')
     beginBusy(`Loading ${file.name}…`, { done: 0, total: 100 })
     await yieldToPaint()
     try {
-      const rawGeo = await loadSTLFile(file, {
+      const loader = kind === '3mf' ? load3MFFile : loadSTLFile
+      const rawGeo = await loader(file, {
         onReadProgress: (loaded, total) => {
           // Reading is typically fast; cap it below 100 so the bar does not sit
           // full while parse + normals still run.
@@ -520,6 +544,7 @@ export function AppStateProvider({ children }) {
       setMenuOpen(false)
       setStatus(`Loaded ${file.name} (${geo.attributes.position.count / 3} triangles)`)
     } catch (err) {
+      setImportAlert(err.message)
       setStatus(`Error: ${err.message}`)
     } finally {
       await endBusy()
@@ -1014,6 +1039,8 @@ export function AppStateProvider({ children }) {
     hasModel: !!geometry,
     hasToolpath: cutJobHasProfile(cutJob) || !!profile?.polylines?.length,
     hasToolpathSaved: cutJobHasProfile(cutJob),
+    importAlert,
+    clearImportAlert: () => setImportAlert(null),
     handleFile,
     handleResize,
     handleSettle,

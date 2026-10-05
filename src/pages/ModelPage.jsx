@@ -14,6 +14,8 @@ function ModelPanel() {
     target,
     setTarget,
     handleFile,
+    importAlert,
+    clearImportAlert,
     handleResize,
     handleSettle,
     handleSimplify,
@@ -35,12 +37,23 @@ function ModelPanel() {
         </button>
 
         <section className="panel">
-          <h2>Load STL</h2>
+          <h2>Load model</h2>
+          <p className="panel-hint">STL or 3MF, up to 5 MB, so low-spec browsers stay stable.</p>
           <input
             type="file"
-            accept=".stl"
-            onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])}
+            accept=".stl,.3mf,model/stl,model/3mf"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) handleFile(file)
+            }}
           />
+          {importAlert && (
+            <div className="import-alert" role="alert">
+              <p>{importAlert}</p>
+              <button type="button" onClick={clearImportAlert}>OK</button>
+            </div>
+          )}
         </section>
 
         <section className="panel">

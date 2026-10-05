@@ -1561,6 +1561,30 @@ button:hover {
   white-space: nowrap;
 }
 
+.import-alert {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #8a4b2a;
+  border-radius: 6px;
+  background: rgba(90, 42, 18, 0.55);
+  color: #ffd7b0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.import-alert p {
+  margin: 0 0 8px;
+}
+
+.import-alert button {
+  padding: 4px 12px;
+  border: 1px solid #c47a45;
+  border-radius: 4px;
+  background: #3a2418;
+  color: #ffd7b0;
+  cursor: pointer;
+}
+
 .status-bar {
   position: absolute;
   left: 10px;
