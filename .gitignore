@@ -30,6 +30,9 @@ npm-debug.log*
 .cursor/
 tools/
 
+# Local A/B benchmark JSON outputs
+.benchmark/
+
 # Generated diagnostic outputs (SVG/PNG/CSV/NC renders from throwaway scripts)
 scripts/*.png
 scripts/*.svg
