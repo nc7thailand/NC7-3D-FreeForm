@@ -1,21 +1,37 @@
 import * as THREE from 'three'
 import { buildCutJob, CUT_MODE_LEFT_ONLY } from '../src/lib/cutJob.js'
 import { runToolpathPipeline } from '../src/lib/camPipeline.js'
-import { importSizeError, MAX_IMPORT_BYTES, meshImportKind } from '../src/lib/importLimit.js'
+import {
+  importHardRejectMessage,
+  HARD_IMPORT_MAX_BYTES,
+  STANDARD_IMPORT_BYTES,
+  meshImportKind,
+  importSizeTier,
+} from '../src/lib/importLimit.js'
+import { autoSimplifyMesh, meshTriangleCount } from '../src/lib/importPipeline.js'
 import { resolveToolpathDisplayGeometry, TOOLPATH_PROXY_MAX_TRIANGLES } from '../src/lib/meshProxy.js'
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg)
 }
 
-const exact = importSizeError({ name: 'ok.stl', size: MAX_IMPORT_BYTES })
-assert(exact === null, 'a file of exactly 5 MB must be accepted')
-
-const over = importSizeError({ name: 'big.stl', size: MAX_IMPORT_BYTES + 1 })
-assert(typeof over === 'string' && over.includes('5 MB'), 'a file over 5 MB must be rejected before parse')
+assert(importSizeTier({ size: STANDARD_IMPORT_BYTES }) === 'ok', '10 MB is ok tier')
+assert(importSizeTier({ size: STANDARD_IMPORT_BYTES + 1 }) === 'large', 'over 10 MB is large tier')
+assert(importSizeTier({ size: HARD_IMPORT_MAX_BYTES }) === 'large', '20 MB is still large tier')
+assert(importSizeTier({ size: HARD_IMPORT_MAX_BYTES + 1 }) === 'reject', 'over 20 MB is reject tier')
+assert(importHardRejectMessage({ name: 'big.stl', size: HARD_IMPORT_MAX_BYTES + 1 })?.includes('20 MB'), 'hard reject copy')
 assert(meshImportKind('Part.3MF') === '3mf', '3mf extension')
 assert(meshImportKind('Part.STL') === 'stl', 'stl extension')
 assert(meshImportKind('job.nc7project') === null, 'project files are not mesh imports')
+
+const densePositions = new Float32Array(60_000 * 9)
+for (let i = 0; i < densePositions.length; i++) densePositions[i] = (i % 113) * 0.04
+const denseGeo = new THREE.BufferGeometry()
+denseGeo.setAttribute('position', new THREE.BufferAttribute(densePositions, 3))
+const simplified = await autoSimplifyMesh(denseGeo, { maxTriangles: 50_000 })
+assert(simplified.simplified === true, 'auto simplify should run above 50k tris')
+assert(meshTriangleCount(simplified.geometry) <= 50_000, 'auto simplify must respect 50k cap')
+simplified.geometry.dispose()
 
 const geo = new THREE.BoxGeometry(10, 20, 30).toNonIndexed()
 geo.computeVertexNormals()
@@ -55,10 +71,10 @@ try {
   THREE.BufferGeometry.prototype.clone = origClone
 }
 
-const densePositions = new Float32Array(30_000 * 9)
-for (let i = 0; i < densePositions.length; i++) densePositions[i] = (i % 97) * 0.05
+const proxyPositions = new Float32Array(30_000 * 9)
+for (let i = 0; i < proxyPositions.length; i++) proxyPositions[i] = (i % 97) * 0.05
 const dense = new THREE.BufferGeometry()
-dense.setAttribute('position', new THREE.BufferAttribute(densePositions, 3))
+dense.setAttribute('position', new THREE.BufferAttribute(proxyPositions, 3))
 const display = resolveToolpathDisplayGeometry(dense)
 assert(display.owned === true, 'dense mesh should use an owned display proxy')
 assert(

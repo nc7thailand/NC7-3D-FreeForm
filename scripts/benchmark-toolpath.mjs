@@ -89,13 +89,22 @@ async function loadOptionalFeatureChecks() {
   }
 
   try {
-    const { importSizeError, MAX_IMPORT_BYTES, meshImportKind } = await import('../src/lib/importLimit.js')
+    const {
+      importHardRejectMessage,
+      HARD_IMPORT_MAX_BYTES,
+      STANDARD_IMPORT_BYTES,
+      meshImportKind,
+      importSizeTier,
+    } = await import('../src/lib/importLimit.js')
     out.importLimit = {
       available: true,
-      maxBytes: MAX_IMPORT_BYTES,
-      maxMiB: MAX_IMPORT_BYTES / (1024 * 1024),
-      acceptsExactLimit: importSizeError({ name: 'ok.stl', size: MAX_IMPORT_BYTES }) === null,
-      rejectsOverLimit: typeof importSizeError({ name: 'big.stl', size: MAX_IMPORT_BYTES + 1 }) === 'string',
+      standardMaxBytes: STANDARD_IMPORT_BYTES,
+      hardMaxBytes: HARD_IMPORT_MAX_BYTES,
+      standardMaxMiB: STANDARD_IMPORT_BYTES / (1024 * 1024),
+      hardMaxMiB: HARD_IMPORT_MAX_BYTES / (1024 * 1024),
+      acceptsStandard: importSizeTier({ name: 'ok.stl', size: STANDARD_IMPORT_BYTES }) === 'ok',
+      warnsLarge: importSizeTier({ name: 'big.stl', size: STANDARD_IMPORT_BYTES + 1 }) === 'large',
+      rejectsOverHard: typeof importHardRejectMessage({ name: 'big.stl', size: HARD_IMPORT_MAX_BYTES + 1 }) === 'string',
       stlKind: meshImportKind('part.stl') === 'stl',
       threemfKind: meshImportKind('part.3mf') === '3mf',
     }

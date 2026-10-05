@@ -5,7 +5,7 @@ import { orientGeometryUp } from './stl.js'
 
 /**
  * Load a .3mf file into one Y-up BufferGeometry.
- * Checked against the 5 MB limit before the file is read.
+ * Checked against the 20 MB hard limit before the file is read.
  *
  * @param {File} file
  * @param {{ onReadProgress?: (loaded: number, total: number) => void, onStage?: (stage: string) => void }} [hooks]

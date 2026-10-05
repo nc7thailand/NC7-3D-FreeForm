@@ -111,7 +111,7 @@ function main() {
     console.log('Import size limit')
     console.log('-------------------')
     console.log(`Baseline:  ${bLim?.available ? `${bLim.maxMiB} MiB gate active` : 'not present'}`)
-    console.log(`Candidate: ${cLim?.available ? `${cLim.maxMiB} MiB gate active (reject over: ${cLim.rejectsOverLimit})` : 'not present'}`)
+    console.log(`Candidate: ${cLim?.available ? `${cLim.hardMaxMiB ?? cLim.maxMiB} MiB hard max (warn > ${cLim.standardMaxMiB ?? 10} MiB)` : 'not present'}`)
   }
 
   console.log('')

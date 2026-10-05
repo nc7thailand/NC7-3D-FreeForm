@@ -2,7 +2,8 @@ import React, { createContext, useContext, useRef, useState, useCallback, useEff
 import * as THREE from 'three'
 import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../lib/stl'
 import { load3MFFile } from '../lib/threemf'
-import { importSizeError, meshImportKind } from '../lib/importLimit'
+import { importHardRejectMessage, meshImportKind, TARGET_WORKING_TRIANGLES } from '../lib/importLimit'
+import { autoSimplifyMesh, meshTriangleCount } from '../lib/importPipeline'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
@@ -110,6 +111,12 @@ export function AppStateProvider({ children }) {
   const [stats, setStats] = useState(null)
   const [status, setStatus] = useState('')
   const [importAlert, setImportAlert] = useState(null)
+  const [importOptimizeSuccess, setImportOptimizeSuccess] = useState({
+    open: false,
+    simplified: false,
+    originalTriangles: 0,
+    newTriangles: 0,
+  })
   const [unit, setUnit] = useState('mm')
   const [target, setTarget] = useState({ x: 100, y: 100, z: 100 })
   const [resetKey, setResetKey] = useState(0)
@@ -228,9 +235,17 @@ export function AppStateProvider({ children }) {
    */
   const busyShownAtRef = useRef(0)
 
-  const beginBusy = useCallback((message, progress = null) => {
+  const beginBusy = useCallback((message, progress = null, extras = {}) => {
     busyShownAtRef.current = performance.now()
-    setBusy({ active: true, message, progress })
+    setBusy({
+      active: true,
+      message,
+      progress,
+      title: extras.title ?? '',
+      subMessage: extras.subMessage ?? '',
+      footerMessage: extras.footerMessage ?? '',
+      variant: extras.variant ?? '',
+    })
   }, [])
 
   const setBusyProgress = useCallback((done, total) => {
@@ -243,7 +258,15 @@ export function AppStateProvider({ children }) {
     const elapsed = performance.now() - busyShownAtRef.current
     const remaining = BUSY_MIN_MS - elapsed
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
-    setBusy({ active: false, message: '', progress: null })
+    setBusy({
+      active: false,
+      message: '',
+      progress: null,
+      title: '',
+      subMessage: '',
+      footerMessage: '',
+      variant: '',
+    })
   }, [])
 
   /** Resolve after the browser has had a chance to paint. */
@@ -499,7 +522,7 @@ export function AppStateProvider({ children }) {
     bakeModelTransform,
   ])
 
-  const handleFile = async (file) => {
+  const processMeshFile = useCallback(async (file) => {
     const kind = meshImportKind(file?.name)
     if (!kind) {
       const message = `${file?.name || 'That file'} is not an .stl or .3mf file.`
@@ -507,14 +530,15 @@ export function AppStateProvider({ children }) {
       setStatus(message)
       return
     }
-    const tooLarge = importSizeError(file)
-    if (tooLarge) {
-      setImportAlert(tooLarge)
-      setStatus(tooLarge)
+    const rejectMessage = importHardRejectMessage(file)
+    if (rejectMessage) {
+      setImportAlert(rejectMessage)
+      setStatus(rejectMessage)
       return
     }
 
     setImportAlert(null)
+    setImportOptimizeSuccess((prev) => ({ ...prev, open: false }))
     setStatus(kind === '3mf' ? 'Loading 3MF...' : 'Loading STL...')
     beginBusy(`Loading ${file.name}…`, { done: 0, total: 100 })
     await yieldToPaint()
@@ -522,17 +546,48 @@ export function AppStateProvider({ children }) {
       const loader = kind === '3mf' ? load3MFFile : loadSTLFile
       const rawGeo = await loader(file, {
         onReadProgress: (loaded, total) => {
-          // Reading is typically fast; cap it below 100 so the bar does not sit
-          // full while parse + normals still run.
           setBusyProgress(Math.round((loaded / total) * 70), 100)
         },
         onStage: (stage) => {
-          // Parse and normals have no byte progress — show the stage with an
-          // indeterminate-looking bar so we are not implying a known fraction.
-          setBusy(() => ({ active: true, message: stage, progress: null }))
+          setBusy((prev) => (
+            prev.active
+              ? { ...prev, message: stage, progress: null }
+              : prev
+          ))
         },
       })
-      const geo = prepareRawGeometry(rawGeo)
+      let geo = prepareRawGeometry(rawGeo)
+
+      if (meshTriangleCount(geo) > TARGET_WORKING_TRIANGLES) {
+        await endBusy()
+        beginBusy(
+          'Please wait a moment while we streamline your mesh for smooth toolpath generation.',
+          { done: 0, total: 100 },
+          {
+            title: 'Optimizing 3D Model for NC7 Freeform...',
+            footerMessage: 'Simplifying triangles and optimizing performance...',
+            variant: 'optimize',
+          },
+        )
+        await yieldToPaint()
+
+        const simplified = await autoSimplifyMesh(geo, {
+          onProgress: async (done, total) => {
+            setBusyProgress(done, total)
+            if (done % 20 === 0) await yieldToPaint()
+          },
+        })
+        geo = simplified.geometry
+        if (simplified.simplified) {
+          setImportOptimizeSuccess({
+            open: true,
+            simplified: true,
+            originalTriangles: simplified.originalTriangles,
+            newTriangles: simplified.newTriangles,
+          })
+        }
+      }
+
       workingRef.current = geo
       storeHighResGeometry(geo)
       setGeometry(geo)
@@ -542,14 +597,25 @@ export function AppStateProvider({ children }) {
       setCutJob(null)
       setCutIndex(0)
       setMenuOpen(false)
-      setStatus(`Loaded ${file.name} (${geo.attributes.position.count / 3} triangles)`)
+      setStatus(`Loaded ${file.name} (${meshTriangleCount(geo).toLocaleString()} triangles)`)
     } catch (err) {
       setImportAlert(err.message)
       setStatus(`Error: ${err.message}`)
     } finally {
       await endBusy()
     }
-  }
+  }, [
+    beginBusy,
+    endBusy,
+    setBusyProgress,
+    storeHighResGeometry,
+    updateStatsFrom,
+    yieldToPaint,
+  ])
+
+  const dismissImportOptimizeSuccess = useCallback(() => {
+    setImportOptimizeSuccess((prev) => ({ ...prev, open: false }))
+  }, [])
 
   const handleResize = () => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
@@ -1041,7 +1107,9 @@ export function AppStateProvider({ children }) {
     hasToolpathSaved: cutJobHasProfile(cutJob),
     importAlert,
     clearImportAlert: () => setImportAlert(null),
-    handleFile,
+    importOptimizeSuccess,
+    dismissImportOptimizeSuccess,
+    processMeshFile,
     handleResize,
     handleSettle,
     handleSimplify,
