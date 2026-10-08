@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
+import React, { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -16,6 +16,8 @@ import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
 import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
+import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
+import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import {
   disposeMaterial,
   disposeObject3D,
@@ -145,6 +147,8 @@ export default forwardRef(function Viewer3D(
   const rotationPanelRef = useRef(null)
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
+  const [glContextKey, setGlContextKey] = useState(0)
+  const [glContextLost, setGlContextLost] = useState(false)
   const stateRef = useRef({
     scene: null,
     camera: null,
@@ -264,6 +268,7 @@ export default forwardRef(function Viewer3D(
     renderer.setSize(mount.clientWidth, mount.clientHeight)
     renderer.setPixelRatio(effectivePixelRatio())
     mount.appendChild(renderer.domElement)
+    setGlContextLost(false)
 
     // Lights
     scene.add(new THREE.AmbientLight(0xffffff, 0.5))
@@ -567,6 +572,19 @@ export default forwardRef(function Viewer3D(
     let needsContinuousRender = !readOnlyRef.current
     let inRender = false
 
+    const detachContextRecovery = attachWebGLContextRecovery(renderer, {
+      onLost: () => {
+        running = false
+        cancelAnimationFrame(animId)
+        setGlContextLost(true)
+        logWebGLContextTelemetry({ viewer: 'Viewer3D', phase: 'lost' })
+      },
+      onRestored: () => {
+        logWebGLContextTelemetry({ viewer: 'Viewer3D', phase: 'restored' })
+        setGlContextKey((k) => k + 1)
+      },
+    })
+
     const renderFrame = () => {
       if (inRender) return
       inRender = true
@@ -650,6 +668,7 @@ export default forwardRef(function Viewer3D(
     return () => {
       running = false
       cancelAnimationFrame(animId)
+      detachContextRecovery()
       sizeObserver.disconnect()
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKeyDown)
@@ -673,7 +692,7 @@ export default forwardRef(function Viewer3D(
         st.simOverlay = null
       }
     }
-  }, [])
+  }, [glContextKey])
 
   // Rebuild mesh when geometry changes
   useEffect(() => {
@@ -1528,6 +1547,11 @@ export default forwardRef(function Viewer3D(
         </>
       )}
       <HomeViewButton onClick={goHome} />
+      {glContextLost && (
+        <div className="webgl-context-banner" role="alert" aria-live="assertive">
+          GPU memory paused the 3D view. Recovering…
+        </div>
+      )}
     </div>
   )
 })

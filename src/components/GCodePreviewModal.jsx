@@ -1,8 +1,10 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { PREVIEW_VIEW } from '../lib/cutPathStack3d.js'
+import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
+import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import { disposeMaterial, disposeRenderer, disposeSceneContents } from '../lib/threeDispose.js'
 
 const COLOR_LEAD_IN = 0x22c55e
@@ -65,6 +67,8 @@ export default function GCodePreviewModal({
 }) {
   const mountRef = useRef(null)
   const viewerRef = useRef(null)
+  const [glContextKey, setGlContextKey] = useState(0)
+  const [glContextLost, setGlContextLost] = useState(false)
   const stack = open && stackProp ? stackProp : EMPTY_STACK
 
   useEffect(() => {
@@ -110,10 +114,25 @@ export default function GCodePreviewModal({
     let animId = 0
     let needsContinuousRender = false
     let disposed = false
+    let running = true
+    setGlContextLost(false)
+
+    const detachContextRecovery = attachWebGLContextRecovery(renderer, {
+      onLost: () => {
+        running = false
+        cancelAnimationFrame(animId)
+        setGlContextLost(true)
+        logWebGLContextTelemetry({ viewer: 'GCodePreviewModal', phase: 'lost' })
+      },
+      onRestored: () => {
+        logWebGLContextTelemetry({ viewer: 'GCodePreviewModal', phase: 'restored' })
+        setGlContextKey((k) => k + 1)
+      },
+    })
 
     // Never call controls.update() here: it emits 'change' → requestRender → recursion.
     const renderFrame = () => {
-      if (disposed) return
+      if (disposed || !running) return
       renderer.render(scene, camera)
     }
 
@@ -211,6 +230,8 @@ export default function GCodePreviewModal({
 
     return () => {
       disposed = true
+      running = false
+      detachContextRecovery()
       viewerRef.current = null
       cancelAnimationFrame(bootId)
       cancelAnimationFrame(animId)
@@ -226,7 +247,7 @@ export default function GCodePreviewModal({
       controls.dispose()
       disposeRenderer(renderer)
     }
-  }, [open])
+  }, [open, glContextKey])
 
   useEffect(() => {
     if (!open) return
@@ -297,7 +318,14 @@ export default function GCodePreviewModal({
             </button>
           </div>
         </header>
-        <div ref={mountRef} className="gcode-preview-modal-canvas" />
+        <div className="gcode-preview-modal-viewport">
+          <div ref={mountRef} className="gcode-preview-modal-canvas" />
+          {glContextLost && (
+            <div className="webgl-context-banner webgl-context-banner--modal" role="alert" aria-live="assertive">
+              GPU memory paused the 3D view. Recovering…
+            </div>
+          )}
+        </div>
         <p className="gcode-preview-modal-hint">
           <span className="gcode-preview-legend is-lead-in">lead-in</span>
           <span className="gcode-preview-legend is-cut">cut</span>

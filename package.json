@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "benchmark": "node scripts/benchmark-toolpath.mjs",
-    "benchmark:compare": "node scripts/compare-benchmarks.mjs"
+    "benchmark:compare": "node scripts/compare-benchmarks.mjs",
+    "benchmark:ab": "node scripts/benchmark-ab.mjs",
+    "verify": "node scripts/verify-memory-opt.mjs"
   },
   "dependencies": {
     "d3-contour": "^4.0.2",

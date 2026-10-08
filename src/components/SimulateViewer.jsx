@@ -1,10 +1,12 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import HomeViewButton from './HomeViewButton'
 import { buildWireStack } from '../lib/simStack'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
 import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
+import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
+import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import {
   disposeMaterial,
   disposeObject3D,
@@ -25,6 +27,8 @@ export default function SimulateViewer({
   playbackPoint = null,
 }) {
   const mountRef = useRef(null)
+  const [glContextKey, setGlContextKey] = useState(0)
+  const [glContextLost, setGlContextLost] = useState(false)
   const stateRef = useRef({
     scene: null,
     camera: null,
@@ -105,11 +109,27 @@ export default function SimulateViewer({
       controls.update()
     }
     state.frameCamera = frameCamera
+    setGlContextLost(false)
 
+    let running = true
     let animId = 0
     let needsContinuousRender = false
 
+    const detachContextRecovery = attachWebGLContextRecovery(renderer, {
+      onLost: () => {
+        running = false
+        cancelAnimationFrame(animId)
+        setGlContextLost(true)
+        logWebGLContextTelemetry({ viewer: 'SimulateViewer', phase: 'lost' })
+      },
+      onRestored: () => {
+        logWebGLContextTelemetry({ viewer: 'SimulateViewer', phase: 'restored' })
+        setGlContextKey((k) => k + 1)
+      },
+    })
+
     const renderFrame = () => {
+      if (!running) return
       controls.update()
       renderer.render(scene, camera)
     }
@@ -123,7 +143,7 @@ export default function SimulateViewer({
 
     const animate = () => {
       animId = requestAnimationFrame(animate)
-      if (!needsContinuousRender) return
+      if (!running || !needsContinuousRender) return
       renderFrame()
     }
     animate()
@@ -151,7 +171,9 @@ export default function SimulateViewer({
     renderFrame()
 
     return () => {
+      running = false
       cancelAnimationFrame(animId)
+      detachContextRecovery()
       controls.removeEventListener('change', requestRender)
       controls.removeEventListener('start', onControlsStart)
       controls.removeEventListener('end', onControlsEnd)
@@ -170,7 +192,7 @@ export default function SimulateViewer({
         st.activeWire = null
       }
     }
-  }, [])
+  }, [glContextKey])
 
   useEffect(() => {
     const state = stateRef.current
@@ -339,6 +361,11 @@ export default function SimulateViewer({
     <div className="viewport-wrapper viewport-readonly simulate-viewport">
       <div className="viewport3d" ref={mountRef} />
       <HomeViewButton onClick={goHome} />
+      {glContextLost && (
+        <div className="webgl-context-banner" role="alert" aria-live="assertive">
+          GPU memory paused the 3D view. Recovering…
+        </div>
+      )}
     </div>
   )
 }

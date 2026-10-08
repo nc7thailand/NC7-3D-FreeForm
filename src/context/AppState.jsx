@@ -4,6 +4,7 @@ import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../
 import { load3MFFile } from '../lib/threemf'
 import { importHardRejectMessage, meshImportKind, TARGET_WORKING_TRIANGLES } from '../lib/importLimit'
 import { autoSimplifyMesh, meshTriangleCount } from '../lib/importPipeline'
+import { logImportTelemetry, logToolpathTelemetry } from '../lib/telemetry'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
@@ -598,6 +599,14 @@ export function AppStateProvider({ children }) {
       setCutIndex(0)
       setMenuOpen(false)
       setStatus(`Loaded ${file.name} (${meshTriangleCount(geo).toLocaleString()} triangles)`)
+      logImportTelemetry({
+        fileName: file.name,
+        fileSizeBytes: file.size,
+        kind,
+        triangles: meshTriangleCount(geo),
+        simplified: !!geo.userData?.nc7AutoSimplified,
+        originalTriangles: geo.userData?.nc7OriginalTriangles,
+      })
     } catch (err) {
       setImportAlert(err.message)
       setStatus(`Error: ${err.message}`)
@@ -791,6 +800,7 @@ export function AppStateProvider({ children }) {
     setStatus(`Computing ${total} cuts (N=${n}, ${mode})…`)
     beginBusy('Computing toolpath…', { done: 0, total })
     await yieldToPaint()
+    const toolpathStarted = performance.now()
     try {
       const job = await computeCutJob(async (done, count) => {
         setBusyProgress(done, count)
@@ -803,6 +813,12 @@ export function AppStateProvider({ children }) {
       setCutJob(job)
       const withProfile = job.cuts.filter((c) => c.profile.polylines.length > 0).length
       setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${mode}).`)
+      logToolpathTelemetry({
+        rotationN: job.rotationN ?? n,
+        triangles: meshTriangleCount(geo),
+        durationMs: Math.round(performance.now() - toolpathStarted),
+        worker: typeof Worker !== 'undefined',
+      })
       return true
     } catch (err) {
       setStatus(`Toolpath error: ${err.message}`)

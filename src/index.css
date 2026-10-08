@@ -1796,6 +1796,36 @@ button:hover {
   transform: translateY(1px);
 }
 
+.webgl-context-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 72px;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 204, 51, 0.45);
+  background: rgba(20, 24, 30, 0.94);
+  color: #ffe08a;
+  font-size: 13px;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.webgl-context-banner--modal {
+  bottom: 12px;
+}
+
+.gcode-preview-modal-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ---------- Responsive (mobile) ---------- */
 /* ---------- Phase 2 — CAM split layout ---------- */
 .cam-split {
