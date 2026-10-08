@@ -5,7 +5,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
-import ViewCube from './ViewCube'
+import HomeViewButton from './HomeViewButton'
 import {
   toRadians,
   cuttingPlane,
@@ -143,7 +143,6 @@ export default forwardRef(function Viewer3D(
   const toolbarRef = useRef(null)
   const rotationRef = useRef(null)
   const rotationPanelRef = useRef(null)
-  const viewCubeRef = useRef(null)
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
   const stateRef = useRef({
@@ -573,10 +572,6 @@ export default forwardRef(function Viewer3D(
       inRender = true
       try {
         controls.update()
-
-        if (viewCubeRef.current && state.frameInfo) {
-          viewCubeRef.current.sync(camera, state.frameInfo.center)
-        }
 
         if (state.simOverlay) {
           const opacity = wireBlinkOpacity()
@@ -1464,32 +1459,11 @@ export default forwardRef(function Viewer3D(
     state.rotateByAxis(state.activeAxis, deg)
   }
 
-  // Reposition the camera to a named world view.
-  // useCallback keeps this stable: ViewCube rebuilds its WebGL context when its
-  // callback props change, so a new function per render would remount it on
-  // every frame-affecting state update.
-  const setView = useCallback((view) => {
+  const goHome = useCallback(() => {
     const state = stateRef.current
-    if (state && state.frameCamera) state.frameCamera(view)
+    if (state?.snapCamera) state.snapCamera('home')
+    else state?.frameCamera?.('home')
   }, [])
-
-  // Orbit the camera 90° in a direction (up/down/left/right)
-  const flipView = useCallback((dir) => {
-    const state = stateRef.current
-    if (!state || !state.orbitCamera) return
-    const q = Math.PI / 2
-    if (dir === 'up') state.orbitCamera(0, -q)
-    else if (dir === 'down') state.orbitCamera(0, q)
-    else if (dir === 'left') state.orbitCamera(-q, 0)
-    else if (dir === 'right') state.orbitCamera(q, 0)
-  }, [])
-
-  const orbitView = useCallback((dAzimuth, dPolar) => {
-    const state = stateRef.current
-    if (state && state.orbitCamera) state.orbitCamera(dAzimuth, dPolar)
-  }, [])
-
-  const goHome = useCallback(() => setView('home'), [setView])
 
   return (
     <div className={`viewport-wrapper${readOnly ? ' viewport-readonly' : ''}`}>
@@ -1553,14 +1527,7 @@ export default forwardRef(function Viewer3D(
           </div>
         </>
       )}
-      <ViewCube
-        ref={viewCubeRef}
-        hidden={false}
-        onSetView={setView}
-        onOrbit={orbitView}
-        onFlip={flipView}
-        onHome={goHome}
-      />
+      <HomeViewButton onClick={goHome} />
     </div>
   )
 })

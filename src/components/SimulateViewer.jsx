@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import ViewCube from './ViewCube'
+import HomeViewButton from './HomeViewButton'
 import { buildWireStack } from '../lib/simStack'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
 import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
@@ -25,7 +25,6 @@ export default function SimulateViewer({
   playbackPoint = null,
 }) {
   const mountRef = useRef(null)
-  const viewCubeRef = useRef(null)
   const stateRef = useRef({
     scene: null,
     camera: null,
@@ -91,6 +90,7 @@ export default function SimulateViewer({
       const { center, dist } = info
       let offset
       switch (view) {
+        case 'home': offset = new THREE.Vector3(dist * 1.2, dist * 0.3, 0); break
         case 'front': offset = new THREE.Vector3(0, 0, dist); break
         case 'back': offset = new THREE.Vector3(0, 0, -dist); break
         case 'right': offset = new THREE.Vector3(dist, 0, 0); break
@@ -106,36 +106,11 @@ export default function SimulateViewer({
     }
     state.frameCamera = frameCamera
 
-    const orbitCamera = (dAzimuth, dPolar) => {
-      const info = state.frameInfo
-      if (!info) return
-      const target = info.center
-      const offset = new THREE.Vector3().subVectors(camera.position, target)
-      const r = offset.length()
-      let azimuth = Math.atan2(offset.x, offset.z)
-      let polar = Math.acos(Math.max(-1, Math.min(1, offset.y / r)))
-      azimuth += dAzimuth
-      polar = Math.max(0.05, Math.min(Math.PI - 0.05, polar + dPolar))
-      offset.set(
-        r * Math.sin(polar) * Math.sin(azimuth),
-        r * Math.cos(polar),
-        r * Math.sin(polar) * Math.cos(azimuth),
-      )
-      camera.position.copy(target).add(offset)
-      camera.lookAt(target)
-      controls.target.copy(target)
-      controls.update()
-    }
-    state.orbitCamera = orbitCamera
-
     let animId = 0
     let needsContinuousRender = false
 
     const renderFrame = () => {
       controls.update()
-      if (viewCubeRef.current && state.frameInfo) {
-        viewCubeRef.current.sync(camera, state.frameInfo.center)
-      }
       renderer.render(scene, camera)
     }
 
@@ -358,26 +333,12 @@ export default function SimulateViewer({
   // Declared last so it runs after every other teardown on unmount.
   useEffect(() => () => releaseViewerState(stateRef.current), [])
 
-  const setView = (view) => stateRef.current?.frameCamera?.(view)
-  const orbitView = (dAzimuth, dPolar) => stateRef.current?.orbitCamera?.(dAzimuth, dPolar)
-  const flipView = (dir) => {
-    const q = Math.PI / 2
-    if (dir === 'up') orbitView(0, -q)
-    else if (dir === 'down') orbitView(0, q)
-    else if (dir === 'left') orbitView(-q, 0)
-    else if (dir === 'right') orbitView(q, 0)
-  }
+  const goHome = () => stateRef.current?.frameCamera?.('home')
 
   return (
     <div className="viewport-wrapper viewport-readonly simulate-viewport">
       <div className="viewport3d" ref={mountRef} />
-      <ViewCube
-        ref={viewCubeRef}
-        onSetView={setView}
-        onOrbit={orbitView}
-        onFlip={flipView}
-        onHome={() => setView('iso')}
-      />
+      <HomeViewButton onClick={goHome} />
     </div>
   )
 }

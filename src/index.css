@@ -151,7 +151,7 @@ body {
   padding-bottom: 0;
 }
 
-.page-main--no-nav .view-cube-widget {
+.page-main--no-nav .viewport-home-btn {
   bottom: 12px;
 }
 
@@ -1064,7 +1064,7 @@ body {
   bottom: calc(58px + env(safe-area-inset-bottom) + 36px);
 }
 
-.page-main .view-cube-widget {
+.page-main .viewport-home-btn {
   bottom: calc(58px + env(safe-area-inset-bottom) + 8px);
 }
 
@@ -1766,83 +1766,34 @@ button:hover {
   background: #1f5d9c;
 }
 
-/* ---------- View Cube widget (Three.js mini viewport) ---------- */
-.view-cube-widget {
+/* ---------- Home view reset (replaces ViewCube mini viewport) ---------- */
+.viewport-home-btn {
   position: absolute;
   right: 12px;
   bottom: 12px;
   z-index: 10;
-  width: 120px;
-  height: 120px;
-  touch-action: none;
-}
-.vc-canvas {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  width: 80px;
-  height: 80px;
-  border-radius: 8px;
-  overflow: hidden;
-  cursor: grab;
-}
-.vc-canvas:active {
-  cursor: grabbing;
-}
-.vc-canvas canvas {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
-}
-
-.vc-arrow {
-  position: absolute;
-  width: 26px;
-  height: 26px;
+  width: 36px;
+  height: 36px;
   margin: 0;
   padding: 0;
   background: rgba(20, 24, 30, 0.92);
   border: 1px solid #2a3340;
-  border-radius: 6px;
-  color: #9fb0c0;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 5;
-}
-.vc-arrow:hover {
-  background: #2b6cb0;
-  color: #fff;
-}
-.vc-up    { top: 0;   left: 47px; }
-.vc-down  { bottom: 0; left: 47px; }
-.vc-left  { top: 47px;  left: 0; }
-.vc-right { top: 47px;  right: 0; }
-
-.vc-home {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 26px;
-  height: 26px;
-  margin: 0;
-  padding: 5px;
-  background: rgba(20, 24, 30, 0.92);
-  border: 1px solid #2a3340;
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffcc33;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 6;
+  touch-action: manipulation;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
-.vc-home:hover {
+.viewport-home-btn:hover {
   background: #2b6cb0;
   color: #fff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.viewport-home-btn:active {
+  transform: translateY(1px);
 }
 
 /* ---------- Responsive (mobile) ---------- */
@@ -1954,9 +1905,6 @@ button:hover {
   background: #1a1f28;
   color: #c8d0dc;
   font-size: 13px;
-}
-.view-cube-widget--hidden {
-  display: none;
 }
 .path-preview-section,
 .model-viewport-section {
@@ -3051,34 +2999,12 @@ button:hover {
     padding: 2px 8px;
   }
 
-  .page-main--toolpath .view-cube-widget {
-    width: 72px;
-    height: 72px;
+  .page-main--toolpath .viewport-home-btn {
+    width: 32px;
+    height: 32px;
     right: 4px;
     bottom: calc(58px + env(safe-area-inset-bottom) + 4px);
   }
-
-  .page-main--toolpath .vc-canvas {
-    top: 11px;
-    left: 11px;
-    width: 50px;
-    height: 50px;
-  }
-
-  .page-main--toolpath .vc-up,
-  .page-main--toolpath .vc-down,
-  .page-main--toolpath .vc-left,
-  .page-main--toolpath .vc-right,
-  .page-main--toolpath .vc-home {
-    width: 18px;
-    height: 18px;
-    font-size: 8px;
-  }
-
-  .page-main--toolpath .vc-up { top: 0; left: 27px; }
-  .page-main--toolpath .vc-down { bottom: 0; left: 27px; }
-  .page-main--toolpath .vc-left { top: 27px; left: 0; }
-  .page-main--toolpath .vc-right { top: 27px; right: 0; }
 }
 
 @media (max-width: 900px) {
@@ -3184,28 +3110,12 @@ button:hover {
     padding: 6px 8px;
     font-size: 11px;
   }
-  .view-cube-widget {
+  .viewport-home-btn {
     right: 8px;
     bottom: 8px;
-    width: 100px;
-    height: 100px;
+    width: 32px;
+    height: 32px;
   }
-  .vc-canvas {
-    top: 16px;
-    left: 16px;
-    width: 68px;
-    height: 68px;
-  }
-  .vc-up, .vc-down, .vc-left, .vc-right, .vc-home {
-    width: 22px;
-    height: 22px;
-    font-size: 10px;
-  }
-  .vc-up    { top: 0;   left: 39px; }
-  .vc-down  { bottom: 0; left: 39px; }
-  .vc-left  { top: 39px;  left: 0; }
-  .vc-right { top: 39px;  right: 0; }
-  .vc-home  { top: 0;   left: 0; }
 }
 
 @media (max-width: 480px) {
