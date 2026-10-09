@@ -3,7 +3,7 @@
 **Date:** 2026-10-09  
 **Audience:** New Cursor / Cloud Agent session  
 **Repo:** `github.com/nc7thailand/NC7-3D-FreeForm` (local: `NC7Studio3D`)  
-**Active branch:** `cursor/native-cam-webview-ipc-9251` (based on `feature/memory-optimization`)  
+**Active branch:** `cursor/wasm-silhouette-9251` (plan 9, based on `cursor/native-cam-webview-ipc-9251`)  
 **Current save point (rollback here):** tag `savepoint/native-cam-ipc-2026-10-09` → commit `fc47bd7`
 
 **Previous save point:** `savepoint/view-resolution-hud-2026-10-09` → `6595606` (Hi/Lo viewport, HUD, dark modals)
@@ -19,9 +19,9 @@ Browser-side memory and UX work on **`feature/memory-optimization`** is in good 
 | # | Item | Status |
 |---|------|--------|
 | **8** | Native C++ CAM backend + WebView2 IPC | **Skeleton saved** (`fc47bd7`). Production toolpaths stay on the JS worker until `productionReady` |
-| **9** | WASM port of silhouette hot loop (optional if JS worker still bottleneck) | **Not started** |
+| **9** | WASM port of silhouette hot loop | **Landed.** Occupancy raster is WASM; `d3-contour` stays in JS. Disable with `__NC7_SILHOUETTE_WASM__ = false` |
 
-**Recommendation:** **#8** skeleton is the current save point. Do **#9** only after profiling proves the worker silhouette loop is still the limit.
+**Recommendation:** **#8** remains a skeleton. **#9** replaces only the per-triangle raster. Meshoptimizer decimation is still lower priority.
 
 ---
 
@@ -66,8 +66,8 @@ Browser-side memory and UX work on **`feature/memory-optimization`** is in good 
 ```
 Main thread:  import, simplify (load), live silhouette preview (debounced), Three.js views
 Web Worker:   camWorker — computeToolpath (N × silhouette raster + overlay), compileGcode
-WASM:         none
-Native C++:   none (plan 8)
+WASM:         silhouette occupancy raster (src/wasm/silhouette_raster.wat); contour stays in JS
+Native C++:   skeleton (plan 8, productionReady false)
 ```
 
 **Heaviest JS path:** `src/lib/silhouette.js` — triangle raster + `d3-contour` per cut angle (worker for full job).
@@ -112,12 +112,14 @@ Native C++:   none (plan 8)
 
 **Goal:** Port inner loop of per-angle rasterization if profiling shows worker JS is still too slow/RAM-heavy.
 
+**Landed:** `src/wasm/silhouette_raster.wat` fills the occupancy grid and is the default raster. `extractLeftSilhouette` / `extractFullSilhouette` still trace the contour with `d3-contour` and still fall back to the JS raster if the module cannot start. Copies go through the module's own memory, so COOP/COEP and SharedArrayBuffer are not used. Set `__NC7_SILHOUETTE_WASM__ = false` to keep the JS loop. Rebuild with `npm run build:wasm`. `npm run verify:wasm` checks the grid and the traced silhouette cell for cell.
+
 **Prerequisites:**
 
 - COOP/COEP **not** required if using transferable buffers in/out (no SharedArrayBuffer).
-- Consider **meshoptimizer (WASM)** for import simplify first if decimation remains a pain (lower priority after proxy cache).
+- Consider **meshoptimizer (WASM)** for import simplify first if decimation remains a pain (lower priority after proxy cache). Not in this pass.
 
-**Do not** full-rewrite CAM in WASM before **#8** spike proves need.
+**Do not** full-rewrite CAM in WASM. The native skeleton from **#8** is still not the production silhouette.
 
 ---
 

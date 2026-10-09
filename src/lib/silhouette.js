@@ -10,6 +10,7 @@
 
 import * as THREE from 'three'
 import { traceGridBoundary } from './gridContour.js'
+import { tryRasterizeWithWasm } from './silhouetteRasterWasm.js'
 
 const BBOX_CORNERS = [
   new THREE.Vector3(),
@@ -169,16 +170,35 @@ function rasterGrid(cellCount, scratch) {
     : scratch.grid.subarray(0, cellCount)
 }
 
-function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy, scratch) {
-  const bounds = sectionBounds(bbox, frame)
-  if (bounds.vMax <= bounds.vMin + 1e-6) return { left: [], right: [], occupied: 0 }
+let rasterEngine = 'js'
 
-  const spec = shadowGridSpec(bounds, profileAccuracy)
-  const grid = rasterGrid(spec.uBins * spec.vBins, scratch)
+/** 'wasm' when the last occupancy fill ran in the raster module, otherwise 'js'. */
+export function silhouetteRasterEngine() {
+  return rasterEngine
+}
 
+function wasmRasterEnabled() {
+  return globalThis.__NC7_SILHOUETTE_WASM__ !== false
+}
+
+/**
+ * Stamp every projected triangle into `grid`. WASM is the hot path.
+ * A failed or disabled module leaves the JS loop, which is the reference.
+ */
+function rasterizeProjectedMesh(geometry, frame, spec, grid) {
   const pos = geometry.attributes.position?.array
-  if (!pos || pos.length < 9) return { left: [], right: [], occupied: 0 }
+  const index = geometry.index?.array ?? null
+  if (wasmRasterEnabled() && tryRasterizeWithWasm(pos, index, frame, spec, grid)) {
+    rasterEngine = 'wasm'
+    return
+  }
+  rasterizeProjectedMeshJS(geometry, frame, spec, grid)
+  rasterEngine = 'js'
+}
 
+function rasterizeProjectedMeshJS(geometry, frame, spec, grid) {
+  const pos = geometry.attributes.position?.array
+  if (!pos || pos.length < 9) return
   const index = geometry.index?.array
   const triCount = index ? index.length / 3 : pos.length / 9
   const v0 = new THREE.Vector3()
@@ -192,9 +212,55 @@ function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy, scratc
     v0.fromArray(pos, i0 * 3)
     v1.fromArray(pos, i1 * 3)
     v2.fromArray(pos, i2 * 3)
-    fillProjectedTriangle(grid, spec.uBins, spec, projectToSection(v0, frame), projectToSection(v1, frame), projectToSection(v2, frame))
+    fillProjectedTriangle(
+      grid,
+      spec.uBins,
+      spec,
+      projectToSection(v0, frame),
+      projectToSection(v1, frame),
+      projectToSection(v2, frame),
+    )
   }
+}
 
+/**
+ * Occupancy grid for the projected mesh. `engine` is 'auto', 'js', or 'wasm'.
+ * Used to prove the WASM raster matches the JS loop cell for cell.
+ */
+export function projectShadowGrid(geometry, frame, opts = {}, engine = 'auto') {
+  const pos = geometry.attributes?.position
+  if (!pos || pos.count < 3) return null
+  geometry.computeBoundingBox()
+  const bbox = geometry.boundingBox
+  if (!bbox || bbox.isEmpty()) return null
+  const bounds = sectionBounds(bbox, frame)
+  const spec = shadowGridSpec(bounds, opts.profileAccuracy ?? 5, opts.gridBins ?? null)
+  const grid = new Uint8Array(spec.uBins * spec.vBins)
+  const previous = globalThis.__NC7_SILHOUETTE_WASM__
+  if (engine === 'js') globalThis.__NC7_SILHOUETTE_WASM__ = false
+  if (engine === 'wasm') globalThis.__NC7_SILHOUETTE_WASM__ = true
+  try {
+    rasterizeProjectedMesh(geometry, frame, spec, grid)
+    return { grid, spec, engine: rasterEngine }
+  } finally {
+    if (engine !== 'auto') {
+      if (previous === undefined) delete globalThis.__NC7_SILHOUETTE_WASM__
+      else globalThis.__NC7_SILHOUETTE_WASM__ = previous
+    }
+  }
+}
+
+function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy, scratch) {
+  const bounds = sectionBounds(bbox, frame)
+  if (bounds.vMax <= bounds.vMin + 1e-6) return { left: [], right: [], occupied: 0 }
+
+  const spec = shadowGridSpec(bounds, profileAccuracy)
+  const grid = rasterGrid(spec.uBins * spec.vBins, scratch)
+
+  const pos = geometry.attributes.position?.array
+  if (!pos || pos.length < 9) return { left: [], right: [], occupied: 0 }
+
+  rasterizeProjectedMesh(geometry, frame, spec, grid)
   return extentsFromShadowGrid(grid, spec)
 }
 
@@ -339,22 +405,7 @@ function projectShadowContour(geometry, frame, bbox, profileAccuracy, gridBins =
   const pos = geometry.attributes.position?.array
   if (!pos || pos.length < 9) return []
 
-  const index = geometry.index?.array
-  const triCount = index ? index.length / 3 : pos.length / 9
-  const v0 = new THREE.Vector3()
-  const v1 = new THREE.Vector3()
-  const v2 = new THREE.Vector3()
-
-  for (let t = 0; t < triCount; t++) {
-    const i0 = index ? index[t * 3] : t * 3
-    const i1 = index ? index[t * 3 + 1] : t * 3 + 1
-    const i2 = index ? index[t * 3 + 2] : t * 3 + 2
-    v0.fromArray(pos, i0 * 3)
-    v1.fromArray(pos, i1 * 3)
-    v2.fromArray(pos, i2 * 3)
-    fillProjectedTriangle(grid, spec.uBins, spec, projectToSection(v0, frame), projectToSection(v1, frame), projectToSection(v2, frame))
-  }
-
+  rasterizeProjectedMesh(geometry, frame, spec, grid)
   const contour = traceGridBoundary(grid, spec)
   return dedupePoints(contour, Math.max(spec.uStep, spec.vStep))
 }

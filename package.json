@@ -11,8 +11,10 @@
     "benchmark": "node scripts/benchmark-toolpath.mjs",
     "benchmark:compare": "node scripts/compare-benchmarks.mjs",
     "benchmark:ab": "node scripts/benchmark-ab.mjs",
-    "verify": "node scripts/verify-memory-opt.mjs && node scripts/verify-cam-ipc.mjs",
-    "verify:cam-ipc": "node scripts/verify-cam-ipc.mjs"
+    "build:wasm": "node scripts/build-silhouette-wasm.mjs",
+    "verify": "node scripts/verify-memory-opt.mjs && node scripts/verify-cam-ipc.mjs && node scripts/verify-silhouette-wasm.mjs",
+    "verify:cam-ipc": "node scripts/verify-cam-ipc.mjs",
+    "verify:wasm": "node scripts/verify-silhouette-wasm.mjs"
   },
   "dependencies": {
     "d3-contour": "^4.0.2",
@@ -22,8 +24,10 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",
+    "binaryen": "^132.0.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "vite": "^5.2.0"
+    "vite": "^5.2.0",
+    "wabt": "^1.0.39"
   }
 }
