@@ -6,6 +6,14 @@ import {
   runToolpathPipelineFromPayload,
 } from './camPipeline.js'
 import { planePointFromStock } from './toolpath.js'
+import {
+  encodeGeometryForNative,
+  postNativeCam,
+  rejectNativeCamPending,
+  resolveCamBackend,
+} from './camBackend.js'
+
+export { resolveCamBackend }
 
 let worker = null
 let requestId = 0
@@ -14,6 +22,11 @@ const pending = new Map()
 
 function supportsWorkers() {
   return typeof Worker !== 'undefined'
+}
+
+function tagJob(cutJob, backend) {
+  if (cutJob) cutJob.camBackend = backend
+  return cutJob
 }
 
 function getWorker() {
@@ -46,11 +59,9 @@ function getWorker() {
   return worker
 }
 
-function post(action, payload, { onProgress, transferables = [] } = {}) {
+function postToWorker(action, payload, { onProgress, transferables = [] } = {}) {
   const w = getWorker()
-  if (!w) {
-    return runOnMainThread(action, payload, onProgress)
-  }
+  if (!w) return runOnMainThread(action, payload, onProgress)
 
   const id = ++requestId
   return new Promise((resolve, reject) => {
@@ -71,27 +82,54 @@ async function runOnMainThread(action, payload, onProgress) {
   throw new Error(`Unknown action: ${action}`)
 }
 
+function toolpathPayload(geometry, { rotationN, stock, cutMode }) {
+  const pp = planePointFromStock(stock)
+  return {
+    rotationN,
+    stock,
+    cutMode,
+    planePoint: [pp.x, pp.y, pp.z],
+    geometry,
+  }
+}
+
 /**
  * @param {THREE.BufferGeometry} geometry
  * @param {object} params
  * @param {(done: number, total: number) => void} [params.onProgress]
  */
-export function computeToolpathInWorker(geometry, {
+export async function computeToolpathInWorker(geometry, {
   rotationN,
   stock,
   cutMode,
   onProgress,
 }) {
-  const { payload: geometryPayload, transferables } = serializeGeometryForWorker(geometry)
-  const pp = planePointFromStock(stock)
+  const backend = resolveCamBackend()
+  if (backend === 'native') {
+    const msg = await postNativeCam('computeToolpath', toolpathPayload(
+      encodeGeometryForNative(geometry),
+      { rotationN, stock, cutMode },
+    ), { onProgress })
+    return tagJob(msg.cutJob, 'native')
+  }
 
-  return post('computeToolpath', {
-    geometry: geometryPayload,
+  if (backend === 'main' || !supportsWorkers()) {
+    const cutJob = await computeToolpathOnMainThread(geometry, {
+      rotationN,
+      stock,
+      cutMode,
+      onProgress,
+    })
+    return tagJob(cutJob, 'main')
+  }
+
+  const { payload: geometryPayload, transferables } = serializeGeometryForWorker(geometry)
+  const msg = await postToWorker('computeToolpath', toolpathPayload(geometryPayload, {
     rotationN,
     stock,
     cutMode,
-    planePoint: [pp.x, pp.y, pp.z],
-  }, { onProgress, transferables }).then((msg) => msg.cutJob)
+  }), { onProgress, transferables })
+  return tagJob(msg.cutJob, 'worker')
 }
 
 /** Main-thread fallback for tests and worker-less environments. */
@@ -111,13 +149,30 @@ export async function computeToolpathOnMainThread(geometry, params) {
  * @param {object} gcodeSettings
  * @param {THREE.BufferGeometry|null} [geometry]
  */
-export function compileGcodeInWorker(cutJob, gcodeSettings, geometry = null) {
+export async function compileGcodeInWorker(cutJob, gcodeSettings, geometry = null) {
+  // G-code stays on the worker until the native hello lists compileGcode.
+  if (resolveCamBackend() === 'native') {
+    try {
+      const msg = await postNativeCam('compileGcode', {
+        cutJob,
+        gcodeSettings,
+        geometry: encodeGeometryForNative(geometry),
+      })
+      return msg.gcodeResult
+    } catch (err) {
+      const missing = err?.code === 'NC7_NATIVE_UNSUPPORTED'
+        || /transport is not available|did not respond to hello/.test(err?.message ?? '')
+      if (!missing) throw err
+    }
+  }
+
   const { payload: geometryPayload, transferables } = serializeGeometryForWorker(geometry)
-  return post('compileGcode', {
+  const msg = await postToWorker('compileGcode', {
     cutJob,
     gcodeSettings,
     geometry: geometryPayload,
-  }, { transferables }).then((msg) => msg.gcodeResult)
+  }, { transferables })
+  return msg.gcodeResult
 }
 
 export function compileGcodeOnMainThread(cutJob, gcodeSettings, geometry = null) {
@@ -125,6 +180,7 @@ export function compileGcodeOnMainThread(cutJob, gcodeSettings, geometry = null)
 }
 
 export function terminateCamWorker() {
+  rejectNativeCamPending('CAM worker terminated')
   for (const [, entry] of pending) {
     entry.reject(new Error('CAM worker terminated'))
   }

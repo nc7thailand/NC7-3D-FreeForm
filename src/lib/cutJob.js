@@ -1,4 +1,4 @@
-import { buildSectionProfile } from './toolpath.js'
+import { buildSectionProfile, geometryForToolpathSlicing } from './toolpath.js'
 
 /**
  * Cut modes:
@@ -68,12 +68,25 @@ export async function buildCutJob(geometry, rotationN, planePoint, options = {})
   const silhouetteOpts = options.silhouetteOpts ?? {}
   const angles = cutAnglesForN(userN, { mode })
   const onProgress = options.onProgress
+  const prepared = options.prepared === true
+  const sliceGeo = prepared
+    ? geometry
+    : geometryForToolpathSlicing(geometry, options.worldMatrix ?? null)
+  const rasterScratch = options.rasterScratch ?? { grid: null }
   const cuts = []
-  for (let index = 0; index < angles.length; index++) {
-    const thetaDeg = angles[index]
-    const profile = buildSectionProfile(geometry, thetaDeg, planePoint, null, silhouetteOpts)
-    cuts.push({ index, thetaDeg, profile })
-    if (onProgress) await onProgress(index + 1, angles.length)
+  try {
+    for (let index = 0; index < angles.length; index++) {
+      const thetaDeg = angles[index]
+      const profile = buildSectionProfile(sliceGeo, thetaDeg, planePoint, null, {
+        ...silhouetteOpts,
+        prepared: true,
+        rasterScratch,
+      })
+      cuts.push({ index, thetaDeg, profile })
+      if (onProgress) await onProgress(index + 1, angles.length)
+    }
+  } finally {
+    if (!prepared) sliceGeo?.dispose()
   }
   return {
     rotationN: userN,

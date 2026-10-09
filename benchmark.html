@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NC7 Toolpath Benchmark</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #15181c;
+      color: #c8d4e0;
+      padding: 24px;
+    }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { color: #9fb0c0; max-width: 720px; line-height: 1.5; }
+    button {
+      margin: 16px 0;
+      padding: 10px 16px;
+      background: #2b6cb0;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+    }
+    pre {
+      background: #0f1216;
+      border: 1px solid #2a3340;
+      border-radius: 8px;
+      padding: 12px;
+      white-space: pre-wrap;
+      max-width: 960px;
+    }
+    textarea {
+      width: min(960px, 100%);
+      min-height: 220px;
+      background: #0f1216;
+      color: #9fd3a8;
+      border: 1px solid #2a3340;
+      border-radius: 8px;
+      padding: 12px;
+      font: inherit;
+    }
+  </style>
+</head>
+<body>
+  <h1>NC7 Toolpath A/B Benchmark (Browser)</h1>
+  <p>
+    Run while <code>npm run dev</code> is up. Uses <code>performance.memory</code>
+    in Chrome during N-angle profile and overlay raster passes on the Knight STL.
+    Save the JSON, then compare with <code>node scripts/compare-benchmarks.mjs</code>.
+  </p>
+  <button id="run" type="button">Run benchmark</button>
+  <pre id="log"></pre>
+  <textarea id="json" readonly placeholder="JSON report appears here…"></textarea>
+  <script type="module" src="/src/benchmark/browserBenchmark.js"></script>
+</body>
+</html>

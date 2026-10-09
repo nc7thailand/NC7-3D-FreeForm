@@ -1,11 +1,22 @@
-import React from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import SmartNumberInput from '../components/SmartNumberInput'
 import Viewer3D from '../components/Viewer3D'
 import ProjectPanel from '../components/ProjectPanel'
 import PageNav from '../components/PageNav'
+import {
+  ImportRecommendationDialog,
+  LargeFileWarningDialog,
+  OptimizeSuccessDialog,
+} from '../components/ModelImportDialogs'
+import { importSizeTier } from '../lib/importLimit'
 import { useAppState } from '../context/AppState'
 
 function ModelPanel() {
+  const fileRef = useRef(null)
+  const recommendationSeenRef = useRef(false)
+  const [showRecommendation, setShowRecommendation] = useState(false)
+  const [pendingLargeFile, setPendingLargeFile] = useState(null)
+
   const {
     menuOpen,
     setMenuOpen,
@@ -13,7 +24,11 @@ function ModelPanel() {
     setUnit,
     target,
     setTarget,
-    handleFile,
+    processMeshFile,
+    importAlert,
+    clearImportAlert,
+    importOptimizeSuccess,
+    dismissImportOptimizeSuccess,
     handleResize,
     handleSettle,
     handleSimplify,
@@ -21,8 +36,66 @@ function ModelPanel() {
     handleReset,
   } = useAppState()
 
+  const openFilePicker = useCallback(() => {
+    fileRef.current?.click()
+  }, [])
+
+  const beginImport = useCallback(() => {
+    if (!recommendationSeenRef.current) {
+      recommendationSeenRef.current = true
+      setShowRecommendation(true)
+      return
+    }
+    openFilePicker()
+  }, [openFilePicker])
+
+  const handleRecommendationContinue = useCallback(() => {
+    setShowRecommendation(false)
+    openFilePicker()
+  }, [openFilePicker])
+
+  const queueFileImport = useCallback((file) => {
+    if (importSizeTier(file) === 'large') {
+      setPendingLargeFile(file)
+      return
+    }
+    processMeshFile(file)
+  }, [processMeshFile])
+
+  const handleFileSelected = useCallback((e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    queueFileImport(file)
+  }, [queueFileImport])
+
+  const handleLargeFileProceed = useCallback(() => {
+    if (pendingLargeFile) processMeshFile(pendingLargeFile)
+    setPendingLargeFile(null)
+  }, [pendingLargeFile, processMeshFile])
+
+  const handleLargeFileCancel = useCallback(() => {
+    setPendingLargeFile(null)
+  }, [])
+
   return (
     <>
+      <ImportRecommendationDialog
+        open={showRecommendation}
+        onContinue={handleRecommendationContinue}
+      />
+      <LargeFileWarningDialog
+        open={!!pendingLargeFile}
+        file={pendingLargeFile}
+        onCancel={handleLargeFileCancel}
+        onProceed={handleLargeFileProceed}
+      />
+      <OptimizeSuccessDialog
+        open={importOptimizeSuccess.open}
+        summary={importOptimizeSuccess}
+        onDismiss={dismissImportOptimizeSuccess}
+      />
+
       {menuOpen && <div className="backdrop" onClick={() => setMenuOpen(false)} />}
       <aside className={`control-panel${menuOpen ? ' open' : ''}`}>
         <button
@@ -35,12 +108,24 @@ function ModelPanel() {
         </button>
 
         <section className="panel">
-          <h2>Load STL</h2>
+          <h2>Load model</h2>
+          <p className="panel-hint">STL or 3MF up to 20 MB. Models over 10 MB show a performance warning; dense meshes auto-simplify to 50,000 triangles.</p>
           <input
+            ref={fileRef}
             type="file"
-            accept=".stl"
-            onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])}
+            accept=".stl,.3mf,model/stl,model/3mf"
+            hidden
+            onChange={handleFileSelected}
           />
+          <button type="button" className="import-browse-btn" onClick={beginImport}>
+            Choose model file…
+          </button>
+          {importAlert && (
+            <div className="import-alert" role="alert">
+              <p>{importAlert}</p>
+              <button type="button" onClick={clearImportAlert}>OK</button>
+            </div>
+          )}
         </section>
 
         <section className="panel">

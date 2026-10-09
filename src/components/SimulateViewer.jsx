@@ -1,9 +1,13 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import ViewCube from './ViewCube'
+import HomeViewButton from './HomeViewButton'
 import { buildWireStack } from '../lib/simStack'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
+import { resolveToolpathDisplayGeometry, triangleCount } from '../lib/meshProxy.js'
+import { assignViewportMeshGeometry } from '../lib/viewportDisplayShell.js'
+import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
+import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import {
   disposeMaterial,
   disposeObject3D,
@@ -22,9 +26,12 @@ export default function SimulateViewer({
   wireOnly = false,
   activeCutIndex = 0,
   playbackPoint = null,
+  displayProxy = false,
+  onDisplayShellStats,
 }) {
   const mountRef = useRef(null)
-  const viewCubeRef = useRef(null)
+  const [glContextKey, setGlContextKey] = useState(0)
+  const [glContextLost, setGlContextLost] = useState(false)
   const stateRef = useRef({
     scene: null,
     camera: null,
@@ -90,6 +97,7 @@ export default function SimulateViewer({
       const { center, dist } = info
       let offset
       switch (view) {
+        case 'home': offset = new THREE.Vector3(dist * 1.2, dist * 0.3, 0); break
         case 'front': offset = new THREE.Vector3(0, 0, dist); break
         case 'back': offset = new THREE.Vector3(0, 0, -dist); break
         case 'right': offset = new THREE.Vector3(dist, 0, 0); break
@@ -104,37 +112,28 @@ export default function SimulateViewer({
       controls.update()
     }
     state.frameCamera = frameCamera
+    setGlContextLost(false)
 
-    const orbitCamera = (dAzimuth, dPolar) => {
-      const info = state.frameInfo
-      if (!info) return
-      const target = info.center
-      const offset = new THREE.Vector3().subVectors(camera.position, target)
-      const r = offset.length()
-      let azimuth = Math.atan2(offset.x, offset.z)
-      let polar = Math.acos(Math.max(-1, Math.min(1, offset.y / r)))
-      azimuth += dAzimuth
-      polar = Math.max(0.05, Math.min(Math.PI - 0.05, polar + dPolar))
-      offset.set(
-        r * Math.sin(polar) * Math.sin(azimuth),
-        r * Math.cos(polar),
-        r * Math.sin(polar) * Math.cos(azimuth),
-      )
-      camera.position.copy(target).add(offset)
-      camera.lookAt(target)
-      controls.target.copy(target)
-      controls.update()
-    }
-    state.orbitCamera = orbitCamera
-
+    let running = true
     let animId = 0
     let needsContinuousRender = false
 
+    const detachContextRecovery = attachWebGLContextRecovery(renderer, {
+      onLost: () => {
+        running = false
+        cancelAnimationFrame(animId)
+        setGlContextLost(true)
+        logWebGLContextTelemetry({ viewer: 'SimulateViewer', phase: 'lost' })
+      },
+      onRestored: () => {
+        logWebGLContextTelemetry({ viewer: 'SimulateViewer', phase: 'restored' })
+        setGlContextKey((k) => k + 1)
+      },
+    })
+
     const renderFrame = () => {
+      if (!running) return
       controls.update()
-      if (viewCubeRef.current && state.frameInfo) {
-        viewCubeRef.current.sync(camera, state.frameInfo.center)
-      }
       renderer.render(scene, camera)
     }
 
@@ -147,7 +146,7 @@ export default function SimulateViewer({
 
     const animate = () => {
       animId = requestAnimationFrame(animate)
-      if (!needsContinuousRender) return
+      if (!running || !needsContinuousRender) return
       renderFrame()
     }
     animate()
@@ -175,14 +174,18 @@ export default function SimulateViewer({
     renderFrame()
 
     return () => {
+      running = false
       cancelAnimationFrame(animId)
+      detachContextRecovery()
       controls.removeEventListener('change', requestRender)
       controls.removeEventListener('start', onControlsStart)
       controls.removeEventListener('end', onControlsEnd)
       window.removeEventListener('resize', onResize)
       controls.dispose()
       const st = stateRef.current
-      disposeSceneContents(scene, { keepGeometries: [st?.mesh?.geometry] })
+      disposeSceneContents(scene, {
+        keepGeometries: st?.ownedDisplayGeometry ? [] : [st?.mesh?.geometry],
+      })
       disposeRenderer(renderer)
       if (st) {
         st.mesh = null
@@ -192,20 +195,27 @@ export default function SimulateViewer({
         st.activeWire = null
       }
     }
-  }, [])
+  }, [glContextKey])
 
   useEffect(() => {
     const state = stateRef.current
     if (!state?.scene) return
 
     if (state.mesh) {
-      // Geometry is owned by AppState.
+      // App-owned geometry stays alive. A display proxy is freed here.
       state.scene.remove(state.mesh)
       disposeMaterial(state.mesh.material)
     }
     state.mesh = null
+    state.ownedDisplayGeometry = null
 
     if (!geometry) return
+
+    const tri = triangleCount(geometry)
+    const resolved = displayProxy
+      ? resolveToolpathDisplayGeometry(geometry)
+      : { geometry, sourceTriangles: tri, displayTriangles: tri, cached: true }
+    const meshGeometry = resolved.geometry
 
     geometry.computeBoundingBox()
 
@@ -218,7 +228,7 @@ export default function SimulateViewer({
       transparent: true,
       opacity: 0.85,
     })
-    const mesh = new THREE.Mesh(geometry, mat)
+    const mesh = new THREE.Mesh(meshGeometry, mat)
     state.mesh = mesh
     state.scene.add(mesh)
 
@@ -241,8 +251,27 @@ export default function SimulateViewer({
       state.scene.add(grid)
       state.floorGrid = grid
     }
+    onDisplayShellStats?.({
+      viewMode: displayProxy ? 'lo' : 'hi',
+      sourceTriangles: resolved.sourceTriangles,
+      displayTriangles: resolved.displayTriangles,
+      cached: resolved.cached !== false,
+      buildMs: resolved.buildMs ?? 0,
+      heapMiB: typeof performance !== 'undefined' && performance.memory
+        ? Math.round((performance.memory.usedJSHeapSize / (1024 * 1024)) * 10) / 10
+        : null,
+      singleMesh: true,
+    })
     state.requestRender?.()
   }, [geometry, resetKey])
+
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.mesh || !geometry) return
+    const result = assignViewportMeshGeometry(state, geometry, displayProxy)
+    onDisplayShellStats?.(result.stats)
+    if (result.changed) state.requestRender?.()
+  }, [displayProxy, geometry, onDisplayShellStats])
 
   useEffect(() => {
     const state = stateRef.current
@@ -347,26 +376,17 @@ export default function SimulateViewer({
   // Declared last so it runs after every other teardown on unmount.
   useEffect(() => () => releaseViewerState(stateRef.current), [])
 
-  const setView = (view) => stateRef.current?.frameCamera?.(view)
-  const orbitView = (dAzimuth, dPolar) => stateRef.current?.orbitCamera?.(dAzimuth, dPolar)
-  const flipView = (dir) => {
-    const q = Math.PI / 2
-    if (dir === 'up') orbitView(0, -q)
-    else if (dir === 'down') orbitView(0, q)
-    else if (dir === 'left') orbitView(-q, 0)
-    else if (dir === 'right') orbitView(q, 0)
-  }
+  const goHome = () => stateRef.current?.frameCamera?.('home')
 
   return (
     <div className="viewport-wrapper viewport-readonly simulate-viewport">
       <div className="viewport3d" ref={mountRef} />
-      <ViewCube
-        ref={viewCubeRef}
-        onSetView={setView}
-        onOrbit={orbitView}
-        onFlip={flipView}
-        onHome={() => setView('iso')}
-      />
+      <HomeViewButton onClick={goHome} />
+      {glContextLost && (
+        <div className="webgl-context-banner" role="alert" aria-live="assertive">
+          GPU memory paused the 3D view. Recovering…
+        </div>
+      )}
     </div>
   )
 }

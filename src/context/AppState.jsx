@@ -1,15 +1,20 @@
 import React, { createContext, useContext, useRef, useState, useCallback, useEffect } from 'react'
 import * as THREE from 'three'
 import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../lib/stl'
+import { load3MFFile } from '../lib/threemf'
+import { importHardRejectMessage, meshImportKind, TARGET_WORKING_TRIANGLES } from '../lib/importLimit'
+import { autoSimplifyMesh, meshTriangleCount } from '../lib/importPipeline'
+import { disposeDisplayProxyCache } from '../lib/meshProxy.js'
+import { logImportTelemetry, logToolpathTelemetry } from '../lib/telemetry'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
 import { settleGeometry, bakeMeshTransform, ensureGeometryOnFloor } from '../lib/settle'
 import { applyModelBlockOffset } from '../lib/modelBlockOffset'
 import { simplifyGeometry } from '../lib/simplify'
-import { buildSectionProfile, buildFullSilhouettePreview, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
+import { buildSectionProfile, buildFullSilhouettePreview, geometryForToolpathSlicing, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 import { migrateOverlayContours } from '../lib/cutOverlay'
-import { computeToolpathInWorker } from '../lib/camWorkerClient'
+import { computeToolpathInWorker, resolveCamBackend } from '../lib/camWorkerClient'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
   packProject,
@@ -107,6 +112,13 @@ export function AppStateProvider({ children }) {
   const [geometry, setGeometry] = useState(null)
   const [stats, setStats] = useState(null)
   const [status, setStatus] = useState('')
+  const [importAlert, setImportAlert] = useState(null)
+  const [importOptimizeSuccess, setImportOptimizeSuccess] = useState({
+    open: false,
+    simplified: false,
+    originalTriangles: 0,
+    newTriangles: 0,
+  })
   const [unit, setUnit] = useState('mm')
   const [target, setTarget] = useState({ x: 100, y: 100, z: 100 })
   const [resetKey, setResetKey] = useState(0)
@@ -202,6 +214,7 @@ export function AppStateProvider({ children }) {
       && prev !== workingRef.current
       && prev !== highResStoredRef.current
     ) {
+      disposeDisplayProxyCache(prev)
       prev.dispose()
     }
   }, [geometry])
@@ -225,9 +238,17 @@ export function AppStateProvider({ children }) {
    */
   const busyShownAtRef = useRef(0)
 
-  const beginBusy = useCallback((message, progress = null) => {
+  const beginBusy = useCallback((message, progress = null, extras = {}) => {
     busyShownAtRef.current = performance.now()
-    setBusy({ active: true, message, progress })
+    setBusy({
+      active: true,
+      message,
+      progress,
+      title: extras.title ?? '',
+      subMessage: extras.subMessage ?? '',
+      footerMessage: extras.footerMessage ?? '',
+      variant: extras.variant ?? '',
+    })
   }, [])
 
   const setBusyProgress = useCallback((done, total) => {
@@ -240,7 +261,15 @@ export function AppStateProvider({ children }) {
     const elapsed = performance.now() - busyShownAtRef.current
     const remaining = BUSY_MIN_MS - elapsed
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
-    setBusy({ active: false, message: '', progress: null })
+    setBusy({
+      active: false,
+      message: '',
+      progress: null,
+      title: '',
+      subMessage: '',
+      footerMessage: '',
+      variant: '',
+    })
   }, [])
 
   /** Resolve after the browser has had a chance to paint. */
@@ -409,15 +438,20 @@ export function AppStateProvider({ children }) {
       planePoint.current.copy(planePointFromStock(stock))
       const worldMatrix = null
       const silhouetteOpts = silhouetteOptsFromStock(stock)
+      const sliceGeo = geometryForToolpathSlicing(geo, worldMatrix)
+      const rasterScratch = { grid: null }
       try {
-        setProfile(buildSectionProfile(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts))
+        const preparedOpts = { ...silhouetteOpts, prepared: true, rasterScratch }
+        setProfile(buildSectionProfile(sliceGeo, thetaDeg, planePoint.current, null, preparedOpts))
         setSilhouettePreview(
-          buildFullSilhouettePreview(geo, thetaDeg, planePoint.current, worldMatrix, silhouetteOpts)
+          buildFullSilhouettePreview(sliceGeo, thetaDeg, planePoint.current, null, preparedOpts)
         )
       } catch (err) {
         setProfile(null)
         setSilhouettePreview(null)
         setStatus(`Toolpath error: ${err.message}`)
+      } finally {
+        sliceGeo.dispose()
       }
     }, 300)
 
@@ -491,24 +525,72 @@ export function AppStateProvider({ children }) {
     bakeModelTransform,
   ])
 
-  const handleFile = async (file) => {
-    setStatus('Loading STL...')
+  const processMeshFile = useCallback(async (file) => {
+    const kind = meshImportKind(file?.name)
+    if (!kind) {
+      const message = `${file?.name || 'That file'} is not an .stl or .3mf file.`
+      setImportAlert(message)
+      setStatus(message)
+      return
+    }
+    const rejectMessage = importHardRejectMessage(file)
+    if (rejectMessage) {
+      setImportAlert(rejectMessage)
+      setStatus(rejectMessage)
+      return
+    }
+
+    setImportAlert(null)
+    setImportOptimizeSuccess((prev) => ({ ...prev, open: false }))
+    setStatus(kind === '3mf' ? 'Loading 3MF...' : 'Loading STL...')
     beginBusy(`Loading ${file.name}…`, { done: 0, total: 100 })
     await yieldToPaint()
     try {
-      const rawGeo = await loadSTLFile(file, {
+      const loader = kind === '3mf' ? load3MFFile : loadSTLFile
+      const rawGeo = await loader(file, {
         onReadProgress: (loaded, total) => {
-          // Reading is typically fast; cap it below 100 so the bar does not sit
-          // full while parse + normals still run.
           setBusyProgress(Math.round((loaded / total) * 70), 100)
         },
         onStage: (stage) => {
-          // Parse and normals have no byte progress — show the stage with an
-          // indeterminate-looking bar so we are not implying a known fraction.
-          setBusy(() => ({ active: true, message: stage, progress: null }))
+          setBusy((prev) => (
+            prev.active
+              ? { ...prev, message: stage, progress: null }
+              : prev
+          ))
         },
       })
-      const geo = prepareRawGeometry(rawGeo)
+      let geo = prepareRawGeometry(rawGeo)
+
+      if (meshTriangleCount(geo) > TARGET_WORKING_TRIANGLES) {
+        await endBusy()
+        beginBusy(
+          'Please wait a moment while we streamline your mesh for smooth toolpath generation.',
+          { done: 0, total: 100 },
+          {
+            title: 'Optimizing 3D Model for NC7 Freeform...',
+            footerMessage: 'Simplifying triangles and optimizing performance...',
+            variant: 'optimize',
+          },
+        )
+        await yieldToPaint()
+
+        const simplified = await autoSimplifyMesh(geo, {
+          onProgress: async (done, total) => {
+            setBusyProgress(done, total)
+            if (done % 20 === 0) await yieldToPaint()
+          },
+        })
+        geo = simplified.geometry
+        if (simplified.simplified) {
+          setImportOptimizeSuccess({
+            open: true,
+            simplified: true,
+            originalTriangles: simplified.originalTriangles,
+            newTriangles: simplified.newTriangles,
+          })
+        }
+      }
+
       workingRef.current = geo
       storeHighResGeometry(geo)
       setGeometry(geo)
@@ -518,13 +600,33 @@ export function AppStateProvider({ children }) {
       setCutJob(null)
       setCutIndex(0)
       setMenuOpen(false)
-      setStatus(`Loaded ${file.name} (${geo.attributes.position.count / 3} triangles)`)
+      setStatus(`Loaded ${file.name} (${meshTriangleCount(geo).toLocaleString()} triangles)`)
+      logImportTelemetry({
+        fileName: file.name,
+        fileSizeBytes: file.size,
+        kind,
+        triangles: meshTriangleCount(geo),
+        simplified: !!geo.userData?.nc7AutoSimplified,
+        originalTriangles: geo.userData?.nc7OriginalTriangles,
+      })
     } catch (err) {
+      setImportAlert(err.message)
       setStatus(`Error: ${err.message}`)
     } finally {
       await endBusy()
     }
-  }
+  }, [
+    beginBusy,
+    endBusy,
+    setBusyProgress,
+    storeHighResGeometry,
+    updateStatsFrom,
+    yieldToPaint,
+  ])
+
+  const dismissImportOptimizeSuccess = useCallback(() => {
+    setImportOptimizeSuccess((prev) => ({ ...prev, open: false }))
+  }, [])
 
   const handleResize = () => {
     if (!workingRef.current) { setStatus('Load an STL first.'); return }
@@ -700,6 +802,7 @@ export function AppStateProvider({ children }) {
     setStatus(`Computing ${total} cuts (N=${n}, ${mode})…`)
     beginBusy('Computing toolpath…', { done: 0, total })
     await yieldToPaint()
+    const toolpathStarted = performance.now()
     try {
       const job = await computeCutJob(async (done, count) => {
         setBusyProgress(done, count)
@@ -712,6 +815,14 @@ export function AppStateProvider({ children }) {
       setCutJob(job)
       const withProfile = job.cuts.filter((c) => c.profile.polylines.length > 0).length
       setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${mode}).`)
+      const backend = job?.camBackend ?? resolveCamBackend()
+      logToolpathTelemetry({
+        rotationN: job.rotationN ?? n,
+        triangles: meshTriangleCount(geo),
+        durationMs: Math.round(performance.now() - toolpathStarted),
+        worker: backend === 'worker',
+        backend,
+      })
       return true
     } catch (err) {
       setStatus(`Toolpath error: ${err.message}`)
@@ -1014,7 +1125,11 @@ export function AppStateProvider({ children }) {
     hasModel: !!geometry,
     hasToolpath: cutJobHasProfile(cutJob) || !!profile?.polylines?.length,
     hasToolpathSaved: cutJobHasProfile(cutJob),
-    handleFile,
+    importAlert,
+    clearImportAlert: () => setImportAlert(null),
+    importOptimizeSuccess,
+    dismissImportOptimizeSuccess,
+    processMeshFile,
     handleResize,
     handleSettle,
     handleSimplify,

@@ -36,6 +36,10 @@ export default function AppLayout() {
       <LoadingOverlay
         active={busy.active}
         message={busy.message}
+        subMessage={busy.subMessage}
+        footerMessage={busy.footerMessage}
+        title={busy.title}
+        variant={busy.variant}
         progress={busy.progress}
       />
     </div>

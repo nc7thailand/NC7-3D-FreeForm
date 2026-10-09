@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 dist-ssr/
+host/native/NC7CamService/build/
 
 # Logs
 logs/
@@ -29,6 +30,9 @@ npm-debug.log*
 .continue/
 .cursor/
 tools/
+
+# Local A/B benchmark JSON outputs
+.benchmark/
 
 # Generated diagnostic outputs (SVG/PNG/CSV/NC renders from throwaway scripts)
 scripts/*.png

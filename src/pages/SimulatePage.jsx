@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PageNav from '../components/PageNav'
 import SimulateViewer from '../components/SimulateViewer'
+import ToolpathViewResolutionDialog from '../components/ToolpathViewResolutionDialog'
+import ViewportDisplayHud from '../components/ViewportDisplayHud'
+import { useToolpathViewResolution } from '../hooks/useToolpathViewResolution'
 import { useAppState } from '../context/AppState'
 import { buildPlaybackTimeline, buildWireStack, sampleTimeline } from '../lib/simStack'
 import { wireSpeedMmPerSec } from '../lib/turntablePhysics'
@@ -8,6 +11,19 @@ import { SIMULATE_ROUTE_DETACHED } from '../routes'
 
 export default function SimulatePage() {
   const { geometry, cutJob, resetKey, gcodeSettings } = useAppState()
+  const {
+    displayProxy,
+    modalOpen,
+    remember,
+    setRemember,
+    choose,
+    openPromptIfNeeded,
+    chosen,
+  } = useToolpathViewResolution()
+  const [displayShellStats, setDisplayShellStats] = useState(null)
+  const handleDisplayShellStats = useCallback((stats) => {
+    setDisplayShellStats(stats)
+  }, [])
   const [wireOnly, setWireOnly] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
@@ -48,6 +64,10 @@ export default function SimulatePage() {
   useEffect(() => {
     resetPlayback()
   }, [cutJob, resetPlayback])
+
+  useEffect(() => {
+    if (geometry) openPromptIfNeeded()
+  }, [geometry, openPromptIfNeeded])
 
   useEffect(() => {
     if (!playing || !timeline.length) {
@@ -132,6 +152,13 @@ export default function SimulatePage() {
   }
 
   return (
+    <>
+      <ToolpathViewResolutionDialog
+        open={modalOpen}
+        remember={remember}
+        onRememberChange={setRemember}
+        onChoose={choose}
+      />
     <main className="page-main page-main--simulate">
       <div className="page-body">
         <div className="section-label section-label-row simulate-header">
@@ -190,19 +217,30 @@ export default function SimulatePage() {
             </p>
           </aside>
 
-          <section className="simulate-viewport-section">
-            <SimulateViewer
-              geometry={geometry}
-              cutJob={cutJob}
-              resetKey={resetKey}
-              wireOnly={wireOnly}
-              activeCutIndex={activeCutIndex}
-              playbackPoint={playbackPoint}
-            />
+          <section className="simulate-viewport-section simulate-viewport-section--hud">
+            <ViewportDisplayHud stats={displayShellStats} visible={chosen && !!geometry} />
+            {chosen ? (
+              <SimulateViewer
+                geometry={geometry}
+                cutJob={cutJob}
+                resetKey={resetKey}
+                wireOnly={wireOnly}
+                activeCutIndex={activeCutIndex}
+                playbackPoint={playbackPoint}
+                displayProxy={displayProxy}
+                onDisplayShellStats={handleDisplayShellStats}
+              />
+            ) : (
+              <div className="viewport-3d-loading" role="status" aria-live="polite">
+                <div className="loading-spinner" aria-hidden="true" />
+                <span>Choose 3D view resolution…</span>
+              </div>
+            )}
           </section>
         </div>
       </div>
       <PageNav page="simulate" />
     </main>
+    </>
   )
 }

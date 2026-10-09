@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
+import React, { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
-import ViewCube from './ViewCube'
+import HomeViewButton from './HomeViewButton'
 import {
   toRadians,
   cuttingPlane,
@@ -15,6 +15,10 @@ import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
+import { resolveToolpathDisplayGeometry, triangleCount } from '../lib/meshProxy.js'
+import { assignViewportMeshGeometry } from '../lib/viewportDisplayShell.js'
+import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
+import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import {
   disposeMaterial,
   disposeObject3D,
@@ -128,6 +132,8 @@ export default forwardRef(function Viewer3D(
     onReset,
     onCenter,
     readOnly = false,
+    displayProxy = false,
+    onDisplayShellStats,
     showToolpathOverlay = false,
     showModelBBox = true,
     combinedView = false,
@@ -141,9 +147,10 @@ export default forwardRef(function Viewer3D(
   const toolbarRef = useRef(null)
   const rotationRef = useRef(null)
   const rotationPanelRef = useRef(null)
-  const viewCubeRef = useRef(null)
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
+  const [glContextKey, setGlContextKey] = useState(0)
+  const [glContextLost, setGlContextLost] = useState(false)
   const stateRef = useRef({
     scene: null,
     camera: null,
@@ -263,6 +270,7 @@ export default forwardRef(function Viewer3D(
     renderer.setSize(mount.clientWidth, mount.clientHeight)
     renderer.setPixelRatio(effectivePixelRatio())
     mount.appendChild(renderer.domElement)
+    setGlContextLost(false)
 
     // Lights
     scene.add(new THREE.AmbientLight(0xffffff, 0.5))
@@ -566,15 +574,24 @@ export default forwardRef(function Viewer3D(
     let needsContinuousRender = !readOnlyRef.current
     let inRender = false
 
+    const detachContextRecovery = attachWebGLContextRecovery(renderer, {
+      onLost: () => {
+        running = false
+        cancelAnimationFrame(animId)
+        setGlContextLost(true)
+        logWebGLContextTelemetry({ viewer: 'Viewer3D', phase: 'lost' })
+      },
+      onRestored: () => {
+        logWebGLContextTelemetry({ viewer: 'Viewer3D', phase: 'restored' })
+        setGlContextKey((k) => k + 1)
+      },
+    })
+
     const renderFrame = () => {
       if (inRender) return
       inRender = true
       try {
         controls.update()
-
-        if (viewCubeRef.current && state.frameInfo) {
-          viewCubeRef.current.sync(camera, state.frameInfo.center)
-        }
 
         if (state.simOverlay) {
           const opacity = wireBlinkOpacity()
@@ -653,6 +670,7 @@ export default forwardRef(function Viewer3D(
     return () => {
       running = false
       cancelAnimationFrame(animId)
+      detachContextRecovery()
       sizeObserver.disconnect()
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKeyDown)
@@ -663,7 +681,9 @@ export default forwardRef(function Viewer3D(
       transform.dispose()
       const st = stateRef.current
       if (st?.simOverlay) disposeSimOverlay(st.simOverlay)
-      disposeSceneContents(scene, { keepGeometries: [st?.mesh?.geometry] })
+      disposeSceneContents(scene, {
+        keepGeometries: st?.ownedDisplayGeometry ? [] : [st?.mesh?.geometry],
+      })
       disposeRenderer(renderer)
       if (st) {
         st.mesh = null
@@ -674,7 +694,7 @@ export default forwardRef(function Viewer3D(
         st.simOverlay = null
       }
     }
-  }, [])
+  }, [glContextKey])
 
   // Rebuild mesh when geometry changes
   useEffect(() => {
@@ -701,9 +721,13 @@ export default forwardRef(function Viewer3D(
       state.objGizmo = null
     }
     if (state.mesh) {
-      // Geometry is owned by AppState (it may still be shown on another page).
+      // App-owned geometry stays alive. A display proxy is freed here.
       disposeMaterial(state.mesh.material)
       state.mesh = null
+    }
+    if (state.ownedDisplayGeometry) {
+      state.ownedDisplayGeometry.dispose()
+      state.ownedDisplayGeometry = null
     }
 
     if (!geometry) return
@@ -718,6 +742,12 @@ export default forwardRef(function Viewer3D(
       geometry.userData.nc7CentroidApplied = true
       geometry.computeBoundingBox()
     }
+
+    const tri = triangleCount(geometry)
+    const resolved = displayProxy
+      ? resolveToolpathDisplayGeometry(geometry)
+      : { geometry, sourceTriangles: tri, displayTriangles: tri, cached: true }
+    const meshGeometry = resolved.geometry
 
     // Compute center of mass from geometry bounding box
     geometry.computeBoundingBox()
@@ -736,7 +766,7 @@ export default forwardRef(function Viewer3D(
         metalness: 0.1,
         roughness: 0.6,
       })
-    const mesh = new THREE.Mesh(geometry, material)
+    const mesh = new THREE.Mesh(meshGeometry, material)
     state.mesh = mesh
     // Position the mesh relative to the OBJ_Gizmo pivot.
     //
@@ -824,8 +854,28 @@ export default forwardRef(function Viewer3D(
     const axes = new THREE.AxesHelper(maxDim * 0.5)
     state.scene.add(axes)
     state.floorAxes = axes
+    onDisplayShellStats?.({
+      viewMode: displayProxy ? 'lo' : 'hi',
+      sourceTriangles: resolved.sourceTriangles,
+      displayTriangles: resolved.displayTriangles,
+      cached: resolved.cached !== false,
+      buildMs: resolved.buildMs ?? 0,
+      heapMiB: typeof performance !== 'undefined' && performance.memory
+        ? Math.round((performance.memory.usedJSHeapSize / (1024 * 1024)) * 10) / 10
+        : null,
+      singleMesh: true,
+    })
     state.requestRender?.()
   }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
+
+  // Hi/Lo toggle — swap mesh buffers only (no camera reset, no second model).
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.mesh || !geometry) return
+    const result = assignViewportMeshGeometry(state, geometry, displayProxy)
+    onDisplayShellStats?.(result.stats)
+    if (result.changed) state.requestRender?.()
+  }, [displayProxy, geometry, onDisplayShellStats])
 
   useEffect(() => {
     const state = stateRef.current
@@ -1450,32 +1500,11 @@ export default forwardRef(function Viewer3D(
     state.rotateByAxis(state.activeAxis, deg)
   }
 
-  // Reposition the camera to a named world view.
-  // useCallback keeps this stable: ViewCube rebuilds its WebGL context when its
-  // callback props change, so a new function per render would remount it on
-  // every frame-affecting state update.
-  const setView = useCallback((view) => {
+  const goHome = useCallback(() => {
     const state = stateRef.current
-    if (state && state.frameCamera) state.frameCamera(view)
+    if (state?.snapCamera) state.snapCamera('home')
+    else state?.frameCamera?.('home')
   }, [])
-
-  // Orbit the camera 90° in a direction (up/down/left/right)
-  const flipView = useCallback((dir) => {
-    const state = stateRef.current
-    if (!state || !state.orbitCamera) return
-    const q = Math.PI / 2
-    if (dir === 'up') state.orbitCamera(0, -q)
-    else if (dir === 'down') state.orbitCamera(0, q)
-    else if (dir === 'left') state.orbitCamera(-q, 0)
-    else if (dir === 'right') state.orbitCamera(q, 0)
-  }, [])
-
-  const orbitView = useCallback((dAzimuth, dPolar) => {
-    const state = stateRef.current
-    if (state && state.orbitCamera) state.orbitCamera(dAzimuth, dPolar)
-  }, [])
-
-  const goHome = useCallback(() => setView('home'), [setView])
 
   return (
     <div className={`viewport-wrapper${readOnly ? ' viewport-readonly' : ''}`}>
@@ -1539,14 +1568,12 @@ export default forwardRef(function Viewer3D(
           </div>
         </>
       )}
-      <ViewCube
-        ref={viewCubeRef}
-        hidden={false}
-        onSetView={setView}
-        onOrbit={orbitView}
-        onFlip={flipView}
-        onHome={goHome}
-      />
+      <HomeViewButton onClick={goHome} />
+      {glContextLost && (
+        <div className="webgl-context-banner" role="alert" aria-live="assertive">
+          GPU memory paused the 3D view. Recovering…
+        </div>
+      )}
     </div>
   )
 })

@@ -168,35 +168,66 @@ export function blockSectionHalfWidth(thetaDeg, { w, t }) {
  * @returns {{ polylines: Array<{u: number, v: number}[]>, pointCount: number }}
  */
 /**
- * Clone geometry and optionally bake a world matrix (e.g. gizmo transform).
+ * Position buffer only. Silhouette stamping never reads normals, so a full
+ * BufferGeometry.clone() would duplicate a second mesh the raster does not use.
+ *
+ * @param {THREE.BufferGeometry} geometry
+ * @returns {THREE.BufferGeometry}
+ */
+export function copyPositionGeometry(geometry) {
+  const g = new THREE.BufferGeometry()
+  const src = geometry?.getAttribute?.('position')
+  if (!src?.array) return g
+  const position = new Float32Array(src.array)
+  g.setAttribute('position', new THREE.BufferAttribute(position, 3))
+  const index = geometry.getIndex()
+  if (index?.array) {
+    const Ctor = index.array.constructor
+    g.setIndex(new THREE.BufferAttribute(new Ctor(index.array), 1))
+  }
+  if (geometry.userData) g.userData = { ...geometry.userData }
+  return g
+}
+
+/** Drop a centroid-centred mesh onto the foam floor. Mutates `geometry`. */
+export function applyFloorSettle(geometry) {
+  if (!geometry) return geometry
+  geometry.computeBoundingBox()
+  const minY = geometry.boundingBox?.min.y ?? 0
+  if (minY < -1e-6) {
+    geometry.translate(0, -minY, 0)
+    geometry.computeBoundingBox()
+  }
+  return geometry
+}
+
+/**
+ * One position-only copy, with an optional world matrix baked in.
+ * Call once per toolpath job and reuse the result across every angle.
  *
  * @param {THREE.BufferGeometry} geometry
  * @param {THREE.Matrix4|null} [worldMatrix]
  * @returns {THREE.BufferGeometry}
  */
 export function geometryForSlicing(geometry, worldMatrix = null) {
-  const g = geometry.clone()
+  const g = copyPositionGeometry(geometry)
   if (worldMatrix) g.applyMatrix4(worldMatrix)
   return g
 }
 
 /**
- * Clone for CAM slicing — optional virtual floor settle (Y_min → 0) without mutating source mesh.
+ * Position-only slice buffer. `adopt: true` settles a buffer the caller
+ * already owns (the CAM worker's transferred copy) and does not allocate again.
  *
  * @param {THREE.BufferGeometry} geometry
  * @param {THREE.Matrix4|null} [worldMatrix]
- * @param {{ floorSettle?: boolean }} [options]
+ * @param {{ floorSettle?: boolean, adopt?: boolean }} [options]
  */
-export function geometryForToolpathSlicing(geometry, worldMatrix = null, { floorSettle = true } = {}) {
-  const g = geometryForSlicing(geometry, worldMatrix)
+export function geometryForToolpathSlicing(geometry, worldMatrix = null, { floorSettle = true, adopt = false } = {}) {
+  const g = adopt ? geometry : geometryForSlicing(geometry, worldMatrix)
+  if (adopt && worldMatrix) g.applyMatrix4(worldMatrix)
   if (!floorSettle) return g
-  g.computeBoundingBox()
-  const minY = g.boundingBox?.min.y ?? 0
-  if (minY < -1e-6) {
-    g.translate(0, -minY, 0)
-    g.computeBoundingBox()
-  }
-  return g
+  return applyFloorSettle(g)
 }
 
 /** Y offset to place a centroid-centered mesh on the foam floor (Y = 0). */
@@ -236,16 +267,22 @@ export function unprojectFromSection(p, frame) {
  * @returns {{ polylines: Array<{u: number, v: number}[]>, pointCount: number, frame: object, source: string }}
  */
 export function buildSectionProfile(geometry, thetaDeg, planePoint, worldMatrix = null, opts = {}) {
-  const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
-  const frame = cuttingPlane(thetaDeg, planePoint)
-  const silhouette = extractLeftSilhouette(sliceGeo, frame, opts)
-  sliceGeo.dispose()
-  const polylines = silhouette.length >= 2 ? [silhouette] : []
-  return {
-    polylines,
-    pointCount: silhouette.length,
-    frame,
-    source: 'front-rear-shadow',
+  const prepared = opts.prepared === true
+  const sliceGeo = prepared
+    ? geometry
+    : geometryForToolpathSlicing(geometry, worldMatrix)
+  try {
+    const frame = cuttingPlane(thetaDeg, planePoint)
+    const silhouette = extractLeftSilhouette(sliceGeo, frame, opts)
+    const polylines = silhouette.length >= 2 ? [silhouette] : []
+    return {
+      polylines,
+      pointCount: silhouette.length,
+      frame,
+      source: 'front-rear-shadow',
+    }
+  } finally {
+    if (!prepared) sliceGeo?.dispose()
   }
 }
 
@@ -276,28 +313,34 @@ export function shiftSectionToMiddleAnchor(points, rearFrame) {
  * @param {THREE.Matrix4|null} [worldMatrix]
  */
 export function buildFullSilhouettePreview(geometry, thetaDeg, rearPlanePoint, worldMatrix = null, opts = {}) {
-  const sliceGeo = geometryForToolpathSlicing(geometry, worldMatrix)
-  // DISPLAY-ONLY θ flip. The frame's normal/uAxis are built from θ as though
-  // the camera orbits the model by +θ, but physically the model turns by +θ on
-  // a fixed wire. The two agree only at θ = 0; at every other angle the display
-  // came out mirrored against the 3D view. Negating θ here corrects the 2D
-  // contour, its middle-plane anchor, and the u-shift between them together.
-  //
-  // buildSectionProfile is deliberately NOT flipped — it feeds the G-code
-  // pipeline, whose direction is reconciled against the DevFoam golden
-  // separately. Display and G-code therefore differ in orientation for now.
-  const displayTheta = -thetaDeg
-  const rearFrame = cuttingPlane(displayTheta, rearPlanePoint)
-  const outline = extractFullSilhouette(sliceGeo, rearFrame, opts)
-  sliceGeo.dispose()
-  const middleFrame = cuttingPlane(displayTheta, planePointMiddleFromStock())
-  const displayPoly = shiftSectionToMiddleAnchor(outline, rearFrame)
-  const polylines = displayPoly.length >= 2 ? [displayPoly] : []
-  return {
-    polylines,
-    pointCount: displayPoly.length,
-    frame: middleFrame,
-    rearFrame,
-    source: 'full-silhouette-preview',
+  const prepared = opts.prepared === true
+  const sliceGeo = prepared
+    ? geometry
+    : geometryForToolpathSlicing(geometry, worldMatrix)
+  try {
+    // DISPLAY-ONLY θ flip. The frame's normal/uAxis are built from θ as though
+    // the camera orbits the model by +θ, but physically the model turns by +θ on
+    // a fixed wire. The two agree only at θ = 0; at every other angle the display
+    // came out mirrored against the 3D view. Negating θ here corrects the 2D
+    // contour, its middle-plane anchor, and the u-shift between them together.
+    //
+    // buildSectionProfile is deliberately NOT flipped — it feeds the G-code
+    // pipeline, whose direction is reconciled against the DevFoam golden
+    // separately. Display and G-code therefore differ in orientation for now.
+    const displayTheta = -thetaDeg
+    const rearFrame = cuttingPlane(displayTheta, rearPlanePoint)
+    const outline = extractFullSilhouette(sliceGeo, rearFrame, opts)
+    const middleFrame = cuttingPlane(displayTheta, planePointMiddleFromStock())
+    const displayPoly = shiftSectionToMiddleAnchor(outline, rearFrame)
+    const polylines = displayPoly.length >= 2 ? [displayPoly] : []
+    return {
+      polylines,
+      pointCount: displayPoly.length,
+      frame: middleFrame,
+      rearFrame,
+      source: 'full-silhouette-preview',
+    }
+  } finally {
+    if (!prepared) sliceGeo?.dispose()
   }
 }

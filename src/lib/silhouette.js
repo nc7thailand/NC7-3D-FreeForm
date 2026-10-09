@@ -156,12 +156,25 @@ function extentsFromShadowGrid(grid, spec) {
   return { left, right, occupied }
 }
 
-function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy) {
+/** Reuse one Uint8 raster across angles. Grows when a later pass needs more cells. */
+function rasterGrid(cellCount, scratch) {
+  if (!scratch) return new Uint8Array(cellCount)
+  if (!scratch.grid || scratch.grid.length < cellCount) {
+    scratch.grid = new Uint8Array(cellCount)
+  } else {
+    scratch.grid.fill(0, 0, cellCount)
+  }
+  return scratch.grid.length === cellCount
+    ? scratch.grid
+    : scratch.grid.subarray(0, cellCount)
+}
+
+function projectFrontToRearShadow(geometry, frame, bbox, profileAccuracy, scratch) {
   const bounds = sectionBounds(bbox, frame)
   if (bounds.vMax <= bounds.vMin + 1e-6) return { left: [], right: [], occupied: 0 }
 
   const spec = shadowGridSpec(bounds, profileAccuracy)
-  const grid = new Uint8Array(spec.uBins * spec.vBins)
+  const grid = rasterGrid(spec.uBins * spec.vBins, scratch)
 
   const pos = geometry.attributes.position?.array
   if (!pos || pos.length < 9) return { left: [], right: [], occupied: 0 }
@@ -286,7 +299,13 @@ function projectFrontToRearEnvelope(geometry, frame, bbox, vTol = 0.06) {
 }
 
 function projectFrontToRearExtents(geometry, frame, bbox, opts = {}) {
-  const shadow = projectFrontToRearShadow(geometry, frame, bbox, opts.profileAccuracy ?? 5)
+  const shadow = projectFrontToRearShadow(
+    geometry,
+    frame,
+    bbox,
+    opts.profileAccuracy ?? 5,
+    opts.rasterScratch,
+  )
   if (shadow.occupied > 0) {
     return { left: shadow.left, right: shadow.right, source: 'shadow' }
   }
@@ -310,12 +329,12 @@ function mergeFullOutline({ left, right }) {
  * Build the full shadow contour (closed) via grid tracing.
  * Returns empty array when the grid is unoccupied or tracing fails.
  */
-function projectShadowContour(geometry, frame, bbox, profileAccuracy, gridBins = null) {
+function projectShadowContour(geometry, frame, bbox, profileAccuracy, gridBins = null, scratch = null) {
   const bounds = sectionBounds(bbox, frame)
   if (bounds.vMax <= bounds.vMin + 1e-6) return []
 
   const spec = shadowGridSpec(bounds, profileAccuracy, gridBins)
-  const grid = new Uint8Array(spec.uBins * spec.vBins)
+  const grid = rasterGrid(spec.uBins * spec.vBins, scratch)
 
   const pos = geometry.attributes.position?.array
   if (!pos || pos.length < 9) return []
@@ -354,7 +373,14 @@ export function extractLeftSilhouette(geometry, frame, opts = {}) {
 
   const uMax = opts.uMax ?? 1e-3
 
-  const contour = projectShadowContour(geometry, frame, bbox, opts.profileAccuracy ?? 5)
+  const contour = projectShadowContour(
+    geometry,
+    frame,
+    bbox,
+    opts.profileAccuracy ?? 5,
+    null,
+    opts.rasterScratch,
+  )
   if (contour.length >= 3) {
     const left = contour.filter((p) => p.u <= uMax)
     if (left.length >= 2) return left
@@ -376,7 +402,14 @@ export function extractFullSilhouette(geometry, frame, opts = {}) {
   const bbox = geometry.boundingBox
   if (!bbox || bbox.isEmpty()) return []
 
-  const contour = projectShadowContour(geometry, frame, bbox, opts.profileAccuracy ?? 5, opts.gridBins ?? null)
+  const contour = projectShadowContour(
+    geometry,
+    frame,
+    bbox,
+    opts.profileAccuracy ?? 5,
+    opts.gridBins ?? null,
+    opts.rasterScratch,
+  )
   if (contour.length >= 3) return contour
 
   const extents = projectFrontToRearExtents(geometry, frame, bbox, opts)

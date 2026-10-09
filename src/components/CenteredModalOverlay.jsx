@@ -10,6 +10,7 @@ export default function CenteredModalOverlay({
   title,
   ariaLabel,
   onClose,
+  panelClassName = '',
   children,
 }) {
   useEffect(() => {
@@ -43,7 +44,7 @@ export default function CenteredModalOverlay({
       }}
     >
       <div
-        className="centered-overlay-panel"
+        className={`centered-overlay-panel${panelClassName ? ` ${panelClassName}` : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel ?? title ?? 'Dialog'}

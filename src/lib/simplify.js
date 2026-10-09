@@ -67,7 +67,8 @@ export function simplifyGeometry(geometry, options = {}) {
  * @returns {THREE.BufferGeometry}
  */
 function gridDecimate(geometry, divisions) {
-  const geometryIndexed = geometry.index ? geometry.toNonIndexed() : geometry.clone()
+  const expanded = geometry.index ? geometry.toNonIndexed() : null
+  const geometryIndexed = expanded ?? geometry
   const pos = geometryIndexed.attributes.position
   geometryIndexed.computeBoundingBox()
   const box = geometryIndexed.boundingBox
@@ -128,6 +129,7 @@ function gridDecimate(geometry, divisions) {
   newGeometry.computeVertexNormals()
   newGeometry.computeBoundingBox()
   newGeometry.userData = { ...geometry.userData }
+  expanded?.dispose()
   return newGeometry
 }
 
