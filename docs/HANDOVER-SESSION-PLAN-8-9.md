@@ -3,10 +3,10 @@
 **Date:** 2026-10-09  
 **Audience:** New Cursor / Cloud Agent session  
 **Repo:** `github.com/nc7thailand/NC7-3D-FreeForm` (local: `NC7Studio3D`)  
-**Active branch:** `feature/memory-optimization`  
-**Current save point (rollback here):** tag `savepoint/view-resolution-hud-2026-10-09` → commit `6595606`
+**Active branch:** `cursor/native-cam-webview-ipc-9251` (based on `feature/memory-optimization`)  
+**Current save point (rollback here):** tag `savepoint/native-cam-ipc-2026-10-09` → commit `fc47bd7`
 
-**Previous save point:** `savepoint/pre-webview2-plan-2026-10-08` → `e527446` (before Hi/Lo viewport work)
+**Previous save point:** `savepoint/view-resolution-hud-2026-10-09` → `6595606` (Hi/Lo viewport, HUD, dark modals)
 
 ---
 
@@ -18,10 +18,10 @@ Browser-side memory and UX work on **`feature/memory-optimization`** is in good 
 
 | # | Item | Status |
 |---|------|--------|
-| **8** | Native C++ CAM backend + WebView2 IPC | POC shell exists; **no native toolpath service yet** |
+| **8** | Native C++ CAM backend + WebView2 IPC | **Skeleton saved** (`fc47bd7`). Production toolpaths stay on the JS worker until `productionReady` |
 | **9** | WASM port of silhouette hot loop (optional if JS worker still bottleneck) | **Not started** |
 
-**Recommendation:** Start with **#8** (IPC + native service skeleton that returns the same `cutJob` shape as `camWorker.js`). Do **#9** only after profiling proves the worker silhouette loop is still the limit.
+**Recommendation:** **#8** skeleton is the current save point. Do **#9** only after profiling proves the worker silhouette loop is still the limit.
 
 ---
 
@@ -102,6 +102,8 @@ Native C++:   none (plan 8)
 - `host/webview2/NC7WebViewHost/MainForm.cs` — already sets heap flags; add `WebMessageReceived` bridge.
 - Heap testing: `NC7_WEBVIEW_HEAP_MB=4096|8192`.
 
+**Landed:** `host/native/NC7CamService` (newline JSON, same `cutJob` keys) and the WebView2 `nc7-cam` bridge. `camWorkerClient.js` switches `worker` | `native` | `main`. The skeleton hull is not the production silhouette; `productionReady: false` keeps the worker. Check with `npm run verify:cam-ipc`. Validate the host on Windows.
+
 **Dev note:** WebView2 is **Windows-only**; Mac dev can implement host + IPC protocol and test worker fallback; validate on Windows machine.
 
 ---
@@ -143,10 +145,10 @@ npm run benchmark:ab   # clean tree; compares savepoint vs HEAD by default
 ## 8. Rollback
 
 ```bash
-git checkout feature/memory-optimization
-git reset --hard savepoint/view-resolution-hud-2026-10-09
+git checkout cursor/native-cam-webview-ipc-9251
+git reset --hard savepoint/native-cam-ipc-2026-10-09
 # only if PL approves:
-# git push --force-with-lease origin feature/memory-optimization
+# git push --force-with-lease origin cursor/native-cam-webview-ipc-9251
 ```
 
 ---
