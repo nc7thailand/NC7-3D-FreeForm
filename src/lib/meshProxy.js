@@ -29,17 +29,66 @@ export function triangleCount(geometry) {
  * @param {import('three').BufferGeometry|null} hiResGeo
  * @returns {{ geometry: import('three').BufferGeometry|null, owned: boolean }}
  */
-export function resolveToolpathDisplayGeometry(hiResGeo) {
-  if (!hiResGeo) return { geometry: null, owned: false }
-  if (triangleCount(hiResGeo) <= TOOLPATH_PROXY_MAX_TRIANGLES) {
-    return { geometry: hiResGeo, owned: false }
+function proxyCacheRevision(hiResGeo) {
+  return hiResGeo.userData?.nc7ModelRevision ?? hiResGeo.uuid
+}
+
+/** Release cached low-res shell when the app-owned source geometry is disposed. */
+export function disposeDisplayProxyCache(hiResGeo) {
+  const cached = hiResGeo?.userData?.nc7DisplayProxyGeo
+  if (cached?.geometry && cached.geometry !== hiResGeo) {
+    cached.geometry.dispose()
   }
+  if (hiResGeo?.userData) delete hiResGeo.userData.nc7DisplayProxyGeo
+}
+
+export function resolveToolpathDisplayGeometry(hiResGeo) {
+  if (!hiResGeo) {
+    return { geometry: null, owned: false, cached: false, sourceTriangles: 0, displayTriangles: 0 }
+  }
+  const sourceTriangles = triangleCount(hiResGeo)
+  if (sourceTriangles <= TOOLPATH_PROXY_MAX_TRIANGLES) {
+    return {
+      geometry: hiResGeo,
+      owned: false,
+      cached: true,
+      sourceTriangles,
+      displayTriangles: sourceTriangles,
+    }
+  }
+
+  const revision = proxyCacheRevision(hiResGeo)
+  const cached = hiResGeo.userData?.nc7DisplayProxyGeo
+  if (cached?.revision === revision && cached.geometry) {
+    return {
+      geometry: cached.geometry,
+      owned: false,
+      cached: true,
+      sourceTriangles,
+      displayTriangles: triangleCount(cached.geometry),
+    }
+  }
+
+  const t0 = performance.now()
   const geometry = buildToolpathDisplayProxy(hiResGeo)
   hiResGeo.computeBoundingBox()
   if (hiResGeo.boundingBox) {
     geometry.userData.nc7PlacementBox = hiResGeo.boundingBox.clone()
   }
-  return { geometry, owned: true }
+  hiResGeo.userData.nc7DisplayProxyGeo = {
+    revision,
+    geometry,
+    builtAtMs: Math.round((performance.now() - t0) * 10) / 10,
+  }
+
+  return {
+    geometry,
+    owned: false,
+    cached: false,
+    sourceTriangles,
+    displayTriangles: triangleCount(geometry),
+    buildMs: hiResGeo.userData.nc7DisplayProxyGeo.builtAtMs,
+  }
 }
 
 export function buildToolpathDisplayProxy(hiResGeo, options = {}) {

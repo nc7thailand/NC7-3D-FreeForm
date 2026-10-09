@@ -4,7 +4,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import HomeViewButton from './HomeViewButton'
 import { buildWireStack } from '../lib/simStack'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
-import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
+import { resolveToolpathDisplayGeometry, triangleCount } from '../lib/meshProxy.js'
+import { assignViewportMeshGeometry } from '../lib/viewportDisplayShell.js'
 import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
 import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import {
@@ -25,6 +26,8 @@ export default function SimulateViewer({
   wireOnly = false,
   activeCutIndex = 0,
   playbackPoint = null,
+  displayProxy = false,
+  onDisplayShellStats,
 }) {
   const mountRef = useRef(null)
   const [glContextKey, setGlContextKey] = useState(0)
@@ -204,16 +207,15 @@ export default function SimulateViewer({
       disposeMaterial(state.mesh.material)
     }
     state.mesh = null
-    if (state.ownedDisplayGeometry) {
-      state.ownedDisplayGeometry.dispose()
-      state.ownedDisplayGeometry = null
-    }
+    state.ownedDisplayGeometry = null
 
     if (!geometry) return
 
-    const display = resolveToolpathDisplayGeometry(geometry)
-    const meshGeometry = display.geometry
-    if (display.owned) state.ownedDisplayGeometry = meshGeometry
+    const tri = triangleCount(geometry)
+    const resolved = displayProxy
+      ? resolveToolpathDisplayGeometry(geometry)
+      : { geometry, sourceTriangles: tri, displayTriangles: tri, cached: true }
+    const meshGeometry = resolved.geometry
 
     geometry.computeBoundingBox()
 
@@ -249,8 +251,27 @@ export default function SimulateViewer({
       state.scene.add(grid)
       state.floorGrid = grid
     }
+    onDisplayShellStats?.({
+      viewMode: displayProxy ? 'lo' : 'hi',
+      sourceTriangles: resolved.sourceTriangles,
+      displayTriangles: resolved.displayTriangles,
+      cached: resolved.cached !== false,
+      buildMs: resolved.buildMs ?? 0,
+      heapMiB: typeof performance !== 'undefined' && performance.memory
+        ? Math.round((performance.memory.usedJSHeapSize / (1024 * 1024)) * 10) / 10
+        : null,
+      singleMesh: true,
+    })
     state.requestRender?.()
   }, [geometry, resetKey])
+
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.mesh || !geometry) return
+    const result = assignViewportMeshGeometry(state, geometry, displayProxy)
+    onDisplayShellStats?.(result.stats)
+    if (result.changed) state.requestRender?.()
+  }, [displayProxy, geometry, onDisplayShellStats])
 
   useEffect(() => {
     const state = stateRef.current

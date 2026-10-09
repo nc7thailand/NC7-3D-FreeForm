@@ -9,7 +9,11 @@ import {
   importSizeTier,
 } from '../src/lib/importLimit.js'
 import { autoSimplifyMesh, meshTriangleCount } from '../src/lib/importPipeline.js'
-import { resolveToolpathDisplayGeometry, TOOLPATH_PROXY_MAX_TRIANGLES } from '../src/lib/meshProxy.js'
+import {
+  disposeDisplayProxyCache,
+  resolveToolpathDisplayGeometry,
+  TOOLPATH_PROXY_MAX_TRIANGLES,
+} from '../src/lib/meshProxy.js'
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg)
@@ -76,13 +80,17 @@ for (let i = 0; i < proxyPositions.length; i++) proxyPositions[i] = (i % 97) * 0
 const dense = new THREE.BufferGeometry()
 dense.setAttribute('position', new THREE.BufferAttribute(proxyPositions, 3))
 const display = resolveToolpathDisplayGeometry(dense)
-assert(display.owned === true, 'dense mesh should use an owned display proxy')
+assert(display.owned === false, 'display proxy is cached on source geometry, not viewer-owned')
+assert(display.cached === false, 'first proxy build is not yet cached')
 assert(
   (display.geometry.index ? display.geometry.index.count / 3 : display.geometry.attributes.position.count / 3)
     <= TOOLPATH_PROXY_MAX_TRIANGLES,
   'display proxy exceeded 24,000 triangles',
 )
-display.geometry.dispose()
+const displayAgain = resolveToolpathDisplayGeometry(dense)
+assert(displayAgain.cached === true, 'second resolve must reuse cached proxy')
+assert(displayAgain.geometry === display.geometry, 'cached proxy geometry must match')
+disposeDisplayProxyCache(dense)
 assert(dense.attributes.position, 'proxy build disposed the source mesh')
 
 const small = new THREE.BoxGeometry(1, 1, 1)

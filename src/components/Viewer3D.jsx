@@ -15,7 +15,8 @@ import { projectShadowOutline, shadowPlaneFor } from '../lib/shadowProjection'
 import { CUT_MODE_LEFT_ONLY, CUT_MODE_LEFT_TO_RIGHT } from '../lib/cutJob'
 import { buildOverlayData, modelBaseGapRect, modelTopGapRect, OVERLAY_COLORS, OVERLAY_LEAD_DASH } from '../lib/cutOverlay'
 import { effectivePixelRatio } from '../lib/viewer3dPerformance.js'
-import { resolveToolpathDisplayGeometry } from '../lib/meshProxy.js'
+import { resolveToolpathDisplayGeometry, triangleCount } from '../lib/meshProxy.js'
+import { assignViewportMeshGeometry } from '../lib/viewportDisplayShell.js'
 import { attachWebGLContextRecovery } from '../lib/webglContextRecovery.js'
 import { logWebGLContextTelemetry } from '../lib/telemetry.js'
 import {
@@ -132,6 +133,7 @@ export default forwardRef(function Viewer3D(
     onCenter,
     readOnly = false,
     displayProxy = false,
+    onDisplayShellStats,
     showToolpathOverlay = false,
     showModelBBox = true,
     combinedView = false,
@@ -741,11 +743,11 @@ export default forwardRef(function Viewer3D(
       geometry.computeBoundingBox()
     }
 
-    const display = displayProxy
+    const tri = triangleCount(geometry)
+    const resolved = displayProxy
       ? resolveToolpathDisplayGeometry(geometry)
-      : { geometry, owned: false }
-    const meshGeometry = display.geometry
-    if (display.owned) state.ownedDisplayGeometry = meshGeometry
+      : { geometry, sourceTriangles: tri, displayTriangles: tri, cached: true }
+    const meshGeometry = resolved.geometry
 
     // Compute center of mass from geometry bounding box
     geometry.computeBoundingBox()
@@ -852,8 +854,28 @@ export default forwardRef(function Viewer3D(
     const axes = new THREE.AxesHelper(maxDim * 0.5)
     state.scene.add(axes)
     state.floorAxes = axes
+    onDisplayShellStats?.({
+      viewMode: displayProxy ? 'lo' : 'hi',
+      sourceTriangles: resolved.sourceTriangles,
+      displayTriangles: resolved.displayTriangles,
+      cached: resolved.cached !== false,
+      buildMs: resolved.buildMs ?? 0,
+      heapMiB: typeof performance !== 'undefined' && performance.memory
+        ? Math.round((performance.memory.usedJSHeapSize / (1024 * 1024)) * 10) / 10
+        : null,
+      singleMesh: true,
+    })
     state.requestRender?.()
-  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay, displayProxy])
+  }, [geometry, resetKey, readOnly, showModelBBox, showToolpathOverlay])
+
+  // Hi/Lo toggle — swap mesh buffers only (no camera reset, no second model).
+  useEffect(() => {
+    const state = stateRef.current
+    if (!state?.mesh || !geometry) return
+    const result = assignViewportMeshGeometry(state, geometry, displayProxy)
+    onDisplayShellStats?.(result.stats)
+    if (result.changed) state.requestRender?.()
+  }, [displayProxy, geometry, onDisplayShellStats])
 
   useEffect(() => {
     const state = stateRef.current

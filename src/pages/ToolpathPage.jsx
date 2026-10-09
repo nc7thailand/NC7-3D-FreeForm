@@ -16,6 +16,9 @@ import {
   saveToolpathViewMode,
   shouldAutoOpenToolpathSetup,
 } from '../lib/navigationLoad'
+import ToolpathViewResolutionDialog from '../components/ToolpathViewResolutionDialog'
+import ViewportDisplayHud from '../components/ViewportDisplayHud'
+import { useToolpathViewResolution } from '../hooks/useToolpathViewResolution'
 
 // Toolpath 3D policy (field / tablet RAM):
 //   2D  → Viewer3D unmounted (WebGL disposed — no hide-and-keep hybrid).
@@ -187,13 +190,39 @@ export default function ToolpathPage() {
   // View mode: '2d' (default) — canvas only, no WebGL. '3d' lazy-loads Viewer3D.
   const [viewMode, setViewMode] = useState(loadToolpathViewMode)
   const [originPanelOpen, setOriginPanelOpen] = useState(false)
-  const toggleViewMode = useCallback(() => {
-    setViewMode((m) => (m === '2d' ? '3d' : '2d'))
+  const {
+    displayProxy,
+    modalOpen,
+    remember,
+    setRemember,
+    choose,
+    toggleHiLo,
+    openPromptIfNeeded,
+    openResolutionModal,
+    chosen,
+    isHi,
+  } = useToolpathViewResolution()
+  const [displayShellStats, setDisplayShellStats] = useState(null)
+  const handleDisplayShellStats = useCallback((stats) => {
+    setDisplayShellStats(stats)
   }, [])
+  const toggleViewMode = useCallback(() => {
+    setViewMode((m) => {
+      const next = m === '2d' ? '3d' : '2d'
+      if (next === '3d') openPromptIfNeeded()
+      return next
+    })
+  }, [openPromptIfNeeded])
 
   useEffect(() => {
     saveToolpathViewMode(viewMode)
   }, [viewMode])
+
+  useEffect(() => {
+    if (viewMode === '3d' && geometry) {
+      openPromptIfNeeded()
+    }
+  }, [viewMode, geometry, openPromptIfNeeded])
 
   // Warm Viewer3D chunk while user works in 2D — faster first 3D open, no GPU cost.
   useEffect(() => {
@@ -271,12 +300,22 @@ export default function ToolpathPage() {
 
   return (
     <>
+      <ToolpathViewResolutionDialog
+        open={modalOpen}
+        remember={remember}
+        onRememberChange={setRemember}
+        onChoose={choose}
+      />
       <ToolpathPanel />
 
       <main className="page-main page-main--toolpath">
         <div className="page-body">
           <div className={`cam-split cam-split--mode-${viewMode}`}>
             <div className="viewport-stage">
+              <ViewportDisplayHud
+                stats={displayShellStats}
+                visible={show3d && chosen && !!geometry}
+              />
               <div className="view-hud-stack">
                 <button
                   type="button"
@@ -296,6 +335,26 @@ export default function ToolpathPage() {
                 >
                   Origin
                 </button>
+                <button
+                  type="button"
+                  className={`view-hud-toggle view-hud-toggle--res${isHi ? ' is-active' : ''}`}
+                  onClick={toggleHiLo}
+                  aria-label={isHi ? '3D view hi-resolution mesh' : '3D view low-resolution mesh'}
+                  title={isHi
+                    ? 'Hi-resolution 3D mesh (click for low-res display shell)'
+                    : 'Low-resolution 3D mesh (click for hi-res display)'}
+                >
+                  {isHi ? 'Hi' : 'Lo'}
+                </button>
+                <button
+                  type="button"
+                  className="view-hud-toggle view-hud-toggle--help"
+                  onClick={openResolutionModal}
+                  aria-label="3D view resolution help and settings"
+                  title="Choose 3D view resolution (Hi / Lo)"
+                >
+                  ?
+                </button>
               </div>
               {show2d && (
                 <SilhouettePreviewPanel
@@ -312,7 +371,7 @@ export default function ToolpathPage() {
                   onOpenOriginPanel={() => setOriginPanelOpen(true)}
                 />
               )}
-              {show3d && (
+              {show3d && chosen && (
                 <section className="model-viewport-section">
                   <Suspense fallback={<Viewport3DLoading />}>
                     <Viewer3D
@@ -327,7 +386,8 @@ export default function ToolpathPage() {
                       silhouettePreview={silhouettePreview}
                       cutMode={cutMode}
                       readOnly
-                      displayProxy
+                      displayProxy={displayProxy}
+                      onDisplayShellStats={handleDisplayShellStats}
                       showToolpathOverlay
                       showModelBBox={false}
                       combinedView={is3d}
@@ -336,6 +396,11 @@ export default function ToolpathPage() {
                       rotationN={rotationN}
                     />
                   </Suspense>
+                </section>
+              )}
+              {show3d && !chosen && (
+                <section className="model-viewport-section">
+                  <Viewport3DLoading />
                 </section>
               )}
             </div>

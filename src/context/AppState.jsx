@@ -4,6 +4,7 @@ import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../
 import { load3MFFile } from '../lib/threemf'
 import { importHardRejectMessage, meshImportKind, TARGET_WORKING_TRIANGLES } from '../lib/importLimit'
 import { autoSimplifyMesh, meshTriangleCount } from '../lib/importPipeline'
+import { disposeDisplayProxyCache } from '../lib/meshProxy.js'
 import { logImportTelemetry, logToolpathTelemetry } from '../lib/telemetry'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
 import { resolveTargetMM, computeFitScale, scaleGeometry } from '../lib/resize'
@@ -213,6 +214,7 @@ export function AppStateProvider({ children }) {
       && prev !== workingRef.current
       && prev !== highResStoredRef.current
     ) {
+      disposeDisplayProxyCache(prev)
       prev.dispose()
     }
   }, [geometry])
