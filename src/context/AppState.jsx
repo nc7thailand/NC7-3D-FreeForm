@@ -14,7 +14,7 @@ import { simplifyGeometry } from '../lib/simplify'
 import { buildSectionProfile, buildFullSilhouettePreview, geometryForToolpathSlicing, planePointFromStock, silhouetteOptsFromStock } from '../lib/toolpath'
 import { cutJobHasProfile, effectiveCutCount, CUT_MODE_LEFT_ONLY } from '../lib/cutJob'
 import { migrateOverlayContours } from '../lib/cutOverlay'
-import { computeToolpathInWorker } from '../lib/camWorkerClient'
+import { computeToolpathInWorker, resolveCamBackend } from '../lib/camWorkerClient'
 import { DEFAULT_GCODE_SETTINGS } from '../lib/gcode'
 import {
   packProject,
@@ -815,11 +815,13 @@ export function AppStateProvider({ children }) {
       setCutJob(job)
       const withProfile = job.cuts.filter((c) => c.profile.polylines.length > 0).length
       setStatus(`Toolpath saved: ${withProfile}/${job.cutCount ?? job.cuts.length} cuts (N=${job.rotationN}, ${mode}).`)
+      const backend = job?.camBackend ?? resolveCamBackend()
       logToolpathTelemetry({
         rotationN: job.rotationN ?? n,
         triangles: meshTriangleCount(geo),
         durationMs: Math.round(performance.now() - toolpathStarted),
-        worker: typeof Worker !== 'undefined',
+        worker: backend === 'worker',
+        backend,
       })
       return true
     } catch (err) {

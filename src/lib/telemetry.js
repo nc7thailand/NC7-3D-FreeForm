@@ -61,8 +61,14 @@ export function logImportTelemetry({ fileName, fileSizeBytes, kind, triangles, s
   })
 }
 
-export function logToolpathTelemetry({ rotationN, triangles, durationMs, worker }) {
-  return logTelemetry('toolpath', { rotationN, triangles, durationMs, worker: !!worker })
+export function logToolpathTelemetry({ rotationN, triangles, durationMs, worker, backend = null }) {
+  return logTelemetry('toolpath', {
+    rotationN,
+    triangles,
+    durationMs,
+    worker: !!worker,
+    backend,
+  })
 }
 
 export function logWebGLContextTelemetry({ viewer, phase }) {

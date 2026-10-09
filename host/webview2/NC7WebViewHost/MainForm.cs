@@ -11,6 +11,7 @@ internal sealed class MainForm : Form
 {
     private readonly WebView2 _webView = new();
     private readonly Label _status = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+    private NativeCamBridge? _cam;
 
     public MainForm()
     {
@@ -50,13 +51,19 @@ internal sealed class MainForm : Form
 
         _webView.CoreWebView2.Settings.AreDevToolsEnabled = true;
         _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
-        _webView.CoreWebView2.WebMessageReceived += (_, args) =>
-        {
-            _status.Text = $"WebView2 | heap={heapMb} MB | msg: {args.TryGetWebMessageAsString()}";
-        };
+
+        _cam = new NativeCamBridge(_webView, _status, heapMb, appUrl);
+        await _cam.AttachAsync();
 
         _webView.CoreWebView2.Navigate(appUrl);
-        _status.Text = $"Ready | js heap cap={heapMb} MB | {appUrl}";
+        _status.Text = $"Ready | js heap cap={heapMb} MB | {_cam.StatusLabel} | {appUrl}";
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _cam?.Dispose();
+        _cam = null;
+        base.OnFormClosed(e);
     }
 
     private static int ResolveHeapMb()

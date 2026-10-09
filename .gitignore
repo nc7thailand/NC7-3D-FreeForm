@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 dist-ssr/
+host/native/NC7CamService/build/
 
 # Logs
 logs/

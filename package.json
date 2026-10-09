@@ -11,7 +11,8 @@
     "benchmark": "node scripts/benchmark-toolpath.mjs",
     "benchmark:compare": "node scripts/compare-benchmarks.mjs",
     "benchmark:ab": "node scripts/benchmark-ab.mjs",
-    "verify": "node scripts/verify-memory-opt.mjs"
+    "verify": "node scripts/verify-memory-opt.mjs && node scripts/verify-cam-ipc.mjs",
+    "verify:cam-ipc": "node scripts/verify-cam-ipc.mjs"
   },
   "dependencies": {
     "d3-contour": "^4.0.2",
