@@ -30,25 +30,31 @@ function clampToTriangleCap(geometry, maxTriangles) {
   return next
 }
 
+/** Slider floor for import “keep detail” (fraction of original triangles). */
+export const IMPORT_KEEP_RATIO_MIN = 0.25
+
+/** Default keep ratio when a mesh exceeds the working triangle budget. */
+export function defaultImportKeepRatio(originalTriangles) {
+  if (originalTriangles <= TARGET_WORKING_TRIANGLES) return 1
+  return Math.min(1, TARGET_WORKING_TRIANGLES / originalTriangles)
+}
+
+/** Target triangle count from a “keep this much detail” ratio (0..1). */
+export function targetTrianglesFromKeepRatio(originalTriangles, keepRatio) {
+  const ratio = Math.min(1, Math.max(IMPORT_KEEP_RATIO_MIN, Number(keepRatio) || 1))
+  return Math.max(100, Math.floor(originalTriangles * ratio))
+}
+
 /**
- * Reduce dense meshes to the working triangle budget for toolpath stability.
+ * Reduce a mesh toward maxTriangles. Mutates/disposes the passed geometry when reduction runs.
  *
  * @param {THREE.BufferGeometry} geometry
- * @param {{ maxTriangles?: number, onProgress?: (done: number, total: number, stage?: string) => void|Promise<void> }} [options]
+ * @param {number} maxTriangles
+ * @param {{ onProgress?: (done: number, total: number, stage?: string) => void|Promise<void>, originalTriangles?: number }} [options]
  */
-export async function autoSimplifyMesh(geometry, options = {}) {
-  const maxTriangles = options.maxTriangles ?? TARGET_WORKING_TRIANGLES
+async function reduceGeometryToMaxTriangles(geometry, maxTriangles, options = {}) {
   const onProgress = options.onProgress
-  const originalTriangles = meshTriangleCount(geometry)
-
-  if (originalTriangles <= maxTriangles) {
-    return {
-      geometry,
-      simplified: false,
-      originalTriangles,
-      newTriangles: originalTriangles,
-    }
-  }
+  const originalTriangles = options.originalTriangles ?? meshTriangleCount(geometry)
 
   await onProgress?.(15, 100, 'Analyzing mesh density…')
 
@@ -77,6 +83,7 @@ export async function autoSimplifyMesh(geometry, options = {}) {
     nc7AutoSimplified: true,
     nc7OriginalTriangles: originalTriangles,
     nc7SimplifiedTriangles: meshTriangleCount(nextGeo),
+    nc7ImportKeepRatio: options.keepRatio,
   }
 
   geometry.dispose()
@@ -89,4 +96,65 @@ export async function autoSimplifyMesh(geometry, options = {}) {
     originalTriangles,
     newTriangles: meshTriangleCount(nextGeo),
   }
+}
+
+/**
+ * Simplify for import preview/retry. Does not dispose sourceGeometry.
+ *
+ * @param {THREE.BufferGeometry} sourceGeometry
+ * @param {{ keepRatio?: number, onProgress?: (done: number, total: number, stage?: string) => void|Promise<void> }} [options]
+ */
+export async function simplifyImportMesh(sourceGeometry, options = {}) {
+  const originalTriangles = meshTriangleCount(sourceGeometry)
+  const keepRatio = options.keepRatio ?? defaultImportKeepRatio(originalTriangles)
+  const maxTriangles = targetTrianglesFromKeepRatio(originalTriangles, keepRatio)
+
+  if (originalTriangles <= maxTriangles) {
+    const geometry = sourceGeometry.clone()
+    geometry.userData = { ...sourceGeometry.userData }
+    return {
+      geometry,
+      simplified: false,
+      originalTriangles,
+      newTriangles: originalTriangles,
+      keepRatio,
+      targetTriangles: maxTriangles,
+    }
+  }
+
+  const workGeo = sourceGeometry.clone()
+  workGeo.userData = { ...sourceGeometry.userData }
+  const result = await reduceGeometryToMaxTriangles(workGeo, maxTriangles, {
+    onProgress: options.onProgress,
+    originalTriangles,
+    keepRatio,
+  })
+  return { ...result, keepRatio, targetTriangles: maxTriangles }
+}
+
+/**
+ * Reduce dense meshes to the working triangle budget for toolpath stability.
+ *
+ * @param {THREE.BufferGeometry} geometry
+ * @param {{ maxTriangles?: number, onProgress?: (done: number, total: number, stage?: string) => void|Promise<void> }} [options]
+ */
+export async function autoSimplifyMesh(geometry, options = {}) {
+  const maxTriangles = options.maxTriangles ?? TARGET_WORKING_TRIANGLES
+  const originalTriangles = meshTriangleCount(geometry)
+
+  if (originalTriangles <= maxTriangles) {
+    return {
+      geometry,
+      simplified: false,
+      originalTriangles,
+      newTriangles: originalTriangles,
+    }
+  }
+
+  const keepRatio = maxTriangles / originalTriangles
+  return reduceGeometryToMaxTriangles(geometry, maxTriangles, {
+    onProgress: options.onProgress,
+    originalTriangles,
+    keepRatio,
+  })
 }

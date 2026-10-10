@@ -1677,6 +1677,51 @@ button:hover {
   margin: 0;
 }
 
+.import-dialog-actions--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.import-dialog-actions--stack .import-dialog-actions--split {
+  margin-top: 4px;
+}
+
+.import-dialog-primary--accept {
+  background: #276749;
+  border-color: #276749;
+}
+
+.import-dialog-primary--accept:hover {
+  background: #22543d;
+}
+
+.import-reduce-slider {
+  margin: 8px 0 16px;
+}
+
+.import-reduce-slider-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #e2e8f0;
+}
+
+.import-reduce-slider input[type="range"] {
+  width: 100%;
+  margin: 0;
+}
+
+.import-reduce-stats {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #94a3b8;
+}
+
+.import-reduce-stats-note {
+  color: #f6ad55;
+}
+
 .view-hud-toggle--res {
   min-width: 44px;
   font-weight: 800;

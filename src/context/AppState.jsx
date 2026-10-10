@@ -3,7 +3,11 @@ import * as THREE from 'three'
 import { loadSTLFile, loadSTLFromUrl, computeBoundingBox, getBoxSize } from '../lib/stl'
 import { load3MFFile } from '../lib/threemf'
 import { importHardRejectMessage, meshImportKind, TARGET_WORKING_TRIANGLES } from '../lib/importLimit'
-import { autoSimplifyMesh, meshTriangleCount } from '../lib/importPipeline'
+import {
+  defaultImportKeepRatio,
+  meshTriangleCount,
+  simplifyImportMesh,
+} from '../lib/importPipeline'
 import { disposeDisplayProxyCache } from '../lib/meshProxy.js'
 import { logImportTelemetry, logToolpathTelemetry } from '../lib/telemetry'
 import { DUMMY_STL_URL, DUMMY_STL_NAME } from '../lib/exampleStl'
@@ -119,6 +123,18 @@ export function AppStateProvider({ children }) {
     originalTriangles: 0,
     newTriangles: 0,
   })
+  const [importReduceDialog, setImportReduceDialog] = useState({
+    open: false,
+    fileName: '',
+    originalTriangles: 0,
+    keepRatio: 0.75,
+    previewTriangles: null,
+    previewApplied: false,
+    applying: false,
+  })
+  /** Pending dense import: source mesh + restore snapshot until user confirms or cancels. */
+  const importReduceSessionRef = useRef(null)
+  const importReduceKeepRatioRef = useRef(0.75)
   const [unit, setUnit] = useState('mm')
   const [target, setTarget] = useState({ x: 100, y: 100, z: 100 })
   const [resetKey, setResetKey] = useState(0)
@@ -525,6 +541,67 @@ export function AppStateProvider({ children }) {
     bakeModelTransform,
   ])
 
+  const clearImportReduceSession = useCallback(() => {
+    const session = importReduceSessionRef.current
+    if (!session) return
+    if (session.previewGeometry && session.previewGeometry !== session.sourceGeometry) {
+      session.previewGeometry.dispose()
+    }
+    session.sourceGeometry?.dispose()
+    importReduceSessionRef.current = null
+  }, [])
+
+  const restoreGeometryAfterImportCancel = useCallback(() => {
+    const session = importReduceSessionRef.current
+    if (!session) return
+    if (session.previewGeometry && session.previewGeometry !== session.previousGeometry) {
+      session.previewGeometry.dispose()
+    }
+    if (session.sourceGeometry) {
+      session.sourceGeometry.dispose()
+    }
+    const prev = session.previousGeometry
+    workingRef.current = prev
+    if (prev) {
+      storeHighResGeometry(prev)
+      setGeometry(prev)
+      updateStatsFrom(prev)
+    } else {
+      setGeometry(null)
+      updateStatsFrom(null)
+    }
+    importReduceSessionRef.current = null
+  }, [storeHighResGeometry, updateStatsFrom])
+
+  const finalizeMeshImport = useCallback((file, kind, geo, { showSuccessDialog = false, successSummary = null } = {}) => {
+    workingRef.current = geo
+    storeHighResGeometry(geo)
+    setGeometry(geo)
+    updateStatsFrom(geo)
+    setModelName(file.name)
+    lastToolpathModelKeyRef.current = null
+    setCutJob(null)
+    setCutIndex(0)
+    setMenuOpen(false)
+    setStatus(`Loaded ${file.name} (${meshTriangleCount(geo).toLocaleString()} triangles)`)
+    logImportTelemetry({
+      fileName: file.name,
+      fileSizeBytes: file.size,
+      kind,
+      triangles: meshTriangleCount(geo),
+      simplified: !!geo.userData?.nc7AutoSimplified,
+      originalTriangles: geo.userData?.nc7OriginalTriangles,
+    })
+    if (showSuccessDialog && successSummary) {
+      setImportOptimizeSuccess({
+        open: true,
+        simplified: successSummary.simplified,
+        originalTriangles: successSummary.originalTriangles,
+        newTriangles: successSummary.newTriangles,
+      })
+    }
+  }, [storeHighResGeometry, updateStatsFrom])
+
   const processMeshFile = useCallback(async (file) => {
     const kind = meshImportKind(file?.name)
     if (!kind) {
@@ -542,6 +619,8 @@ export function AppStateProvider({ children }) {
 
     setImportAlert(null)
     setImportOptimizeSuccess((prev) => ({ ...prev, open: false }))
+    clearImportReduceSession()
+    setImportReduceDialog((prev) => ({ ...prev, open: false }))
     setStatus(kind === '3mf' ? 'Loading 3MF...' : 'Loading STL...')
     beginBusy(`Loading ${file.name}…`, { done: 0, total: 100 })
     await yieldToPaint()
@@ -559,56 +638,38 @@ export function AppStateProvider({ children }) {
           ))
         },
       })
-      let geo = prepareRawGeometry(rawGeo)
+      const geo = prepareRawGeometry(rawGeo)
+      const originalTriangles = meshTriangleCount(geo)
 
-      if (meshTriangleCount(geo) > TARGET_WORKING_TRIANGLES) {
-        await endBusy()
-        beginBusy(
-          'Please wait a moment while we streamline your mesh for smooth toolpath generation.',
-          { done: 0, total: 100 },
-          {
-            title: 'Optimizing 3D Model for NC7 Freeform...',
-            footerMessage: 'Simplifying triangles and optimizing performance...',
-            variant: 'optimize',
-          },
-        )
-        await yieldToPaint()
-
-        const simplified = await autoSimplifyMesh(geo, {
-          onProgress: async (done, total) => {
-            setBusyProgress(done, total)
-            if (done % 20 === 0) await yieldToPaint()
-          },
-        })
-        geo = simplified.geometry
-        if (simplified.simplified) {
-          setImportOptimizeSuccess({
-            open: true,
-            simplified: true,
-            originalTriangles: simplified.originalTriangles,
-            newTriangles: simplified.newTriangles,
-          })
+      if (originalTriangles > TARGET_WORKING_TRIANGLES) {
+        const keepRatio = defaultImportKeepRatio(originalTriangles)
+        importReduceSessionRef.current = {
+          file,
+          kind,
+          sourceGeometry: geo,
+          previewGeometry: null,
+          previousGeometry: workingRef.current,
+          previousModelName: modelName,
         }
+        setGeometry(geo)
+        updateStatsFrom(geo)
+        importReduceKeepRatioRef.current = keepRatio
+        setImportReduceDialog({
+          open: true,
+          fileName: file.name,
+          originalTriangles,
+          keepRatio,
+          previewTriangles: null,
+          previewApplied: false,
+          applying: false,
+        })
+        setStatus(
+          `${file.name}: choose how much to reduce (${originalTriangles.toLocaleString()} triangles)`,
+        )
+        return
       }
 
-      workingRef.current = geo
-      storeHighResGeometry(geo)
-      setGeometry(geo)
-      updateStatsFrom(geo)
-      setModelName(file.name)
-      lastToolpathModelKeyRef.current = null
-      setCutJob(null)
-      setCutIndex(0)
-      setMenuOpen(false)
-      setStatus(`Loaded ${file.name} (${meshTriangleCount(geo).toLocaleString()} triangles)`)
-      logImportTelemetry({
-        fileName: file.name,
-        fileSizeBytes: file.size,
-        kind,
-        triangles: meshTriangleCount(geo),
-        simplified: !!geo.userData?.nc7AutoSimplified,
-        originalTriangles: geo.userData?.nc7OriginalTriangles,
-      })
+      finalizeMeshImport(file, kind, geo)
     } catch (err) {
       setImportAlert(err.message)
       setStatus(`Error: ${err.message}`)
@@ -619,10 +680,118 @@ export function AppStateProvider({ children }) {
     beginBusy,
     endBusy,
     setBusyProgress,
-    storeHighResGeometry,
+    clearImportReduceSession,
+    finalizeMeshImport,
+    modelName,
     updateStatsFrom,
     yieldToPaint,
   ])
+
+  const setImportReduceKeepRatio = useCallback((keepRatio) => {
+    importReduceKeepRatioRef.current = keepRatio
+    setImportReduceDialog((prev) => ({
+      ...prev,
+      keepRatio,
+      previewApplied: false,
+      previewTriangles: null,
+    }))
+    const session = importReduceSessionRef.current
+    if (!session?.sourceGeometry) return
+    if (session.previewGeometry && session.previewGeometry !== session.sourceGeometry) {
+      session.previewGeometry.dispose()
+      session.previewGeometry = null
+    }
+    setGeometry(session.sourceGeometry)
+    updateStatsFrom(session.sourceGeometry)
+  }, [updateStatsFrom])
+
+  const applyImportReducePreview = useCallback(async () => {
+    const session = importReduceSessionRef.current
+    if (!session?.sourceGeometry) return
+    const keepRatio = importReduceKeepRatioRef.current
+    setImportReduceDialog((prev) => ({ ...prev, applying: true }))
+    beginBusy(
+      'Previewing mesh reduction…',
+      { done: 0, total: 100 },
+      {
+        title: 'Reducing mesh…',
+        footerMessage: 'Updating the 3D preview…',
+        variant: 'optimize',
+      },
+    )
+    await yieldToPaint()
+    try {
+      const result = await simplifyImportMesh(session.sourceGeometry, {
+        keepRatio,
+        onProgress: async (done, total) => {
+          setBusyProgress(done, total)
+          if (done % 20 === 0) await yieldToPaint()
+        },
+      })
+      if (session.previewGeometry && session.previewGeometry !== session.sourceGeometry) {
+        session.previewGeometry.dispose()
+      }
+      session.previewGeometry = result.geometry
+      setGeometry(result.geometry)
+      updateStatsFrom(result.geometry)
+      setImportReduceDialog((prev) => ({
+        ...prev,
+        applying: false,
+        previewApplied: true,
+        previewTriangles: result.newTriangles,
+      }))
+      setStatus(
+        `Preview: ${result.originalTriangles.toLocaleString()} → ${result.newTriangles.toLocaleString()} triangles (${Math.round(keepRatio * 100)}% keep target)`,
+      )
+    } catch (err) {
+      setImportAlert(err.message)
+      setStatus(`Error: ${err.message}`)
+      setImportReduceDialog((prev) => ({ ...prev, applying: false }))
+    } finally {
+      await endBusy()
+    }
+  }, [beginBusy, endBusy, setBusyProgress, updateStatsFrom, yieldToPaint])
+
+  const acceptImportReducePreview = useCallback(() => {
+    const session = importReduceSessionRef.current
+    if (!session?.file) return
+    const geo = session.previewGeometry ?? session.sourceGeometry
+    if (geo === session.sourceGeometry) {
+      finalizeMeshImport(session.file, session.kind, geo)
+    } else {
+      session.sourceGeometry.dispose()
+      finalizeMeshImport(session.file, session.kind, geo, {
+        showSuccessDialog: true,
+        successSummary: {
+          simplified: !!geo.userData?.nc7AutoSimplified,
+          originalTriangles: geo.userData?.nc7OriginalTriangles ?? meshTriangleCount(geo),
+          newTriangles: meshTriangleCount(geo),
+        },
+      })
+    }
+    importReduceSessionRef.current = null
+    setImportReduceDialog((prev) => ({ ...prev, open: false }))
+  }, [finalizeMeshImport])
+
+  const keepFullMeshOnImport = useCallback(() => {
+    const session = importReduceSessionRef.current
+    if (!session?.sourceGeometry) return
+    if (session.previewGeometry && session.previewGeometry !== session.sourceGeometry) {
+      session.previewGeometry.dispose()
+    }
+    finalizeMeshImport(session.file, session.kind, session.sourceGeometry)
+    importReduceSessionRef.current = null
+    setImportReduceDialog((prev) => ({ ...prev, open: false }))
+    setStatus(
+      `Loaded ${session.file.name} (${meshTriangleCount(session.sourceGeometry).toLocaleString()} triangles, full detail)`,
+    )
+  }, [finalizeMeshImport])
+
+  const cancelImportReduce = useCallback(() => {
+    restoreGeometryAfterImportCancel()
+    setImportReduceDialog((prev) => ({ ...prev, open: false }))
+    setStatus('Import cancelled.')
+  }, [restoreGeometryAfterImportCancel])
 
   const dismissImportOptimizeSuccess = useCallback(() => {
     setImportOptimizeSuccess((prev) => ({ ...prev, open: false }))
@@ -1129,6 +1298,12 @@ export function AppStateProvider({ children }) {
     clearImportAlert: () => setImportAlert(null),
     importOptimizeSuccess,
     dismissImportOptimizeSuccess,
+    importReduceDialog,
+    setImportReduceKeepRatio,
+    applyImportReducePreview,
+    acceptImportReducePreview,
+    keepFullMeshOnImport,
+    cancelImportReduce,
     processMeshFile,
     handleResize,
     handleSettle,

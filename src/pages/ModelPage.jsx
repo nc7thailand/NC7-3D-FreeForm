@@ -5,6 +5,7 @@ import ProjectPanel from '../components/ProjectPanel'
 import PageNav from '../components/PageNav'
 import {
   ImportRecommendationDialog,
+  ImportMeshReduceDialog,
   LargeFileWarningDialog,
   OptimizeSuccessDialog,
 } from '../components/ModelImportDialogs'
@@ -29,6 +30,12 @@ function ModelPanel() {
     clearImportAlert,
     importOptimizeSuccess,
     dismissImportOptimizeSuccess,
+    importReduceDialog,
+    setImportReduceKeepRatio,
+    applyImportReducePreview,
+    acceptImportReducePreview,
+    keepFullMeshOnImport,
+    cancelImportReduce,
     handleResize,
     handleSettle,
     handleSimplify,
@@ -90,6 +97,20 @@ function ModelPanel() {
         onCancel={handleLargeFileCancel}
         onProceed={handleLargeFileProceed}
       />
+      <ImportMeshReduceDialog
+        open={importReduceDialog.open}
+        fileName={importReduceDialog.fileName}
+        originalTriangles={importReduceDialog.originalTriangles}
+        keepRatio={importReduceDialog.keepRatio}
+        previewTriangles={importReduceDialog.previewTriangles}
+        previewApplied={importReduceDialog.previewApplied}
+        busy={importReduceDialog.applying}
+        onKeepRatioChange={setImportReduceKeepRatio}
+        onApplyPreview={applyImportReducePreview}
+        onAcceptPreview={acceptImportReducePreview}
+        onKeepFullMesh={keepFullMeshOnImport}
+        onCancel={cancelImportReduce}
+      />
       <OptimizeSuccessDialog
         open={importOptimizeSuccess.open}
         summary={importOptimizeSuccess}
@@ -109,7 +130,7 @@ function ModelPanel() {
 
         <section className="panel">
           <h2>Load model</h2>
-          <p className="panel-hint">STL or 3MF up to 20 MB. Models over 10 MB show a performance warning; dense meshes auto-simplify to 50,000 triangles.</p>
+          <p className="panel-hint">STL or 3MF up to 20 MB. Models over 10 MB show a performance warning; meshes above 50,000 triangles prompt you to choose how much detail to keep.</p>
           <input
             ref={fileRef}
             type="file"

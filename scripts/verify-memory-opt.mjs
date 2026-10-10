@@ -8,7 +8,13 @@ import {
   meshImportKind,
   importSizeTier,
 } from '../src/lib/importLimit.js'
-import { autoSimplifyMesh, meshTriangleCount } from '../src/lib/importPipeline.js'
+import {
+  autoSimplifyMesh,
+  defaultImportKeepRatio,
+  meshTriangleCount,
+  simplifyImportMesh,
+  targetTrianglesFromKeepRatio,
+} from '../src/lib/importPipeline.js'
 import {
   disposeDisplayProxyCache,
   resolveToolpathDisplayGeometry,
@@ -36,6 +42,23 @@ const simplified = await autoSimplifyMesh(denseGeo, { maxTriangles: 50_000 })
 assert(simplified.simplified === true, 'auto simplify should run above 50k tris')
 assert(meshTriangleCount(simplified.geometry) <= 50_000, 'auto simplify must respect 50k cap')
 simplified.geometry.dispose()
+
+const densePositions2 = new Float32Array(60_000 * 9)
+for (let i = 0; i < densePositions2.length; i++) densePositions2[i] = (i % 97) * 0.03
+const denseGeo2 = new THREE.BufferGeometry()
+denseGeo2.setAttribute('position', new THREE.BufferAttribute(densePositions2, 3))
+const origTri = meshTriangleCount(denseGeo2)
+assert(defaultImportKeepRatio(origTri) < 1, 'default keep ratio below 1 for dense mesh')
+const keepRatio = 0.75
+assert(
+  targetTrianglesFromKeepRatio(origTri, keepRatio) === Math.floor(origTri * 0.75),
+  'keep ratio target',
+)
+const importReduced = await simplifyImportMesh(denseGeo2, { keepRatio })
+assert(meshTriangleCount(denseGeo2) === origTri, 'import simplify must not dispose source')
+assert(importReduced.simplified === true, 'import simplify should reduce dense mesh')
+importReduced.geometry.dispose()
+denseGeo2.dispose()
 
 const geo = new THREE.BoxGeometry(10, 20, 30).toNonIndexed()
 geo.computeVertexNormals()
